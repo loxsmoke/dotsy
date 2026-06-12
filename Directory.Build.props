@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup>
+    <Configurations>Debug;Release;Debug No Nugets</Configurations>
+    <UseTerminalGuiSource Condition="'$(UseTerminalGuiSource)' == ''">false</UseTerminalGuiSource>
+    <UseTerminalGuiSource Condition="'$(Configuration)' == 'Debug No Nugets'">true</UseTerminalGuiSource>
+    <TerminalGuiSourceRoot Condition="'$(TerminalGuiSourceRoot)' == ''">$(MSBuildThisFileDirectory)extern\terminal.gui</TerminalGuiSourceRoot>
+  </PropertyGroup>
+</Project>

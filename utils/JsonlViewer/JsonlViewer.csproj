@@ -1,0 +1,27 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework Condition="'$(UseTerminalGuiSource)' == 'true'">net10.0</TargetFramework>
+    <AssemblyName>jsonl-viewer</AssemblyName>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>jlv</ToolCommandName>
+    <PackageId>Dotsy.JsonlViewer</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Dotsy</Authors>
+    <Description>Terminal.Gui JSONL viewer with formatting, syntax coloring, wrapping, navigation, selection, and clipboard copy.</Description>
+    <PackageOutputPath>..\..\artifacts\packages</PackageOutputPath>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(UseTerminalGuiSource)' == 'true'">
+    <ProjectReference Include="$(TerminalGuiSourceRoot)\Terminal.Gui\Terminal.Gui.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(UseTerminalGuiSource)' != 'true'">
+    <PackageReference Include="Terminal.Gui" Version="2.0.0" />
+  </ItemGroup>
+
+</Project>

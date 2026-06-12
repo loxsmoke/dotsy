@@ -1,0 +1,12 @@
+root = true
+
+[*]
+charset = utf-8
+indent_style = space
+insert_final_newline = true
+
+[*.{md,slnx,cs,csproj,json,toml,ps1,yml,yaml}]
+end_of_line = lf
+
+[*.{cmd,bat}]
+end_of_line = crlf

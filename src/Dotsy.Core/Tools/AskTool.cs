@@ -1,0 +1,35 @@
+using System.Text.Json;
+using Dotsy.Core.Loop;
+
+using Dotsy.Core.Tools.Interfaces;
+
+namespace Dotsy.Core.Tools;
+
+public sealed class AskTool : ITool
+{
+    public string Name => "Ask";
+    public string Description => "Pause and ask the user a question. Returns the user's answer.";
+    public JsonElement InputSchema => ToolSchemas.AskSchema;
+    public ToolSafety Safety => ToolSafety.ReadOnly;
+    public bool IsCompletionSignal => false;
+
+    public async Task<ToolResult> ExecuteAsync(JsonElement input, ToolContext ctx, CancellationToken ct)
+    {
+        var question = input.GetProperty("question").GetString() ?? "";
+
+        if (ctx.EmitEvent is null)
+            return ToolResult.Err("Ask is not available in this context");
+
+        var tcs = new TaskCompletionSource<PermissionDecision>();
+        var ev = new PermissionRequired(Name, question, tcs);
+        await ctx.EmitEvent(ev);
+
+        // Wait for user decision — we reuse PermissionDecision as the pause mechanism
+        // and interpret any non-Deny as "answered"
+        var decision = await tcs.Task.WaitAsync(ct);
+
+        return decision == PermissionDecision.Deny
+            ? ToolResult.Err("User declined to answer")
+            : ToolResult.Ok("User acknowledged");
+    }
+}

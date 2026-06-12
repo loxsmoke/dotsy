@@ -1,0 +1,362 @@
+using System.Runtime.CompilerServices;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Dotsy.Core.Providers;
+using Dotsy.Core.Utils;
+
+namespace Dotsy.Providers.OpenAi;
+
+public class OpenAiProvider : IProvider
+{
+    protected readonly HttpClient Http;
+    private readonly string _apiKey;
+
+    public virtual string Name => "openai";
+    protected virtual string ChatEndpoint => "/v1/chat/completions";
+
+    public OpenAiProvider(string apiKey, string baseUrl = "https://api.openai.com", HttpClient? http = null)
+    {
+        _apiKey = apiKey;
+        Http = http ?? new HttpClient();
+        Http.BaseAddress = new Uri(baseUrl);
+        Http.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey);
+    }
+
+    public async Task<ModelInfo> GetModelInfoAsync(string modelId, CancellationToken ct)
+    {
+        try
+        {
+            var resp = await Http.GetAsync("/v1/models", ct);
+            if (resp.IsSuccessStatusCode)
+            {
+                var json = await resp.Content.ReadAsStringAsync(ct);
+                var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("data", out var data))
+                {
+                    foreach (var m in data.EnumerateArray())
+                    {
+                        if (m.TryGetProperty("id", out var id) && id.GetString() == modelId)
+                            return new ModelInfo(modelId, 128_000, 16_384);
+                    }
+                }
+            }
+        }
+        catch { }
+
+        return new ModelInfo(modelId, 128_000, 4_096);
+    }
+
+    public async IAsyncEnumerable<ProviderEvent> StreamAsync(
+        ChatRequest request,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        var body = BuildRequestBody(request);
+        var content = new StringContent(body, Encoding.UTF8, "application/json");
+
+        HttpResponseMessage? resp = null;
+        Exception? networkEx = null;
+        try
+        {
+            resp = await Http.PostAsync(ChatEndpoint, content, ct);
+        }
+        catch (Exception ex)
+        {
+            networkEx = ex;
+        }
+
+        if (networkEx is not null)
+        {
+            yield return new StreamError(new ProviderException(new NetworkError(networkEx)));
+            yield break;
+        }
+
+        if (!resp!.IsSuccessStatusCode)
+        {
+            await foreach (var ev in HandleErrorResponse(resp, ct))
+                yield return ev;
+            yield break;
+        }
+
+        await foreach (var ev in ParseSseStream(resp, ct))
+            yield return ev;
+    }
+
+    protected virtual string BuildRequestBody(ChatRequest request)
+    {
+        var obj = new JsonObject
+        {
+            ["model"] = request.ModelId,
+            ["max_tokens"] = request.MaxTokens,
+            ["stream"] = true,
+            ["stream_options"] = new JsonObject { ["include_usage"] = true }
+        };
+
+        if (request.Temperature.HasValue)
+            obj["temperature"] = request.Temperature.Value;
+
+        if (!string.IsNullOrEmpty(request.SystemPrompt))
+        {
+            var messages = new JsonArray
+            {
+                new JsonObject { ["role"] = "system", ["content"] = request.SystemPrompt }
+            };
+            foreach (var msg in request.Messages)
+                messages.Add(ConvertMessage(msg));
+            obj["messages"] = messages;
+        }
+        else
+        {
+            var messages = new JsonArray();
+            foreach (var msg in request.Messages)
+                messages.Add(ConvertMessage(msg));
+            obj["messages"] = messages;
+        }
+
+        if (request.Tools.Count > 0)
+        {
+            var tools = new JsonArray();
+            foreach (var t in request.Tools)
+            {
+                tools.Add(new JsonObject
+                {
+                    ["type"] = "function",
+                    ["function"] = new JsonObject
+                    {
+                        ["name"] = t.Name,
+                        ["description"] = t.Description,
+                        ["parameters"] = JsonNode.Parse(t.InputSchema.GetRawText())
+                    }
+                });
+            }
+            obj["tools"] = tools;
+        }
+
+        return obj.ToJsonString();
+    }
+
+    private static JsonObject ConvertMessage(Message msg)
+    {
+        IReadOnlyList<ContentBlock> blocks = msg switch
+        {
+            UserMessage u => u.Content,
+            AssistantMessage a => a.Content,
+            _ => []
+        };
+
+        // Flatten tool_use blocks into tool_calls array for assistant messages
+        if (msg is AssistantMessage)
+        {
+            var textParts = blocks.OfType<TextBlock>().Select(b => b.Text);
+            var textContent = string.Join("", textParts);
+            var toolUseBlocks = blocks.OfType<ToolUseBlock>().ToList();
+
+            var obj = new JsonObject { ["role"] = "assistant" };
+            if (!string.IsNullOrEmpty(textContent))
+                obj["content"] = textContent;
+
+            if (toolUseBlocks.Count > 0)
+            {
+                var toolCalls = new JsonArray();
+                foreach (var tu in toolUseBlocks)
+                {
+                    toolCalls.Add(new JsonObject
+                    {
+                        ["id"] = tu.Id,
+                        ["type"] = "function",
+                        ["function"] = new JsonObject
+                        {
+                            ["name"] = tu.Name,
+                            ["arguments"] = tu.Input.GetRawText()
+                        }
+                    });
+                }
+                obj["tool_calls"] = toolCalls;
+            }
+            return obj;
+        }
+
+        // User message: check for tool_result blocks
+        var toolResults = blocks.OfType<ToolResultBlock>().ToList();
+        if (toolResults.Count > 0)
+        {
+            // Return a tool message for the first result (OpenAI sends one per tool call)
+            var tr = toolResults[0];
+            return new JsonObject
+            {
+                ["role"] = "tool",
+                ["tool_call_id"] = tr.ToolUseId,
+                ["content"] = tr.Content
+            };
+        }
+
+        // Plain user message
+        var textBlocks = blocks.OfType<TextBlock>().ToList();
+        var userText = string.Join("", textBlocks.Select(b => b.Text));
+        return new JsonObject { ["role"] = "user", ["content"] = userText };
+    }
+
+    private static async IAsyncEnumerable<ProviderEvent> ParseSseStream(
+        HttpResponseMessage resp,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        using var stream = await resp.Content.ReadAsStreamAsync(ct);
+        using var reader = new StreamReader(stream);
+
+        // Accumulate tool call arguments per index
+        var tcIds = new Dictionary<int, string>();
+        var tcNames = new Dictionary<int, string>();
+        var tcArgs = new Dictionary<int, StringBuilder>();
+
+        while (!ct.IsCancellationRequested)
+        {
+            var line = await reader.ReadLineAsync(ct);
+            if (line is null)
+                break;
+            if (!line.StartsWith("data: "))
+                continue;
+
+            var data = line[6..];
+            if (data == "[DONE]")
+                break;
+
+            JsonElement chunk;
+            try { chunk = JsonDocument.Parse(data).RootElement; }
+            catch { continue; }
+
+            if (!chunk.TryGetProperty("choices", out var choices))
+            {
+                // Final chunk with usage
+                if (chunk.TryGetProperty("usage", out var usage))
+                {
+                    int input = usage.TryGetProperty("prompt_tokens", out var pt) ? pt.GetInt32() : 0;
+                    int output = usage.TryGetProperty("completion_tokens", out var ct2) ? ct2.GetInt32() : 0;
+                    yield return new UsageUpdate(input, output, 0, 0);
+                }
+                continue;
+            }
+
+            if (choices.GetArrayLength() == 0)
+                continue;
+
+            var choice = choices[0];
+            string? finishReason = choice.TryGetProperty("finish_reason", out var fr) && fr.ValueKind != JsonValueKind.Null
+                ? fr.GetString() : null;
+
+            if (!choice.TryGetProperty("delta", out var delta))
+                continue;
+
+            // Text content
+            if (delta.TryGetProperty("content", out var contentProp) && contentProp.ValueKind == JsonValueKind.String)
+            {
+                var text = contentProp.GetString() ?? "";
+                if (text.Length > 0)
+                    yield return new TextDelta(text);
+            }
+
+            // Tool calls deltas
+            if (delta.TryGetProperty("tool_calls", out var toolCallsArr))
+            {
+                foreach (var tc in toolCallsArr.EnumerateArray())
+                {
+                    int idx = tc.TryGetProperty("index", out var i) ? i.GetInt32() : 0;
+
+                    if (tc.TryGetProperty("id", out var idProp) && idProp.ValueKind == JsonValueKind.String)
+                        tcIds[idx] = idProp.GetString() ?? "";
+
+                    if (tc.TryGetProperty("function", out var func))
+                    {
+                        if (func.TryGetProperty("name", out var nameProp) && nameProp.ValueKind == JsonValueKind.String)
+                            tcNames[idx] = nameProp.GetString() ?? "";
+
+                        if (func.TryGetProperty("arguments", out var argsProp) && argsProp.ValueKind == JsonValueKind.String)
+                        {
+                            if (!tcArgs.ContainsKey(idx))
+                                tcArgs[idx] = new StringBuilder();
+                            tcArgs[idx].Append(argsProp.GetString());
+                        }
+                    }
+                }
+            }
+
+            // On finish, emit accumulated tool calls
+            if (finishReason is not null)
+            {
+                foreach (var kv in tcArgs)
+                {
+                    var id = tcIds.GetValueOrDefault(kv.Key, "");
+                    var name = tcNames.GetValueOrDefault(kv.Key, "");
+                    yield return new ToolCallDelta(id, name, kv.Value.ToString());
+                }
+                tcIds.Clear(); tcNames.Clear(); tcArgs.Clear();
+
+                var reason = finishReason switch
+                {
+                    "stop" => StopReason.EndTurn,
+                    "tool_calls" => StopReason.ToolUse,
+                    "length" => StopReason.MaxTokens,
+                    _ => StopReason.EndTurn
+                };
+
+                if (finishReason == "length")
+                    yield return new StreamError(new ProviderException(new ContextLengthError()));
+
+                yield return new StreamEnd(reason);
+            }
+        }
+    }
+
+    private static (string Type, string Message, string RequestId) ParseErrorBody(
+        string body, HttpResponseMessage resp)
+    {
+        var reqId = resp.Headers.TryGetValues("x-request-id", out var ids)
+            ? ids.FirstOrDefault() ?? ""
+            : "";
+        try
+        {
+            var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.TryGetProperty("error", out var err))
+            {
+                var type = err.GetStringPropertyOrEmpty("type");
+                var msg  = err.GetStringPropertyOrEmpty("message");
+                return (type, msg, reqId);
+            }
+        }
+        catch { }
+        return ("", body, reqId);
+    }
+
+    private static async IAsyncEnumerable<ProviderEvent> HandleErrorResponse(
+        HttpResponseMessage resp,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        var body = await resp.Content.ReadAsStringAsync(ct);
+        var status = (int)resp.StatusCode;
+
+        ProviderError error;
+        if (status == 401 || status == 403)
+        {
+            var (errType, errMsg, reqId) = ParseErrorBody(body, resp);
+            var detail = string.IsNullOrEmpty(errType) ? body : errType;
+            error = new AuthError($"{detail}\nMessage: {errMsg}\nRequest ID: {reqId}".TrimEnd());
+        }
+        else if (status == 429)
+        {
+            TimeSpan? retryAfter = null;
+            if (resp.Headers.TryGetValues("Retry-After", out var values))
+            {
+                var raw = values.FirstOrDefault();
+                if (int.TryParse(raw, out var secs))
+                    retryAfter = TimeSpan.FromSeconds(secs);
+            }
+            error = new RateLimitError(retryAfter);
+        }
+        else if (status >= 500)
+            error = new ServerError(status);
+        else
+            error = new RequestError(status);
+
+        yield return new StreamError(new ProviderException(error));
+    }
+}

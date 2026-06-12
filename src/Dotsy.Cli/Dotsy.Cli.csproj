@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>dotsy</AssemblyName>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>dotsy</ToolCommandName>
+    <PackageId>Dotsy</PackageId>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Dotsy.Core\Dotsy.Core.csproj" />
+    <ProjectReference Include="..\Dotsy.Providers\Dotsy.Providers.csproj" />
+    <ProjectReference Include="..\Dotsy.Mcp\Dotsy.Mcp.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(UseTerminalGuiSource)' == 'true'">
+    <ProjectReference Include="$(TerminalGuiSourceRoot)\Terminal.Gui\Terminal.Gui.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(UseTerminalGuiSource)' != 'true'">
+    <PackageReference Include="Terminal.Gui" Version="2.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Spectre.Console" Version="0.49.1" />
+    <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
+  </ItemGroup>
+
+  <!-- Pin Roslyn packages to a consistent version; Terminal.Gui 2.0.0 brings
+       CSharp.Workspaces/VisualBasic/Workspaces.Common at 4.10.0 while the SDK
+       resolves Common and CSharp at 4.13.0, producing NU1608 warnings. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis" Version="4.13.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.13.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.VisualBasic" Version="4.13.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.VisualBasic.Workspaces" Version="4.13.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Workspaces.Common" Version="4.13.0" />
+  </ItemGroup>
+
+</Project>

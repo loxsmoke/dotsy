@@ -1,0 +1,49 @@
+<Solution>
+  <Configurations>
+    <BuildType Name="Debug" />
+    <BuildType Name="Release" />
+    <BuildType Name="Debug No Nugets" />
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Folder Name="/docs/">
+    <File Path="README.md" />
+    <File Path="docs/00-spec-main.md" />
+    <File Path="docs/01-goals-and-non-goals.md" />
+    <File Path="docs/02-technology-stack.md" />
+    <File Path="docs/03-tui-design.md" />
+    <File Path="docs/04-project-structure.md" />
+    <File Path="docs/05-configuration-system.md" />
+    <File Path="docs/06-ai-provider-layer.md" />
+    <File Path="docs/07-agent-loop.md" />
+    <File Path="docs/08-tool-system.md" />
+    <File Path="docs/09-code-retrieval.md" />
+    <File Path="docs/10-skills-system.md" />
+    <File Path="docs/11-context-window-management.md" />
+    <File Path="docs/12-git-integration.md" />
+    <File Path="docs/13-session-management.md" />
+    <File Path="docs/14-mcp-support.md" />
+    <File Path="docs/15-system-prompt.md" />
+    <File Path="docs/16-permission-and-tool-approval.md" />
+    <File Path="docs/17-error-handling-and-retry.md" />
+    <File Path="docs/18-headless-and-non-interactive-mode.md" />
+    <File Path="docs/19-token-usage-tracking.md" />
+    <File Path="docs/20-environment-context-injection.md" />
+    <File Path="docs/21-prompt-caching.md" />
+    <File Path="todo.md" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Dotsy.Cli/Dotsy.Cli.csproj" />
+    <Project Path="src/Dotsy.Core/Dotsy.Core.csproj" />
+    <Project Path="src/Dotsy.Mcp/Dotsy.Mcp.csproj" />
+    <Project Path="src/Dotsy.Providers/Dotsy.Providers.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Dotsy.Core.Tests/Dotsy.Core.Tests.csproj" />
+    <Project Path="tests/Dotsy.Providers.Tests/Dotsy.Providers.Tests.csproj" />
+  </Folder>
+  <Folder Name="/utils/">
+    <Project Path="utils/JsonlViewer/JsonlViewer.csproj" />
+  </Folder>
+</Solution>

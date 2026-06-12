@@ -1,0 +1,192 @@
+using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Dotsy.Core.Config;
+using Dotsy.Core.Tools;
+using Dotsy.Core.Utils;
+
+namespace Dotsy.Mcp;
+
+public sealed class McpClient : IDisposable
+{
+    private readonly McpServerConfig _config;
+    private readonly HttpClient? _http;
+    private Process? _process;
+    private StreamWriter? _stdin;
+    private StreamReader? _stdout;
+    private int _requestId;
+    private readonly object _lock = new();
+
+    public string ServerName => _config.Name;
+    public bool IsConnected { get; private set; }
+
+    public McpClient(McpServerConfig config, HttpClient? http = null)
+    {
+        _config = config;
+        _http = http ?? new HttpClient();
+    }
+
+    public async Task ConnectAsync(CancellationToken ct)
+    {
+        if (_config.Transport == McpTransport.Stdio)
+        {
+            if (string.IsNullOrEmpty(_config.Command))
+                throw new InvalidOperationException("stdio transport requires a command");
+
+            _process = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = _config.Command,
+                    Arguments = string.Join(" ", _config.Args),
+                    RedirectStandardInput = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false
+                }
+            };
+            _process.Start();
+            _stdin = _process.StandardInput;
+            _stdout = _process.StandardOutput;
+
+            // Send initialize
+            await SendRequestAsync("initialize", new JsonObject
+            {
+                ["protocolVersion"] = "2024-11-05",
+                ["capabilities"] = new JsonObject(),
+                ["clientInfo"] = new JsonObject { ["name"] = "dotsy", ["version"] = "1.0.0" }
+            }, ct);
+        }
+
+        IsConnected = true;
+    }
+
+    public async Task<IReadOnlyList<McpToolDefinition>> ListToolsAsync(CancellationToken ct)
+    {
+        var result = await SendRequestAsync("tools/list", new JsonObject(), ct);
+        var tools = new List<McpToolDefinition>();
+
+        if (result?.TryGetProperty("tools", out var toolsEl) == true)
+        {
+            foreach (var tool in toolsEl.EnumerateArray())
+            {
+                var name = tool.GetStringPropertyOrEmpty("name");
+                var desc = tool.GetStringPropertyOrEmpty("description");
+                var schema = tool.TryGetProperty("inputSchema", out var s)
+                    ? s.Clone()
+                    : JsonDocument.Parse("{}").RootElement;
+
+                tools.Add(new McpToolDefinition(name, desc, schema, _config.Name));
+            }
+        }
+
+        return tools;
+    }
+
+    public async Task<ToolResult> CallToolAsync(string toolName, JsonElement input, CancellationToken ct)
+    {
+        try
+        {
+            var result = await SendRequestAsync("tools/call", new JsonObject
+            {
+                ["name"] = toolName,
+                ["arguments"] = JsonNode.Parse(input.GetRawText())
+            }, ct);
+
+            if (result is null)
+                return ToolResult.Err("No response from MCP server");
+
+            if (result.Value.TryGetProperty("isError", out var isErr) && isErr.GetBoolean())
+            {
+                var errContent = result.Value.TryGetProperty("content", out var ec)
+                    ? GetContentText(ec) : "Unknown error";
+                return ToolResult.Err(errContent);
+            }
+
+            var content = result.Value.TryGetProperty("content", out var c)
+                ? GetContentText(c) : result.Value.GetRawText();
+
+            return ToolResult.Ok(content);
+        }
+        catch (Exception ex)
+        {
+            return ToolResult.Err($"MCP call failed: {ex.Message}");
+        }
+    }
+
+    private async Task<JsonElement?> SendRequestAsync(string method, JsonNode? params_, CancellationToken ct)
+    {
+        int id;
+        lock (_lock) { id = ++_requestId; }
+
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = id,
+            ["method"] = method,
+            ["params"] = params_
+        };
+
+        var json = request.ToJsonString();
+
+        if (_config.Transport == McpTransport.Http)
+        {
+            var resp = await _http!.PostAsync(
+                _config.Url,
+                new StringContent(json, Encoding.UTF8, "application/json"),
+                ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            return ParseResponse(body);
+        }
+        else
+        {
+            if (_stdin is null || _stdout is null)
+                throw new InvalidOperationException("Not connected");
+
+            await _stdin.WriteLineAsync(json);
+            await _stdin.FlushAsync(ct);
+
+            var response = await _stdout.ReadLineAsync(ct);
+            return response is null ? null : ParseResponse(response);
+        }
+    }
+
+    private static JsonElement? ParseResponse(string json)
+    {
+        var doc = JsonDocument.Parse(json);
+        if (doc.RootElement.TryGetProperty("result", out var result))
+            return result.Clone();
+        return null;
+    }
+
+    private static string GetContentText(JsonElement content)
+    {
+        if (content.ValueKind == JsonValueKind.Array)
+        {
+            var sb = new StringBuilder();
+            foreach (var item in content.EnumerateArray())
+            {
+                if (item.TryGetProperty("text", out var t))
+                    sb.Append(t.GetString());
+            }
+            return sb.ToString();
+        }
+        return content.GetString() ?? content.GetRawText();
+    }
+
+    public void Dispose()
+    {
+        _stdin?.Dispose();
+        _stdout?.Dispose();
+        try { _process?.Kill(); } catch { }
+        _process?.Dispose();
+        IsConnected = false;
+    }
+}
+
+public sealed record McpToolDefinition(
+    string Name,
+    string Description,
+    System.Text.Json.JsonElement InputSchema,
+    string ServerName);
