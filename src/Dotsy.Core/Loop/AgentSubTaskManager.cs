@@ -77,7 +77,7 @@ public sealed class AgentSubTaskManager
             state.Status = "running";
             var provider = _providerFactory();
             var ctx = new LoopContext();
-            var modelInfo = await provider.GetModelInfoAsync(_config.Model.Id, CancellationToken.None);
+            var modelInfo = await provider.GetModelInfoAsync(_config.Model.ActiveModelId, CancellationToken.None);
             ctx.TokenBudget = new TokenBudget(
                 modelInfo.ContextWindow,
                 _config.Compaction.ReserveTokens,

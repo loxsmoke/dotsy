@@ -51,6 +51,7 @@ public sealed class AgentLoop
         var budget = ctx.TokenBudget;
         HashSet<string>? prevToolSigs = null;
         int consecutiveDuplicates = 0;
+        int consecutiveErrorTurns = 0;
         int toolEventIndex = 0;
         var retriedContextLengthError = false;
 
@@ -336,6 +337,24 @@ public sealed class AgentLoop
                     }
                     ctx.Messages.Add(new UserMessage(resultBlocks));
 
+                    // Loop trap: the model keeps calling tools that all fail (often guessing file
+                    // paths that don't exist). The exact-duplicate trap above misses this when the
+                    // failing arguments vary turn to turn, so guard on consecutive all-error turns.
+                    var allErrors = execResult.Results.Length > 0 && execResult.Results.All(r => r.IsError);
+                    if (allErrors)
+                    {
+                        consecutiveErrorTurns++;
+                        if (consecutiveErrorTurns == 2)
+                            ctx.Messages.Add(new UserMessage([new TextBlock(
+                                "Every recent tool call failed. Stop guessing paths — use Grep or Glob to locate "
+                                + "files before reading them, or tell the user plainly what you could not find. "
+                                + "Do not repeat calls that already failed.")]));
+                    }
+                    else
+                    {
+                        consecutiveErrorTurns = 0;
+                    }
+
                     if (_sessionStore is not null)
                     {
                         var parts = new List<object>(toolCalls.Count);
@@ -354,6 +373,14 @@ public sealed class AgentLoop
                     }
 
                     prevToolSigs = currentSigs;
+
+                    // Bail out of a failing-tool loop after a hint had a turn to land.
+                    if (consecutiveErrorTurns >= 4)
+                    {
+                        yield return new TurnComplete(budget.UsedTokens, false);
+                        yield return new LoopEnded(EndReason.NudgeLimitReached);
+                        yield break;
+                    }
                 }
             }
             else
@@ -687,7 +714,7 @@ public sealed class AgentLoop
 
         var summaryPrompt = BuildSummaryPrompt(toSummarize);
         var summaryRequest = new ChatRequest(
-            _config.Model.Id,
+            _config.Model.ActiveModelId,
             "You are a concise summarizer. Summarize the conversation context below preserving key facts, decisions, and code changes.",
             [new UserMessage([new TextBlock(summaryPrompt)])],
             [],
@@ -788,7 +815,25 @@ public sealed class AgentLoop
     {
         if (string.IsNullOrWhiteSpace(args))
             return System.Text.Json.JsonDocument.Parse("{}").RootElement;
-        try { return System.Text.Json.JsonDocument.Parse(args).RootElement; }
+        try
+        {
+            var el = System.Text.Json.JsonDocument.Parse(args).RootElement;
+            // Some models double-encode tool arguments as a JSON string (e.g. "{\"path\":...}").
+            // Unwrap one level when the string itself parses as an object/array.
+            if (el.ValueKind == System.Text.Json.JsonValueKind.String
+                && el.GetString() is { Length: > 0 } inner)
+            {
+                try
+                {
+                    var unwrapped = System.Text.Json.JsonDocument.Parse(inner).RootElement;
+                    if (unwrapped.ValueKind is System.Text.Json.JsonValueKind.Object
+                        or System.Text.Json.JsonValueKind.Array)
+                        return unwrapped;
+                }
+                catch { /* not double-encoded JSON; fall through */ }
+            }
+            return el;
+        }
         catch { return System.Text.Json.JsonDocument.Parse("{}").RootElement; }
     }
 }

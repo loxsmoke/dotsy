@@ -4,28 +4,37 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Dotsy.Core.Providers;
 using Dotsy.Core.Utils;
+using Dotsy.Providers;
 
 namespace Dotsy.Providers.OpenAi;
 
 public class OpenAiProvider : IProvider
 {
     protected readonly HttpClient Http;
-    private readonly string _apiKey;
+    protected readonly string ApiKey;
 
     public virtual string Name => "openai";
     protected virtual string ChatEndpoint => "/v1/chat/completions";
 
     public OpenAiProvider(string apiKey, string baseUrl = "https://api.openai.com", HttpClient? http = null)
     {
-        _apiKey = apiKey;
+        ApiKey = apiKey;
         Http = http ?? new HttpClient();
         Http.BaseAddress = new Uri(baseUrl);
         Http.DefaultRequestHeaders.Authorization =
-            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey);
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", ApiKey);
     }
 
-    public async Task<ModelInfo> GetModelInfoAsync(string modelId, CancellationToken ct)
+    // HARDCODED limits. The OpenAI-shaped /v1/models endpoint (used by OpenAI, Azure, and
+    // OpenAI-compatible providers) does NOT report context-window or max-output token limits,
+    // so there is no dynamic source — accurate values for known models come from ModelCatalog,
+    // and unknown models get a conservative generic default. (Providers with a live source —
+    // Anthropic, Gemini, Ollama — load these dynamically instead; see their overrides.)
+    public virtual async Task<ModelInfo> GetModelInfoAsync(string modelId, CancellationToken ct)
     {
+        if (ModelCatalog.TryLookup(modelId, out var known))
+            return known;
+
         try
         {
             var resp = await Http.GetAsync("/v1/models", ct);
@@ -103,14 +112,16 @@ public class OpenAiProvider : IProvider
                 new JsonObject { ["role"] = "system", ["content"] = request.SystemPrompt }
             };
             foreach (var msg in request.Messages)
-                messages.Add(ConvertMessage(msg));
+                foreach (var converted in ConvertMessage(msg))
+                    messages.Add(converted);
             obj["messages"] = messages;
         }
         else
         {
             var messages = new JsonArray();
             foreach (var msg in request.Messages)
-                messages.Add(ConvertMessage(msg));
+                foreach (var converted in ConvertMessage(msg))
+                    messages.Add(converted);
             obj["messages"] = messages;
         }
 
@@ -136,7 +147,7 @@ public class OpenAiProvider : IProvider
         return obj.ToJsonString();
     }
 
-    private static JsonObject ConvertMessage(Message msg)
+    private static IEnumerable<JsonObject> ConvertMessage(Message msg)
     {
         IReadOnlyList<ContentBlock> blocks = msg switch
         {
@@ -174,27 +185,32 @@ public class OpenAiProvider : IProvider
                 }
                 obj["tool_calls"] = toolCalls;
             }
-            return obj;
+            yield return obj;
+            yield break;
         }
 
-        // User message: check for tool_result blocks
+        // User message: emit one tool message per tool_result block. Parallel tool calls
+        // produce multiple results in a single message, and OpenAI requires a response for
+        // every tool_call_id — emitting only the first triggers a 400 ("did not have response").
         var toolResults = blocks.OfType<ToolResultBlock>().ToList();
         if (toolResults.Count > 0)
         {
-            // Return a tool message for the first result (OpenAI sends one per tool call)
-            var tr = toolResults[0];
-            return new JsonObject
+            foreach (var tr in toolResults)
             {
-                ["role"] = "tool",
-                ["tool_call_id"] = tr.ToolUseId,
-                ["content"] = tr.Content
-            };
+                yield return new JsonObject
+                {
+                    ["role"] = "tool",
+                    ["tool_call_id"] = tr.ToolUseId,
+                    ["content"] = tr.Content
+                };
+            }
+            yield break;
         }
 
         // Plain user message
         var textBlocks = blocks.OfType<TextBlock>().ToList();
         var userText = string.Join("", textBlocks.Select(b => b.Text));
-        return new JsonObject { ["role"] = "user", ["content"] = userText };
+        yield return new JsonObject { ["role"] = "user", ["content"] = userText };
     }
 
     private static async IAsyncEnumerable<ProviderEvent> ParseSseStream(
@@ -355,8 +371,31 @@ public class OpenAiProvider : IProvider
         else if (status >= 500)
             error = new ServerError(status);
         else
-            error = new RequestError(status);
+        {
+            var (errType, errMsg, reqId) = ParseErrorBody(body, resp);
+            if (!string.IsNullOrEmpty(errMsg)
+                && errMsg.Contains("context", StringComparison.OrdinalIgnoreCase)
+                && errMsg.Contains("length", StringComparison.OrdinalIgnoreCase))
+            {
+                error = new ContextLengthError();
+            }
+            else
+            {
+                error = new RequestError(status, BuildDetail(errMsg, errType, body, reqId));
+            }
+        }
 
         yield return new StreamError(new ProviderException(error));
+    }
+
+    // Prefer the API's human-readable message; fall back to the error type or raw body.
+    private static string BuildDetail(string message, string type, string body, string requestId)
+    {
+        var detail = !string.IsNullOrEmpty(message) ? message
+                   : !string.IsNullOrEmpty(type)    ? type
+                   : body.Trim();
+        if (!string.IsNullOrEmpty(requestId))
+            detail += $" (request {requestId})";
+        return detail;
     }
 }

@@ -1,6 +1,7 @@
 ﻿using System.Drawing;
 using System.Text;
 using Terminal.Gui;
+using TGAttribute = Terminal.Gui.Attribute;
 
 namespace Dotsy.Cli.Tui;
 
@@ -10,6 +11,10 @@ namespace Dotsy.Cli.Tui;
 internal sealed class ToolListView : ListView
 {
     private int _hScrollOffset;
+
+    // Lets the bracket renderer read each row's group so consecutive tool calls from the same
+    // prompt can be drawn with a half-frame gutter. Set by AgentWindow.
+    public Func<int, ToolRow?>? RowGetter { get; set; }
 
     public ToolListView()
     {
@@ -61,40 +66,87 @@ internal sealed class ToolListView : ListView
 
     protected override bool OnDrawingContent()
     {
+        bool handled;
         if (_hScrollOffset == 0)
         {
-            var handled = base.OnDrawingContent();
-            DrawVerticalScrollBar();
-            return handled;
+            handled = base.OnDrawingContent();
         }
-
-        Rectangle f = Viewport;
-        int renderWidth = Math.Max(0, f.Width - 1);
-        int itemIdx = TopItem;
-
-        for (int row = 0; row < f.Height; row++, itemIdx++)
+        else
         {
-            bool isSelected = itemIdx == SelectedItem;
-            var color = HasFocus
-                ? isSelected ? ColorScheme!.Focus : GetNormalColor()
-                : isSelected ? ColorScheme!.HotNormal : GetNormalColor();
-            SetAttribute(color);
-            Move(0, row);
+            Rectangle f = Viewport;
+            int renderWidth = Math.Max(0, f.Width - 1);
+            int itemIdx = TopItem;
 
-            if (Source is null || itemIdx >= Source.Count)
+            for (int row = 0; row < f.Height; row++, itemIdx++)
             {
-                for (int c = 0; c < f.Width; c++) Driver?.AddRune((Rune)' ');
-                continue;
+                bool isSelected = itemIdx == SelectedItem;
+                var color = HasFocus
+                    ? isSelected ? ColorScheme!.Focus : GetNormalColor()
+                    : isSelected ? ColorScheme!.HotNormal : GetNormalColor();
+                SetAttribute(color);
+                Move(0, row);
+
+                if (Source is null || itemIdx >= Source.Count)
+                {
+                    for (int c = 0; c < f.Width; c++) Driver?.AddRune((Rune)' ');
+                    continue;
+                }
+
+                var rowArgs = new ListViewRowEventArgs(itemIdx);
+                OnRowRender(rowArgs);
+                if (rowArgs.RowAttribute is { } ra) SetAttribute(ra);
+
+                Source.Render(this, isSelected, itemIdx, 0, row, renderWidth, _hScrollOffset);
             }
-
-            var rowArgs = new ListViewRowEventArgs(itemIdx);
-            OnRowRender(rowArgs);
-            if (rowArgs.RowAttribute is { } ra) SetAttribute(ra);
-
-            Source.Render(this, isSelected, itemIdx, 0, row, renderWidth, _hScrollOffset);
+            handled = true;
         }
+
+        DrawGroupBrackets();
         DrawVerticalScrollBar();
-        return true;
+        return handled;
+    }
+
+    // Draws a dim half-frame gutter in column 0 (just left of the status icon) that visually
+    // brackets the consecutive tool calls belonging to one prompt: ┌ on the first, │ on the
+    // middle ones, └ on the last. A lone tool gets no bracket. Drawn a shade dimmer than the
+    // panel border so it reads as a secondary, structural element.
+    private void DrawGroupBrackets()
+    {
+        if (RowGetter is null || Driver is null) return;
+
+        int count = Source?.Count ?? 0;
+        int height = Viewport.Height;
+        for (int row = 0; row < height; row++)
+        {
+            int idx = TopItem + row;
+            if (idx < 0 || idx >= count) continue;
+
+            var glyph = GroupGlyph(idx, count);
+            if (glyph == '\0') continue;
+
+            bool selHi = HasFocus && idx == SelectedItem;
+            SetAttribute(selHi
+                ? new TGAttribute(ColorName16.Gray, ColorName16.DarkGray)
+                : new TGAttribute(ColorName16.DarkGray, ColorName16.Black));
+            Move(0, row);
+            Driver.AddRune(new Rune(glyph));
+        }
+    }
+
+    // '\0' = no bracket (ungrouped row, or the only tool in its group).
+    private char GroupGlyph(int idx, int count)
+    {
+        var cur = RowGetter!(idx);
+        if (cur is null || cur.Group == 0) return '\0';
+
+        int g = cur.Group;
+        bool prevSame = idx > 0          && RowGetter(idx - 1)?.Group == g;
+        bool nextSame = idx < count - 1  && RowGetter(idx + 1)?.Group == g;
+
+        if (!prevSame && !nextSame) return '\0'; // single tool — no half-frame
+        if (!prevSame)              return '┌';
+        if (!nextSame)              return '└';
+        return '│';
     }
 
     private void DrawVerticalScrollBar()

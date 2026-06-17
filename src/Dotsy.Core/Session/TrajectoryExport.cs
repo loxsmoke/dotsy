@@ -168,7 +168,7 @@ public sealed class TrajectoryRecorder
                 Cwd = _cwd,
                 GitBranch = TryGetGitBranch(_cwd),
                 GitCommit = TryGetGitCommit(_cwd),
-                Model = _config.Model.Id,
+                Model = _config.Model.ActiveModelId,
                 Provider = _config.Model.Provider,
                 StartedAt = _startedAt,
                 EndedAt = endedAt,
@@ -389,7 +389,8 @@ public static partial class TrajectoryRedactor
             config.Model.Anthropic.ApiKey,
             config.Model.OpenAi.ApiKey,
             config.Model.Azure.ApiKey,
-            config.Model.Compatible.ApiKey
+            config.Model.Compatible.ApiKey,
+            config.Model.Gemini.ApiKey
         };
 
         foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())

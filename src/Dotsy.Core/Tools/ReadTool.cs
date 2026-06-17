@@ -25,15 +25,32 @@ public sealed class ReadTool : ITool
     {
         if (string.IsNullOrEmpty(resultContent)) return null;
         var path = MakeRelative(input.GetStringPropertyOrEmpty("path"), cwd);
-        var lines = resultContent.Split('\n').Count(l => l.Length > 0 && l.Contains('\t') && !l.StartsWith('<'));
+        var lines = resultContent.Split('\n').Count(l =>
+        {
+            var t = l.TrimStart();
+            return t.Length > 0 && char.IsDigit(t[0]); // numbered content lines (not <truncated>/<diff>)
+        });
         return $"{path}  {lines} lines";
     }
 
     public async Task<ToolResult> ExecuteAsync(JsonElement input, ToolContext ctx, CancellationToken ct)
     {
         var path = ResolvePath(input, ctx.Cwd);
-        int offset = input.TryGetProperty("offset", out var o) ? o.GetInt32() : 0;
-        int limit = input.TryGetProperty("limit", out var l) ? l.GetInt32() : MaxLines;
+
+        // Accept either offset/limit (0-based offset + count) or start_line/end_line (1-based,
+        // inclusive — the same parameter names Edit/MultiEdit use). Values may be numbers or
+        // numeric strings, since models sometimes stringify them. offset/limit win if both given.
+        int? startLine = GetFlexInt(input, "start_line");
+        int? endLine   = GetFlexInt(input, "end_line");
+
+        int offset = GetFlexInt(input, "offset")
+            ?? (startLine.HasValue ? Math.Max(0, startLine.Value - 1) : 0);
+
+        int limit = GetFlexInt(input, "limit")
+            ?? (startLine.HasValue && endLine.HasValue
+                ? Math.Max(1, endLine.Value - startLine.Value + 1)
+                : MaxLines);
+
         var includeDiff = input.TryGetProperty("include_diff", out var d) && d.ValueKind == JsonValueKind.True;
         limit = Math.Min(limit, MaxLines);
 
@@ -74,11 +91,14 @@ public sealed class ReadTool : ITool
         bool truncated = offset + slice.Length < totalLines;
 
         var sb = new StringBuilder();
+        // Right-align line numbers to the width of the largest number shown, then a single space,
+        // so numbers form a clean column and don't stick to the content.
+        int numWidth = (offset + slice.Length).ToString().Length;
         int lineNum = offset + 1;
         foreach (var line in slice)
         {
-            sb.Append(lineNum++);
-            sb.Append('\t');
+            sb.Append(lineNum++.ToString().PadLeft(numWidth));
+            sb.Append(' ');
             sb.Append(line.TrimEnd('\r'));
             sb.Append('\n');
         }
@@ -108,6 +128,15 @@ public sealed class ReadTool : ITool
         }
 
         return ToolResult.Ok(sb.ToString());
+    }
+
+    // Reads an integer property that may be a JSON number or a numeric string; null if absent/invalid.
+    private static int? GetFlexInt(JsonElement input, string name)
+    {
+        if (!input.TryGetProperty(name, out var el)) return null;
+        if (el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out var n)) return n;
+        if (el.ValueKind == JsonValueKind.String && int.TryParse(el.GetString(), out var s)) return s;
+        return null;
     }
 
     internal static string ResolvePath(JsonElement input, string cwd)

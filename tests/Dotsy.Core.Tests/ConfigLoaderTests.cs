@@ -123,6 +123,40 @@ public sealed class ConfigLoaderTests
     }
 
     [TestMethod]
+    public async Task Load_ParsesTuiTheme()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), $"dotsy_config_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(tmp, ".dotsy"));
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(tmp, ".dotsy", "config.toml"), """
+                [tui]
+                theme = "borland"
+                """);
+
+            var config = ConfigLoader.Load(tmp);
+
+            Assert.AreEqual("borland", config.Tui.Theme);
+        }
+        finally
+        {
+            if (Directory.Exists(tmp))
+                Directory.Delete(tmp, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public void ConfigEditor_IncludesTuiThemeKeyAndSection()
+    {
+        var keys = ConfigEditor.ParamList.SelectMany(g => g.Params).Select(p => p.Key).ToList();
+        CollectionAssert.Contains(keys, "tui.theme");
+
+        var sections = ConfigEditor.GetSections(new DotsyConfig());
+        Assert.IsTrue(sections.Any(s => s.Header == "tui"
+            && s.Kvs.Any(kv => kv.Key == "theme" && kv.Value == "dark")));
+    }
+
+    [TestMethod]
     public async Task Load_ParsesTuiLeftPanelWidthPercentage()
     {
         var tmp = Path.Combine(Path.GetTempPath(), $"dotsy_config_{Guid.NewGuid():N}");
@@ -203,6 +237,104 @@ public sealed class ConfigLoaderTests
         {
             if (Directory.Exists(tmp))
                 Directory.Delete(tmp, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task GetConfigSources_ReportsProjectFileForNonSecretKeysAndDefaultForUnset()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), $"dotsy_config_{Guid.NewGuid():N}");
+        var projectConfig = Path.Combine(tmp, ".dotsy", "config.toml");
+        Directory.CreateDirectory(Path.Combine(tmp, ".dotsy"));
+        try
+        {
+            await File.WriteAllTextAsync(projectConfig, """
+                [agent]
+                max_turns = 99
+
+                [model.openai]
+                base_url = "http://proj"
+                api_key = "proj-secret"
+                """);
+
+            var sources = ConfigLoader.GetConfigSources(tmp);
+
+            Assert.AreEqual(projectConfig, sources.ProjectPath);
+            Assert.IsTrue(sources.ProjectExists);
+            Assert.AreEqual(projectConfig, sources.KeySources["agent.max_turns"]);
+            Assert.AreEqual(projectConfig, sources.KeySources["model.openai.base_url"]);
+            // A key not set in any file falls back to default.
+            Assert.AreEqual("default", sources.KeySources["agent.nudge_limit"]);
+            // API keys are never sourced from the project config, matching the loader's secrets rule.
+            Assert.AreNotEqual(projectConfig, sources.KeySources["model.openai.api_key"]);
+        }
+        finally
+        {
+            if (Directory.Exists(tmp))
+                Directory.Delete(tmp, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public void GetConfigSources_ReportsEnvVarOverride()
+    {
+        var old = Environment.GetEnvironmentVariable("DOTSY_AGENT_NUDGE_LIMIT");
+        try
+        {
+            Environment.SetEnvironmentVariable("DOTSY_AGENT_NUDGE_LIMIT", "7");
+
+            var sources = ConfigLoader.GetConfigSources(Path.GetTempPath());
+
+            Assert.AreEqual("env:DOTSY_AGENT_NUDGE_LIMIT", sources.KeySources["agent.nudge_limit"]);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DOTSY_AGENT_NUDGE_LIMIT", old);
+        }
+    }
+
+    [TestMethod]
+    public void Gemini_ApiKeyResolvesFromEnvAndCatalogIncludesKeys()
+    {
+        var old = Environment.GetEnvironmentVariable("GEMINI_API_KEY");
+        try
+        {
+            Environment.SetEnvironmentVariable("GEMINI_API_KEY", "g-secret");
+
+            var config = ConfigLoader.Load(Path.GetTempPath());
+            config.Model.Provider = "gemini";
+            config.Model.Gemini.Id = "gemini-2.5-flash-lite";
+
+            Assert.AreEqual("g-secret", config.Model.Gemini.ApiKey);
+            Assert.AreEqual("gemini-2.5-flash-lite", config.Model.ActiveModelId);
+            Assert.AreEqual("Gemini", ConfigLoader.GetProviderDisplayName("gemini"));
+            Assert.AreEqual("env GEMINI_API_KEY", ConfigLoader.GetApiKeySource(config));
+
+            var keys = ConfigEditor.ParamList.SelectMany(g => g.Params).Select(p => p.Key).ToList();
+            CollectionAssert.Contains(keys, "model.gemini.id");
+            CollectionAssert.Contains(keys, "model.gemini.api_key");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GEMINI_API_KEY", old);
+        }
+    }
+
+    [TestMethod]
+    public void GetConfigSources_ReportsKnownSecretEnvVarForApiKey()
+    {
+        var old = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+        try
+        {
+            Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", "from-env");
+
+            var sources = ConfigLoader.GetConfigSources(Path.GetTempPath());
+
+            Assert.AreEqual("env:ANTHROPIC_API_KEY", sources.KeySources["model.anthropic.api_key"]);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", old);
         }
     }
 

@@ -17,6 +17,32 @@ public sealed class SkillTool : ITool
     public ToolSafety Safety => ToolSafety.ReadOnly;
     public bool IsCompletionSignal => false;
 
+    public string FormatPanelArgument(JsonElement input)
+    {
+        var name = input.GetProperty("name").GetString() ?? "";
+        return name;
+    }
+
+    public string? FormatPanelResult(JsonElement result)
+    {
+        if (!result.TryGetProperty("output", out var output))
+            return null;
+
+        var text = output.GetString() ?? "";
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+
+        // Extract skill name from XML
+        var match = System.Text.RegularExpressions.Regex.Match(text, @"name=""([^""]+)""");
+        if (!match.Success)
+            return text;
+
+        var skillName = match.Groups[1].Value;
+        var lineCount = text.Count(c => c == '\n');
+
+        return $"Skill '{skillName}' loaded ({lineCount} lines)";
+    }
+
     public SkillTool(SkillDiscovery discovery)
     {
         _discovery = discovery;

@@ -30,6 +30,27 @@ public sealed class OllamaProviderTests
     }
 
     [TestMethod]
+    public async Task GetModelInfo_LoadsContextLengthDynamicallyFromApiShow()
+    {
+        // /api/show returns model_info with an architecture-prefixed context_length key.
+        var provider = Provider("""{"model_info":{"qwen3.context_length":262144}}""");
+
+        var info = await provider.GetModelInfoAsync("qwen3-coder", CancellationToken.None);
+
+        Assert.AreEqual(262_144, info.ContextWindow);
+    }
+
+    [TestMethod]
+    public async Task GetModelInfo_FallsBackWhenNoContextLengthReported()
+    {
+        var provider = Provider("""{"model_info":{}}""");
+
+        var info = await provider.GetModelInfoAsync("qwen3-coder", CancellationToken.None);
+
+        Assert.AreEqual(128_000, info.ContextWindow);
+    }
+
+    [TestMethod]
     public async Task ParseNdjson_RawToolCallInContent_EmitsToolCallAndSuppressesMarkupText()
     {
         const string body = """
@@ -152,7 +173,7 @@ public sealed class OllamaProviderTests
     private static DotsyConfig MakeConfig() =>
         new()
         {
-            Model = new ModelConfig { Id = "qwen3-coder", MaxOutputTokensPerRequest = 1024 },
+            Model = new ModelConfig { Provider = "ollama", Ollama = new() { Id = "qwen3-coder" }, MaxOutputTokensPerRequest = 1024 },
             Agent = new AgentConfig
             {
                 MaxTurns = 10,

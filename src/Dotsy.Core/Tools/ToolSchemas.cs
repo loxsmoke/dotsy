@@ -15,8 +15,10 @@ internal static class ToolSchemas
           "type": "object",
           "properties": {
             "path":   { "type": "string" },
-            "offset": { "type": "integer", "default": 0 },
-            "limit":  { "type": "integer", "default": 2000 },
+            "offset": { "type": "integer", "default": 0, "description": "0-based line number to start reading from." },
+            "limit":  { "type": "integer", "default": 2000, "description": "Maximum number of lines to read." },
+            "start_line": { "type": "integer", "description": "1-based first line to read, inclusive. Alternative to offset; use with end_line." },
+            "end_line":   { "type": "integer", "description": "1-based last line to read, inclusive. Alternative to limit; use with start_line." },
             "include_diff": { "type": "boolean", "default": false }
           },
           "required": ["path"]
@@ -84,8 +86,10 @@ internal static class ToolSchemas
         {
           "type": "object",
           "properties": {
-            "pattern":       { "type": "string" },
-            "path":          { "type": "string" },
+            "pattern":       { "type": "string", "description": "Regex pattern to search for." },
+            "path":          { "type": "string", "description": "Directory or file to search IN. Defaults to the working directory. Must exist. Do not put a glob here (use the glob field), and do not put a directory you want to skip here (use the exclude field)." },
+            "glob":          { "type": "string", "description": "Glob of which files to INCLUDE, e.g. '*.cs' or '**/*.{ts,tsx}'." },
+            "exclude":       { "type": "string", "description": "Glob of files/directories to EXCLUDE from the search, e.g. 'terminal.gui' or '**/bin/**'. Use this to skip a directory instead of pointing path at it." },
             "context_lines": { "type": "integer", "default": 0 },
             "ignore_case":   { "type": "boolean", "default": false }
           },
@@ -97,8 +101,9 @@ internal static class ToolSchemas
         {
           "type": "object",
           "properties": {
-            "pattern": { "type": "string" },
-            "path":    { "type": "string" }
+            "pattern": { "type": "string", "description": "Glob of files to match, e.g. '**/*.cs' or '*.{ts,tsx}'." },
+            "path":    { "type": "string", "description": "Directory to search in. Defaults to the working directory." },
+            "exclude": { "type": "string", "description": "Glob of files/directories to EXCLUDE, e.g. 'extern' or '**/test/**'. Build and VCS dirs (.git, bin, obj, node_modules) are skipped by default." }
           },
           "required": ["pattern"]
         }
@@ -108,7 +113,7 @@ internal static class ToolSchemas
         {
           "type": "object",
           "properties": {
-            "path": { "type": "string" }
+            "path": { "type": "string", "description": "What to outline: an existing C# file, a directory (outlined recursively), a glob such as \"**/*Service.cs\", or a bare file name to search for under the working directory." }
           },
           "required": ["path"]
         }

@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.Drawing;
 using System.Globalization;
 using Dotsy.Core.Config;
@@ -60,8 +60,11 @@ public class AgentWindow : Toplevel, IDisposable
     private int _convoWrapWidth;
 
     // ── Tool rows ─────────────────────────────────────────────────────────────
+    // Tool calls accumulate across prompts; each prompt's calls share a group id so the panel
+    // can bracket them with a half-frame gutter. _toolCount is a monotonic row counter.
     private readonly ObservableCollection<ToolRow> _toolRows = new();
     private volatile int _toolCount;
+    private int _toolGroupSeq;
 
     // ── Approval ──────────────────────────────────────────────────────────────
     private TaskCompletionSource<ApprovalChoice>? _approvalTcs;
@@ -102,7 +105,8 @@ public class AgentWindow : Toplevel, IDisposable
         _leftFrame.Border!.Thickness = new Thickness(0, 1, 0, 1); // no left or right bar
         _convo = new ScrollableText
         {
-            X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill()
+            X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(),
+            EnableSelectionCopy = true
         };
         _fileFrame = new FrameView
         {
@@ -163,6 +167,7 @@ public class AgentWindow : Toplevel, IDisposable
             CanFocus = true, ColorScheme = Palette.Scheme()
         };
         _toolList.SetSource(_toolRows);
+        _toolList.RowGetter         = idx => idx >= 0 && idx < _toolRows.Count ? _toolRows[idx] : null;
         _toolList.RowRender        += OnToolRowRender;
         _toolList.OpenSelectedItem += OnToolSelected;
         _rightFrame.Add(_toolList);
@@ -191,13 +196,14 @@ public class AgentWindow : Toplevel, IDisposable
         _inspectFrame = new InspectionFrameView
         {
             X = 0, Y = 1, Width = Dim.Fill(), Height = Dim.Fill(1),
-            Title = " Inspection  [Esc to close] ", Visible = false, ColorScheme = Palette.Scheme()
+            Title = " Inspection  [Ctrl+C copy · Ctrl+A all · Esc close] ", Visible = false, ColorScheme = Palette.Scheme()
         };
         _inspectText = new ScrollableText
         {
             X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(),
-            ColorScheme = Palette.Scheme(),
-            ShowScrollBars = false
+            ColorScheme = Palette.ReadOnlyTextScheme(),
+            ShowScrollBars = false,
+            EnableSelectionCopy = true
         };
         _inspectFrame.ContentView = _inspectText;
         _inspectFrame.Add(_inspectText);
@@ -249,7 +255,7 @@ public class AgentWindow : Toplevel, IDisposable
         base.OnLoaded();
 
         var config = TuiSessionContext.Config;
-        _statusBar.SetModel(config.Model.Id);
+        _statusBar.SetModel(config.Model.ActiveModelId);
         _statusBar.SetSession(TuiSessionContext.LoopCtx?.SessionId ?? "");
         TuiSessionContext.StatusUpdate = SetStatus;
 
@@ -298,7 +304,15 @@ public class AgentWindow : Toplevel, IDisposable
 
         if (key.KeyCode == KeyCode.Esc && _approvalFrame.Visible)
         {
-            _approvalFrame.SetFocus();
+            FocusFirstApprovalButton();
+            return true;
+        }
+
+        // The approval overlay is modal-ish: trap Tab/Shift+Tab so focus cycles its buttons and
+        // never escapes to the (hidden) entry field or the panels underneath it.
+        if (_approvalFrame.Visible && (key == Key.Tab || key == Key.Tab.WithShift))
+        {
+            CycleApprovalFocus(back: key == Key.Tab.WithShift);
             return true;
         }
 
@@ -684,9 +698,8 @@ public class AgentWindow : Toplevel, IDisposable
         line.Add(C(indicator, lineAttr));
         line.Add(C(' ', lineAttr));
 
-        // Content (strip trailing newline)
-        foreach (var ch in content.TrimEnd('\n', '\r'))
-            line.Add(C(ch, lineAttr));
+        // Content (rune-aware; TextToCells strips CR/LF)
+        line.AddRange(TextToCells(content, lineAttr));
 
         // Pad add/del lines to fill the terminal width (capped so they don't word-wrap)
         if (indicator != ' ')
@@ -706,16 +719,26 @@ public class AgentWindow : Toplevel, IDisposable
 
     // ══ Public thread-safe tool API ═══════════════════════════════════════════
 
-    public int AddTool(string name, string arg, string cwd = "")
+    public int AddTool(string name, string arg, string cwd = "", int group = 0)
     {
         var idx = Interlocked.Increment(ref _toolCount) - 1;
         Application.Invoke(() =>
         {
             while (_toolRows.Count <= idx)
                 _toolRows.Add(new ToolRow("", "", "PENDING", 0, DateTimeOffset.Now));
-            _toolRows[idx] = new ToolRow(name, arg, "RUNNING", 0, DateTimeOffset.Now, cwd);
+            _toolRows[idx] = new ToolRow(name, arg, "RUNNING", 0, DateTimeOffset.Now, cwd, Group: group);
+            ScrollToolListToEnd();
         });
         return idx;
+    }
+
+    // Keep the most recent tool visible as the list grows across prompts, mirroring how the
+    // conversation panel tails its newest output. Does not change the selection.
+    private void ScrollToolListToEnd()
+    {
+        int vh = Math.Max(1, _toolList.Viewport.Height);
+        _toolList.TopItem = Math.Max(0, _toolRows.Count - vh);
+        _toolList.SetNeedsDraw();
     }
 
     public void UpdateTool(int idx, string status, int elapsedSec)
@@ -778,7 +801,7 @@ public class AgentWindow : Toplevel, IDisposable
             if (_btnProject is not null)
                 _btnProject.Visible = WriteToolNames.Contains(toolName);
             _approvalFrame.Visible = true;
-            _approvalFrame.SetFocus();
+            FocusFirstApprovalButton();
         });
         return await _approvalTcs.Task;
     }
@@ -823,10 +846,11 @@ public class AgentWindow : Toplevel, IDisposable
 
     private void AppendConvo(string text, TGAttribute attr)
     {
-        foreach (var ch in text)
+        foreach (var rune in text.EnumerateRunes())
         {
-            if (ch == '\n') _conversationLines.Add([]);
-            else _conversationLines[^1].Add(new Cell(attr, false, new System.Text.Rune(ch)));
+            if (rune.Value == '\n') { _conversationLines.Add([]); continue; }
+            if (rune.Value == '\r' || rune.GetColumns() <= 0) continue; // drop CR + zero-width (avoids grid desync)
+            _conversationLines[^1].Add(new Cell(attr, false, Glyphs.Safe(rune)));
         }
         ReloadConvo();
     }
@@ -917,6 +941,10 @@ public class AgentWindow : Toplevel, IDisposable
             lineCount--;
 
         int width = _convo.Frame.Width > 0 ? _convo.Frame.Width : Application.Driver?.Cols ?? 80;
+        
+        // Account for potential vertical scrollbar which consumes 1 column on the right
+        if (_convo.ShowScrollBars && _convo.CanScrollVertical())
+            width = Math.Max(1, width - 1);
 
         var snapshot = new List<List<Cell>>();
         for (var i = 0; i < lineCount; i++)
@@ -928,7 +956,7 @@ public class AgentWindow : Toplevel, IDisposable
         }
 
         if (snapshot.Count == 0) snapshot.Add([]);
-
+        
         lock (_streamCursorLock)
         {
             if (_streamCursorVisible)
@@ -938,15 +966,28 @@ public class AgentWindow : Toplevel, IDisposable
         return snapshot;
     }
 
-    // Word-wraps a single logical line (list of colored cells) into display lines at `width`.
-    // Preserves per-cell attributes exactly — no color bleeding across wrapped segments.
+    // Display columns a cell occupies, per Terminal.Gui's own renderer (which advances the cursor
+    // by Rune.GetColumns()). Wrapping uses this so wrapped lines match what TG actually draws. Emoji
+    // are replaced with 1-column glyphs at cell creation (Glyphs.Safe), so every cell here has a
+    // width TG and the terminal agree on; clamp to >= 1 as a guard.
+    private static int CellColumns(Cell cell) => Math.Max(1, cell.Rune.GetColumns());
+
+    // Word-wraps a single logical line (list of colored cells) into display lines at `width`
+    // DISPLAY COLUMNS (not cell count). Preserves per-cell attributes exactly — no color bleed.
     private static List<List<Cell>> WrapCellLine(List<Cell> cells, int width)
     {
         if (cells.Count == 0) return [[]];
-        if (cells.Count <= width) return [new List<Cell>(cells)];
+        if (width < 1) width = 1;
+
+        int totalCols = 0;
+        foreach (var c in cells) totalCols += CellColumns(c);
+        if (totalCols <= width) return [new List<Cell>(cells)];
 
         var result = new List<List<Cell>>();
-        var current = new List<Cell>(width);
+        var current = new List<Cell>();
+        int curCols = 0;
+
+        static Cell Copy(Cell c) => new(c.Attribute, false, c.Rune);
 
         int i = 0;
         while (i < cells.Count)
@@ -954,48 +995,37 @@ public class AgentWindow : Toplevel, IDisposable
             bool isSpace = cells[i].Rune.Value == ' ';
             int tokenStart = i;
             while (i < cells.Count && (cells[i].Rune.Value == ' ') == isSpace) i++;
-            int tokenLen = i - tokenStart;
+
+            int tokenCols = 0;
+            for (int j = tokenStart; j < i; j++) tokenCols += CellColumns(cells[j]);
 
             if (isSpace)
             {
-                // Add spaces to non-empty line up to available room; skip at line start
-                if (current.Count > 0)
-                {
-                    int toAdd = Math.Min(tokenLen, width - current.Count);
-                    for (int j = tokenStart; j < tokenStart + toAdd; j++)
-                        current.Add(new Cell(cells[j].Attribute, false, cells[j].Rune));
-                }
+                // Spaces (1 column each) fill remaining room on a non-empty line; skip at line start.
+                if (curCols > 0)
+                    for (int j = tokenStart; j < i && curCols < width; j++) { current.Add(Copy(cells[j])); curCols++; }
+            }
+            else if (curCols > 0 && curCols + tokenCols <= width)
+            {
+                // Word fits on the current line.
+                for (int j = tokenStart; j < i; j++) { current.Add(Copy(cells[j])); curCols += CellColumns(cells[j]); }
             }
             else
             {
-                if (current.Count == 0)
+                // Word doesn't fit: flush (stripping trailing spaces), then hard-wrap the word by columns.
+                if (curCols > 0)
                 {
-                    // At line start: hard-wrap long words
-                    for (int j = tokenStart; j < tokenStart + tokenLen; j++)
-                    {
-                        if (current.Count >= width) { result.Add(current); current = new List<Cell>(width); }
-                        current.Add(new Cell(cells[j].Attribute, false, cells[j].Rune));
-                    }
-                }
-                else if (current.Count + tokenLen <= width)
-                {
-                    // Word fits after any spaces already added
-                    for (int j = tokenStart; j < tokenStart + tokenLen; j++)
-                        current.Add(new Cell(cells[j].Attribute, false, cells[j].Rune));
-                }
-                else
-                {
-                    // Word doesn't fit: flush current (strip trailing spaces), start new line
-                    while (current.Count > 0 && current[^1].Rune.Value == ' ')
-                        current.RemoveAt(current.Count - 1);
+                    while (current.Count > 0 && current[^1].Rune.Value == ' ') current.RemoveAt(current.Count - 1);
                     result.Add(current);
-                    current = new List<Cell>(width);
-
-                    for (int j = tokenStart; j < tokenStart + tokenLen; j++)
-                    {
-                        if (current.Count >= width) { result.Add(current); current = new List<Cell>(width); }
-                        current.Add(new Cell(cells[j].Attribute, false, cells[j].Rune));
-                    }
+                    current = new List<Cell>();
+                    curCols = 0;
+                }
+                for (int j = tokenStart; j < i; j++)
+                {
+                    int cw = CellColumns(cells[j]);
+                    if (curCols > 0 && curCols + cw > width) { result.Add(current); current = new List<Cell>(); curCols = 0; }
+                    current.Add(Copy(cells[j]));
+                    curCols += cw;
                 }
             }
         }
@@ -1047,13 +1077,7 @@ public class AgentWindow : Toplevel, IDisposable
     private void ShowFileDiff(FileRow row)
     {
         var lines = new List<List<Cell>>();
-        void AddLine(string text, TGAttribute attr)
-        {
-            var line = new List<Cell>();
-            foreach (var ch in text)
-                line.Add(new Cell(attr, false, new System.Text.Rune(ch)));
-            lines.Add(line);
-        }
+        void AddLine(string text, TGAttribute attr) => lines.Add(TextToCells(text, attr));
         var typeLabel = row.ChangeType switch
         {
             FileChangeType.Added   => "new file",
@@ -1066,7 +1090,7 @@ public class AgentWindow : Toplevel, IDisposable
         lines.Add([]);
         lines.AddRange(row.Diff);
         _inspectText.Load(lines);
-        _inspectFrame.Title = $" {row.Path}  [Esc to close] ";
+        _inspectFrame.Title = $" {row.Path}  [Ctrl+C copy · Ctrl+A all · Esc close] ";
         ShowInspectFrame();
     }
 
@@ -1074,13 +1098,7 @@ public class AgentWindow : Toplevel, IDisposable
     {
         var lines = new List<List<Cell>>();
 
-        void AddLine(string text, TGAttribute attr)
-        {
-            var line = new List<Cell>();
-            foreach (var ch in text)
-                line.Add(new Cell(attr, false, new System.Text.Rune(ch)));
-            lines.Add(line);
-        }
+        void AddLine(string text, TGAttribute attr) => lines.Add(TextToCells(text, attr));
 
         AddLine($"  Command  {row.Name} {row.Arg}", Palette.Cmd);
         lines.Add([]);
@@ -1129,6 +1147,29 @@ public class AgentWindow : Toplevel, IDisposable
             _input.SetFocus();
         });
         _approvalTcs?.TrySetResult(choice);
+    }
+
+    // Visible buttons of the approval overlay, in display order.
+    private List<FlatButton> ApprovalButtons() =>
+        _approvalFrame.Subviews.OfType<FlatButton>().Where(b => b.Visible).ToList();
+
+    private void FocusFirstApprovalButton()
+    {
+        var first = ApprovalButtons().FirstOrDefault();
+        if (first is not null) first.SetFocus();
+        else _approvalFrame.SetFocus();
+    }
+
+    private void CycleApprovalFocus(bool back)
+    {
+        var buttons = ApprovalButtons();
+        if (buttons.Count == 0) { _approvalFrame.SetFocus(); return; }
+        var focused = Application.Navigation?.GetFocused();
+        int idx = buttons.FindIndex(b => b == focused);
+        int next = idx < 0
+            ? 0
+            : ((idx + (back ? -1 : 1)) % buttons.Count + buttons.Count) % buttons.Count;
+        buttons[next].SetFocus();
     }
 
     private void OnHistoryPrev(object? sender, EventArgs e)
@@ -1206,8 +1247,9 @@ public class AgentWindow : Toplevel, IDisposable
 
         AppendConvo($"User › {displayText}\n\n", Palette.Cmd);
 
-        _toolRows.Clear();
-        _toolCount = 0;
+        // Tool calls persist across prompts; tag this prompt's calls with a fresh group id so the
+        // panel can bracket them together. The changed-files panel still resets each prompt.
+        var toolGroup = ++_toolGroupSeq;
         _fileRows.Clear();
         _fileFrame.Visible = false;
         _convo.Height = Dim.Fill();
@@ -1250,6 +1292,7 @@ public class AgentWindow : Toplevel, IDisposable
         var ct = _scenarioCts.Token;
         var toolTimers = new Dictionary<int, long>();
         var toolArgs   = new Dictionary<int, (string Name, string ArgsJson)>();
+        var toolRowIndex = new Dictionary<int, int>(); // per-turn loop index -> absolute row index
 
         Task.Run(async () =>
         {
@@ -1268,7 +1311,7 @@ public class AgentWindow : Toplevel, IDisposable
                             if (!assistantWritten)
                             {
                                 assistantWritten = true;
-                                mdRenderer = new MarkdownRenderer((text, attr) =>
+                                mdRenderer = new MarkdownRenderer(_convoWrapWidth, (text, attr) =>
                                     Application.Invoke(() => AppendConvo(text, attr)));
                                 Application.Invoke(() => AppendConvo("\nAgent › ", Palette.Bullet));
                                 StartStreamCursor();
@@ -1295,11 +1338,14 @@ public class AgentWindow : Toplevel, IDisposable
                             toolTimers[ts.Index] = Environment.TickCount64;
                             toolArgs[ts.Index]   = (ts.Name, ts.Arg);
                             var displayArg = FormatPanelArgument(ts.Name, ts.Arg, cwd);
-                            AddTool(ts.Name, displayArg, cwd);
+                            // Rows accumulate across prompts, so the loop's per-turn index is
+                            // remapped to the absolute row index AddTool assigns.
+                            var rowIdx = AddTool(ts.Name, displayArg, cwd, toolGroup);
+                            toolRowIndex[ts.Index] = rowIdx;
                             // For Write, pre-populate inspect with the content being written
                             if (ts.Name == "Write"
                                 && ToolPanelFormatter.GetWriteContent(ts.Arg) is { } wc)
-                                SetToolOutput(ts.Index, FormatToolOutput(wc));
+                                SetToolOutput(rowIdx, FormatToolOutput(wc));
                             Application.Invoke(() => _statusBar.SetState($"running  {ts.Name}"));
                             if (TuiSessionContext.Config.Tui.Verbose)
                                 Application.Invoke(() =>
@@ -1315,18 +1361,19 @@ public class AgentWindow : Toplevel, IDisposable
                             var status = tf.Result.IsError ? "ERR"
                                 : tf.Result.Content == "[skipped: duplicate]" ? "SKIP"
                                 : "OK";
-                            UpdateTool(tf.Index, status, elapsed);
+                            var rowIdx = toolRowIndex.TryGetValue(tf.Index, out var ri) ? ri : tf.Index;
+                            UpdateTool(rowIdx, status, elapsed);
                             List<List<Cell>>? editCells = null;
                             if (!tf.Result.IsError && toolArgs.TryGetValue(tf.Index, out var ta))
                             {
                                 if (ta.Name is "Edit" or "MultiEdit")
                                     editCells = FormatEditInspectCells(ta.Name, ta.ArgsJson, tf.Result.Content, cwd);
                                 else if (FormatPanelResult(ta.Name, ta.ArgsJson, tf.Result.Content, cwd) is { } enriched)
-                                    UpdateToolArg(tf.Index, enriched);
+                                    UpdateToolArg(rowIdx, enriched);
                             }
                             // Write success: keep the content preview set during ToolStarted
                             if (tf.Name != "Write" || tf.Result.IsError)
-                                SetToolOutput(tf.Index, editCells ?? FormatToolOutput(tf.Result.Content));
+                                SetToolOutput(rowIdx, editCells ?? FormatToolOutput(tf.Result.Content));
                             if (tf.Result.IsError)
                                 Application.Invoke(() => AppendConvo(
                                     $"  [✗ {tf.Name}] {tf.Result.Content}\n", Palette.Err));
@@ -1408,7 +1455,7 @@ public class AgentWindow : Toplevel, IDisposable
                                 var sessionTitle = firstUserText.Length > 50
                                     ? firstUserText[..50] + "…"
                                     : firstUserText;
-                                TuiSessionContext.Session?.UpdateIndex(sessionTitle, cwd, TuiSessionContext.Config.Model.Id);
+                                TuiSessionContext.Session?.UpdateIndex(sessionTitle, cwd, TuiSessionContext.Config.Model.ActiveModelId);
                             }
                             break;
 
@@ -1713,6 +1760,7 @@ public class AgentWindow : Toplevel, IDisposable
                 ReloadConvo();
                 _toolRows.Clear();
                 _toolCount = 0;
+                _toolGroupSeq = 0;
                 _fileRows.Clear();
                 _fileFrame.Visible = false;
                 _convo.Height = Dim.Fill();
@@ -1720,11 +1768,22 @@ public class AgentWindow : Toplevel, IDisposable
                 break;
 
             case "help":
+            {
                 AppendConvo("Slash commands:\n", Palette.Bright);
+                const int helpNameCol = 24; // "  " + 22-char syntax column
+                var helpDescWidth = Math.Max(20, _convo.Frame.Width - helpNameCol - 1);
+                var helpContIndent = new string(' ', helpNameCol);
                 foreach (var command in SlashCommandCatalog.Commands)
-                    AppendConvo($"  {command.Syntax,-22} {command.Description}\n", Palette.Normal);
+                {
+                    var lines = WordWrap(command.Description, helpDescWidth);
+                    AppendConvo($"  {command.Syntax,-22}", Palette.Cmd);
+                    AppendConvo((lines.Count > 0 ? lines[0] : "") + "\n", Palette.Normal);
+                    for (var i = 1; i < lines.Count; i++)
+                        AppendConvo(helpContIndent + lines[i] + "\n", Palette.Normal);
+                }
                 AppendConvo("\n", Palette.Normal);
                 break;
+            }
 
             case "tools":
             {
@@ -1765,10 +1824,21 @@ public class AgentWindow : Toplevel, IDisposable
                 var cfg = TuiSessionContext.Config;
                 if (string.IsNullOrEmpty(rest))
                 {
+                    // The active provider's model section (e.g. [model.openai]) is highlighted green.
+                    var activeProvider = cfg.Model.Provider.ToLowerInvariant() switch
+                    {
+                        "azure_openai" => "azure",
+                        var p          => p,
+                    };
+                    var activeSection = $"model.{activeProvider}";
+
                     AppendConvo($"  {ConfigEditor.ConfigFilePath}\n\n", Palette.Dim);
                     foreach (var section in ConfigEditor.GetSections(cfg))
                     {
-                        AppendConvo($"[{section.Header}]\n", Palette.Bright);
+                        var headerColor = section.Header.Equals(activeSection, StringComparison.OrdinalIgnoreCase)
+                            ? Palette.ActiveSection
+                            : Palette.Bright;
+                        AppendConvo($"[{section.Header}]\n", headerColor);
                         foreach (var kv in section.Kvs)
                         {
                             AppendConvo($"  {kv.Key,-22}", Palette.Dim);
@@ -1777,7 +1847,7 @@ public class AgentWindow : Toplevel, IDisposable
                         AppendConvo("\n", Palette.Normal);
                     }
                     AppendConvo("  /config <key> <value> to change  ", Palette.Dim);
-                    AppendConvo("e.g. /config model.id claude-opus-4-7\n\n", Palette.Normal);
+                    AppendConvo("e.g. /config model.anthropic.id claude-opus-4-7\n\n", Palette.Normal);
                 }
                 else if (rest.Trim() == "list")
                 {
@@ -1804,6 +1874,17 @@ public class AgentWindow : Toplevel, IDisposable
                     }
                     var key   = rest[..spaceIdx].Trim();
                     var value = rest[(spaceIdx + 1)..].Trim();
+
+                    // A real config key is always "section.key"; a dotless first word almost always
+                    // means the user typed a sentence after a stray "/config " left by autocomplete.
+                    if (!key.Contains('.'))
+                    {
+                        AppendConvo($"  '{rest}' isn't a config command.\n", Palette.Warn);
+                        AppendConvo("  To chat with the agent, send your message without the leading /config.\n", Palette.Dim);
+                        AppendConvo("  To change a setting, use /config <section.key> <value> (try /config list).\n\n", Palette.Dim);
+                        break;
+                    }
+
                     var (ok, msg) = ConfigEditor.Set(cfg, key, value, TuiSessionContext.ProjectConfigPath);
                     if (ok)
                     {
@@ -1833,8 +1914,21 @@ public class AgentWindow : Toplevel, IDisposable
                             }
                         }
 
+                        // Live re-theme: re-resolve the palette, recolor existing cells, repaint.
+                        if (key.Equals("tui.theme", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var previousTheme = Palette.ActiveTheme;
+                            var (resolved, fellBack) = Palette.Apply(value);
+                            var recolor = Palette.BuildRecolorMap(previousTheme);
+                            Application.Invoke(() => ReapplyTheme(recolor));
+                            if (fellBack)
+                                AppendConvo($"  unknown theme '{value}', using dark\n", Palette.Warn);
+                            else if (resolved != value.Trim().ToLowerInvariant())
+                                AppendConvo($"  resolved to {resolved}\n", Palette.Dim);
+                        }
+
                         // Keep status bar in sync with model ID
-                        Application.Invoke(() => _statusBar.SetModel(TuiSessionContext.Config.Model.Id));
+                        Application.Invoke(() => _statusBar.SetModel(TuiSessionContext.Config.Model.ActiveModelId));
                         AppendConvo("\n", Palette.Normal);
                     }
                     else
@@ -1849,17 +1943,54 @@ public class AgentWindow : Toplevel, IDisposable
                     var cfg       = TuiSessionContext.Config;
                     var provider  = ConfigLoader.GetProviderDisplayName(cfg.Model.Provider);
                     var keySource = ConfigLoader.GetApiKeySource(cfg);
-                    var keyAttr   = keySource == "not specified" ? Palette.Warn : Palette.Dim;
+                    var activeId  = cfg.Model.ActiveModelId;
                     AppendConvo("  Provider:  ", Palette.Dim); AppendConvo($"{provider}\n",     Palette.Normal);
-                    AppendConvo("  Model:     ", Palette.Dim); AppendConvo($"{cfg.Model.Id}\n", Palette.Bright);
-                    AppendConvo("  Api key:   ", Palette.Dim);
-                    AppendConvo(keySource == "not specified"
-                        ? "not specified\n\n"
-                        : $"specified via {keySource}\n\n", keyAttr);
+                    AppendConvo("  Model:     ", Palette.Dim); AppendConvo($"{activeId}\n", Palette.Bright);
+
+                    // Fetch context-window info OFF the UI thread. The lookup awaits an HTTP call
+                    // whose continuation is posted back to the Terminal.Gui main loop, so blocking
+                    // on .Result here deadlocks the UI thread. Append the remaining lines (in order)
+                    // once the lookup resolves, marshalling back via Application.Invoke.
+                    var lookup = TuiSessionContext.ModelInfoLookup;
+                    _ = Task.Run(async () =>
+                    {
+                        ModelInfo? info = null;
+                        var failed = false;
+                        try
+                        {
+                            if (lookup != null)
+                                info = await lookup(activeId).ConfigureAwait(false);
+                        }
+                        catch { failed = true; }
+
+                        Application.Invoke(() =>
+                        {
+                            if (failed)
+                            {
+                                AppendConvo("  Context:   ", Palette.Dim); AppendConvo("error fetching\n", Palette.Err);
+                            }
+                            else if (info != null)
+                            {
+                                AppendConvo("  Context:   ", Palette.Dim); AppendConvo($"{info.ContextWindow}\n", Palette.Bright);
+                            }
+                            else
+                            {
+                                AppendConvo("  Context:   ", Palette.Dim); AppendConvo("unknown\n", Palette.Warn);
+                            }
+
+                            AppendConvo("  Api key:   ", Palette.Dim);
+                            if (keySource == "no key required")
+                                AppendConvo("no key required\n\n", Palette.Bright);
+                            else if (keySource == "not specified")
+                                AppendConvo("not specified\n\n", Palette.Bright);
+                            else
+                                AppendConvo($"specified via {keySource}\n\n", Palette.Bright);
+                        });
+                    });
                 }
                 else
                 {
-                    TuiSessionContext.Config.Model.Id = rest;
+                    TuiSessionContext.Config.Model.ActiveModelId = rest;
                     Application.Invoke(() => _statusBar.SetModel(rest));
                     AppendConvo($"model → {rest}\n\n", Palette.Success);
                 }
@@ -2033,7 +2164,8 @@ public class AgentWindow : Toplevel, IDisposable
                         TuiSessionContext.Cwd,
                         TuiSessionContext.Registry,
                         SlashCommandCatalog.Commands,
-                        Mode: "tui"),
+                        Mode: "tui",
+                        ResolvedTheme: Palette.ActiveName),
                     question);
 
                 Application.Invoke(() =>
@@ -2147,6 +2279,7 @@ public class AgentWindow : Toplevel, IDisposable
 
         _toolRows.Clear();
         _toolCount = 0;
+        _toolGroupSeq = 0;
         _fileRows.Clear();
         _fileFrame.Visible = false;
         _convo.Height = Dim.Fill();
@@ -2164,7 +2297,7 @@ public class AgentWindow : Toplevel, IDisposable
         if (ctx is null) return;
         Application.Invoke(() =>
         {
-            _statusBar.SetModel(config.Model.Id);
+            _statusBar.SetModel(config.Model.ActiveModelId);
             _statusBar.SetCtxPct(ctx.TokenBudget.UsagePct);
         });
     }
@@ -2183,24 +2316,74 @@ public class AgentWindow : Toplevel, IDisposable
                     var ct = f.IsNew ? FileChangeType.Added
                            : f.IsDeleted ? FileChangeType.Deleted
                            : FileChangeType.Modified;
-                    _fileRows.Add(new FileRow(f.Path, 0, 0, ct, []));
+                    
+                    int added = 0, deleted = 0;
+                    
+                    // Calculate line changes for modified files using LibGit2Sharp
+                    if (!f.IsNew && !f.IsDeleted)
+                    {
+                        try
+                        {
+                            var repoPath = LibGit2Sharp.Repository.Discover(cwd);
+                            if (repoPath != null)
+                            {
+                                using var repo = new LibGit2Sharp.Repository(repoPath);
+                                // Get the current commit
+                                var head = repo.Head;
+                                if (head.Tip != null)
+                                {
+                                    // Compare working directory with HEAD (Patch carries per-file line counts)
+                                    var diff = repo.Diff.Compare<LibGit2Sharp.Patch>(head.Tip.Tree, LibGit2Sharp.DiffTargets.WorkingDirectory);
+                                    
+                                    foreach (var change in diff)
+                                    {
+                                        if (change.Path.Equals(f.Path, StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            added = change.LinesAdded;
+                                            deleted = change.LinesDeleted;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        catch
+                        {
+                            // If we can't calculate diff, fall back to 0, 0
+                        }
+                    }
+                    
+                    _fileRows.Add(new FileRow(f.Path, added, deleted, ct, []));
                 }
                 UpdateFilePanel();
             });
         });
     }
 
+    // Converts text to colored cells by Unicode scalar (rune), not UTF-16 char. Iterating chars and
+    // calling `new Rune(char)` throws ArgumentOutOfRangeException on a surrogate half (astral-plane
+    // emoji are surrogate pairs); EnumerateRunes pairs surrogates and substitutes U+FFFD for
+    // unpaired ones. Skips CR/LF so callers can pass a whole line.
+    private static List<Cell> TextToCells(string text, TGAttribute attr)
+    {
+        var cells = new List<Cell>();
+        foreach (var rune in text.EnumerateRunes())
+        {
+            if (rune.Value == '\r' || rune.Value == '\n') continue;
+            // Skip zero-width runes (variation selectors like U+FE0F, combining marks, ZWJ, control
+            // chars): a cell grid can't render them and the stray replacement glyph desyncs the row.
+            if (rune.GetColumns() <= 0) continue;
+            // Replace emoji-presentation runes (terminal draws 2 cols, TG draws 1 -> grid desync).
+            cells.Add(new Cell(attr, false, Glyphs.Safe(rune)));
+        }
+        return cells;
+    }
+
     private static List<List<Cell>> FormatToolOutput(string content)
     {
         var lines = new List<List<Cell>>();
         foreach (var line in content.Split('\n'))
-        {
-            var cells = line
-                .Where(ch => ch is not '\r' and not '\n')
-                .Select(ch => new Cell(Palette.Normal, false, new System.Text.Rune(ch)))
-                .ToList();
-            lines.Add(cells);
-        }
+            lines.Add(TextToCells(line, Palette.Normal));
         return lines;
     }
 
@@ -2209,8 +2392,7 @@ public class AgentWindow : Toplevel, IDisposable
     {
         var lines = new List<List<Cell>>();
 
-        List<Cell> Row(string text, TGAttribute attr) =>
-            text.Select(ch => new Cell(attr, false, new System.Text.Rune(ch))).ToList();
+        List<Cell> Row(string text, TGAttribute attr) => TextToCells(text, attr);
 
         void Blank() => lines.Add([]);
 
@@ -2218,9 +2400,8 @@ public class AgentWindow : Toplevel, IDisposable
 
         void LabelValue(string label, string value, TGAttribute valueAttr)
         {
-            var line = new List<Cell>();
-            foreach (var ch in $"  {label,-10}") line.Add(new Cell(Palette.Dim, false, new System.Text.Rune(ch)));
-            foreach (var ch in value) line.Add(new Cell(valueAttr, false, new System.Text.Rune(ch)));
+            var line = TextToCells($"  {label,-10}", Palette.Dim);
+            line.AddRange(TextToCells(value, valueAttr));
             lines.Add(line);
         }
 
@@ -2300,6 +2481,58 @@ public class AgentWindow : Toplevel, IDisposable
         return path;
     }
 
+    // Re-applies the active theme to the whole view tree without a restart. Color attributes used
+    // when drawing (Palette.*) resolve live, but ColorSchemes are captured per view, so reassign
+    // them here. When a recolor map is supplied, already-rendered cells (conversation scrollback,
+    // tool output, file diffs) are remapped from the previous theme's attributes to the new ones.
+    private void ReapplyTheme(Func<TGAttribute, TGAttribute>? recolor = null)
+    {
+        if (recolor is not null)
+        {
+            RecolorCellLines(_conversationLines, recolor);
+            foreach (var row in _toolRows)
+                if (row.Output is { } output) RecolorCellLines(output, recolor);
+            foreach (var row in _fileRows)
+                RecolorCellLines(row.Diff, recolor);
+        }
+
+        ColorScheme = Palette.Scheme();
+        Colors.ColorSchemes["Base"]   = Palette.Scheme();
+        Colors.ColorSchemes["Menu"]   = Palette.Scheme();
+        Colors.ColorSchemes["Dialog"] = Palette.Scheme();
+        Colors.ColorSchemes["Error"]  = Palette.Scheme();
+        RethemeRecursive(this);
+        ReloadConvo();
+        SetNeedsDraw();
+    }
+
+    private static void RecolorCellLines(List<List<Cell>> lines, Func<TGAttribute, TGAttribute> recolor)
+    {
+        foreach (var line in lines)
+            for (int j = 0; j < line.Count; j++)
+            {
+                var cell = line[j];
+                if (cell.Attribute is { } a)
+                    line[j] = cell with { Attribute = recolor(a) };
+            }
+    }
+
+    private static void RethemeRecursive(View view)
+    {
+        foreach (var sv in view.Subviews)
+        {
+            switch (sv)
+            {
+                case StatusBar sb:        sb.ApplyTheme();                            break;
+                case FlatButton btn:      btn.ColorScheme = Palette.BtnScheme();       break;
+                case MultilineInput mi:   mi.ColorScheme = Palette.InputScheme();      break;
+                case ScrollableText st:   st.ColorScheme = Palette.ReadOnlyTextScheme(); break;
+                default:                  sv.ColorScheme = Palette.Scheme();           break;
+            }
+            RethemeRecursive(sv);
+        }
+    }
+
     public new void Dispose()
     {
         _spinner?.Dispose();
@@ -2324,13 +2557,17 @@ internal sealed record ToolRow(
     int Elapsed,
     DateTimeOffset StartedAt,
     string Cwd = "",
-    List<List<Cell>>? Output = null)
+    List<List<Cell>>? Output = null,
+    int Group = 0)
 {
     public override string ToString()
     {
         var icon = Status switch { "OK" => "✓", "ERR" => "✗", "RUNNING" => "◌", _ => " " };
         var tail = Status == "RUNNING" ? $" {Elapsed}s…" : $" {Elapsed}s";
-        return $" {icon}  {Name,-10}{Arg,-28}{tail}";
+        // Pad the name to a column, but always keep at least one space before the argument so
+        // long tool names (e.g. "FindDefinitions") don't run straight into the argument text.
+        var name = Name.Length >= 10 ? Name + " " : $"{Name,-10}";
+        return $" {icon}  {name}{Arg,-28}{tail}";
     }
 }
 

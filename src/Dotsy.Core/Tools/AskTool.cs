@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Dotsy.Core.Loop;
+using Dotsy.Core.Utils;
 
 using Dotsy.Core.Tools.Interfaces;
 
@@ -12,6 +13,9 @@ public sealed class AskTool : ITool
     public JsonElement InputSchema => ToolSchemas.AskSchema;
     public ToolSafety Safety => ToolSafety.ReadOnly;
     public bool IsCompletionSignal => false;
+
+    public string FormatPanelArgument(JsonElement input, string cwd) =>
+        input.GetStringPropertyOrEmpty("question");
 
     public async Task<ToolResult> ExecuteAsync(JsonElement input, ToolContext ctx, CancellationToken ct)
     {

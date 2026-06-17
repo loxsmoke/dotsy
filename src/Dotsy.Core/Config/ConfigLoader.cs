@@ -6,7 +6,7 @@ namespace Dotsy.Core.Config;
 
 public static class ConfigLoader
 {
-    private static readonly string GlobalConfigPath =
+    public static readonly string GlobalConfigPath =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".config", "dotsy", "config.toml");
 
@@ -48,22 +48,14 @@ public static class ConfigLoader
         if (table.TryGetValue("model", out var modelObj) && modelObj is TomlTable model)
         {
             ApplyScalars(config.Model, model);
-            if (allowSecrets)
-            {
-                ApplyNestedSecrets(config.Model.Anthropic, model, "anthropic");
-                ApplyNestedSecrets(config.Model.OpenAi, model, "openai");
-                ApplyNestedSecrets(config.Model.Azure, model, "azure");
-                ApplyNestedSecrets(config.Model.Compatible, model, "compatible");
-            }
-            if (model.TryGetValue("ollama", out var ollamaObj) && ollamaObj is TomlTable ollama)
-                ApplyScalars(config.Model.Ollama, ollama);
-            if (allowSecrets)
-            {
-                if (model.TryGetValue("openai", out var oaiObj) && oaiObj is TomlTable oai)
-                    ApplyScalars(config.Model.OpenAi, oai);
-                if (model.TryGetValue("azure", out var azObj) && azObj is TomlTable az)
-                    ApplyScalars(config.Model.Azure, az);
-            }
+            // Non-secret scalars (model id, base urls, …) load from any config; api keys
+            // only from the global config (allowSecrets) so project configs never carry them.
+            ApplyModelSubSection(config.Model.Anthropic, model, "anthropic", allowSecrets);
+            ApplyModelSubSection(config.Model.OpenAi, model, "openai", allowSecrets);
+            ApplyModelSubSection(config.Model.Azure, model, "azure", allowSecrets);
+            ApplyModelSubSection(config.Model.Ollama, model, "ollama", allowSecrets);
+            ApplyModelSubSection(config.Model.Compatible, model, "compatible", allowSecrets);
+            ApplyModelSubSection(config.Model.Gemini, model, "gemini", allowSecrets);
         }
 
         if (table.TryGetValue("agent", out var agentObj) && agentObj is TomlTable agent)
@@ -110,16 +102,18 @@ public static class ConfigLoader
             ApplyScalars(config.Trajectory, traj);
     }
 
-    private static void ApplyNestedSecrets(object target, TomlTable parent, string key)
+    private static void ApplyModelSubSection(object target, TomlTable parent, string key, bool allowSecrets)
     {
-        if (parent.TryGetValue(key, out var nested) && nested is TomlTable table)
-            ApplyScalars(target, table);
+        if (!parent.TryGetValue(key, out var nested) || nested is not TomlTable table)
+            return;
+        // ApiKey is the only secret on a provider section; skip it unless secrets are allowed.
+        ApplyScalars(target, table, allowSecrets ? null : nameof(AnthropicConfig.ApiKey));
     }
 
-    private static void ApplyScalars(object target, TomlTable table)
+    private static void ApplyScalars(object target, TomlTable table, string? excludeProp = null)
     {
         var props = target.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance)
-            .Where(p => p.CanWrite && IsScalarType(p.PropertyType));
+            .Where(p => p.CanWrite && IsScalarType(p.PropertyType) && p.Name != excludeProp);
 
         foreach (var prop in props)
         {
@@ -173,6 +167,7 @@ public static class ConfigLoader
         ApplyEnvSection("MODEL_AZURE", config.Model.Azure);
         ApplyEnvSection("MODEL_OLLAMA", config.Model.Ollama);
         ApplyEnvSection("MODEL_COMPATIBLE", config.Model.Compatible);
+        ApplyEnvSection("MODEL_GEMINI", config.Model.Gemini);
         ApplyEnvSection("AGENT", config.Agent);
         ApplyEnvSection("COMPACTION", config.Compaction);
         ApplyEnvSection("RETRIEVAL", config.Retrieval);
@@ -187,6 +182,7 @@ public static class ConfigLoader
         TrySetFromEnv(config.Model.Anthropic, nameof(AnthropicConfig.ApiKey), "ANTHROPIC_API_KEY");
         TrySetFromEnv(config.Model.OpenAi, nameof(OpenAiConfig.ApiKey), "OPENAI_API_KEY");
         TrySetFromEnv(config.Model.Azure, nameof(AzureConfig.ApiKey), "AZURE_OPENAI_API_KEY");
+        TrySetFromEnv(config.Model.Gemini, nameof(GeminiConfig.ApiKey), "GEMINI_API_KEY");
     }
 
     private static void ApplyEnvSection(string section, object target)
@@ -215,6 +211,7 @@ public static class ConfigLoader
             "openai"       => "OpenAI",
             "ollama"       => "Ollama",
             "azure_openai" => "Azure OpenAI",
+            "gemini"       => "Gemini",
             _              => providerKey
         };
 
@@ -229,6 +226,7 @@ public static class ConfigLoader
             "anthropic"    => KeySource("ANTHROPIC_API_KEY",    config.Model.Anthropic.ApiKey),
             "openai"       => KeySource("OPENAI_API_KEY",       config.Model.OpenAi.ApiKey),
             "azure_openai" => KeySource("AZURE_OPENAI_API_KEY", config.Model.Azure.ApiKey),
+            "gemini"       => KeySource("GEMINI_API_KEY", config.Model.Gemini.ApiKey),
             "ollama"       => "no key required",
             _              => KeySource(null, ""),
         };
@@ -241,6 +239,113 @@ public static class ConfigLoader
         if (!string.IsNullOrEmpty(configuredValue))
             return GlobalConfigPath;
         return "not specified";
+    }
+
+    /// <summary>Resolved location of each config file plus, for every catalogued key, which layer
+    /// currently provides its value. Lets callers (e.g. <c>/self</c>) tell the user which file to edit.</summary>
+    public sealed record ConfigSourceInfo(
+        string GlobalPath,
+        bool GlobalExists,
+        string? ProjectPath,
+        bool ProjectExists,
+        IReadOnlyDictionary<string, string> KeySources);
+
+    /// <summary>
+    /// Determines, for every key in <see cref="ConfigEditor.ParamList"/>, where its effective value
+    /// comes from using the same precedence the loader applies (env &gt; project &gt; global &gt;
+    /// default). API-key secrets are never sourced from the project config, matching <see cref="Load"/>.
+    /// Source values are the literal file path, <c>env:VAR</c>, or <c>default</c>.
+    /// </summary>
+    public static ConfigSourceInfo GetConfigSources(string cwd)
+    {
+        var globalKeys = FlattenTomlKeys(GlobalConfigPath);
+        var projectPath = FindProjectConfig(cwd);
+        var projectKeys = projectPath is null
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : FlattenTomlKeys(projectPath);
+
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var group in ConfigEditor.ParamList)
+            foreach (var p in group.Params)
+                map[p.Key] = ResolveKeySource(p.Key, globalKeys, projectKeys, projectPath);
+
+        return new ConfigSourceInfo(
+            GlobalConfigPath, File.Exists(GlobalConfigPath),
+            projectPath, projectPath is not null, map);
+    }
+
+    private static string ResolveKeySource(
+        string key, HashSet<string> globalKeys, HashSet<string> projectKeys, string? projectPath)
+    {
+        var secret = key.EndsWith(".api_key", StringComparison.OrdinalIgnoreCase);
+
+        // Env overrides everything; check both the generic DOTSY_ overlay and the well-known key vars.
+        var envVar = EnvVarForKey(key);
+        if (HasEnv(envVar))
+            return $"env:{envVar}";
+        if (secret && KnownSecretEnvVar(key) is { } secretEnv && HasEnv(secretEnv))
+            return $"env:{secretEnv}";
+
+        // Project config is applied after global, but never carries secrets.
+        if (!secret && projectPath is not null && projectKeys.Contains(key))
+            return projectPath;
+        if (globalKeys.Contains(key))
+            return GlobalConfigPath;
+        return "default";
+    }
+
+    private static bool HasEnv(string name) =>
+        !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(name));
+
+    // Mirrors the DOTSY_<SECTION>_<KEY> overlay naming in ApplyEnvSection for a dotted config key.
+    private static string EnvVarForKey(string key)
+    {
+        var parts = key.Split('.');
+        var prop = parts[^1].Replace('-', '_').ToUpperInvariant();
+        var section = string.Join("_", parts[..^1].Select(s => s.Replace('-', '_').ToUpperInvariant()));
+        return section.Length == 0 ? $"DOTSY_{prop}" : $"DOTSY_{section}_{prop}";
+    }
+
+    private static string? KnownSecretEnvVar(string key) => key.ToLowerInvariant() switch
+    {
+        "model.anthropic.api_key"  => "ANTHROPIC_API_KEY",
+        "model.openai.api_key"     => "OPENAI_API_KEY",
+        "model.azure.api_key"      => "AZURE_OPENAI_API_KEY",
+        "model.compatible.api_key" => "OPENAI_API_KEY",
+        "model.gemini.api_key"     => "GEMINI_API_KEY",
+        _ => null
+    };
+
+    // Flattens a TOML file into the set of dotted leaf keys it sets (e.g. "model.anthropic.api_key").
+    private static HashSet<string> FlattenTomlKeys(string path)
+    {
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!File.Exists(path))
+            return keys;
+        try
+        {
+            var text = File.ReadAllText(path);
+            if (Toml.TryToModel(text, out TomlTable? table, out _, path))
+                FlattenTable(table, "", keys);
+        }
+        catch { }
+
+        // The TUI width key shipped misspelled; treat the legacy form as the canonical key.
+        if (keys.Contains("tui.left-poanel-width-percentage"))
+            keys.Add("tui.left-panel-width-percentage");
+        return keys;
+    }
+
+    private static void FlattenTable(TomlTable table, string prefix, HashSet<string> keys)
+    {
+        foreach (var kv in table)
+        {
+            var key = prefix.Length == 0 ? kv.Key : $"{prefix}.{kv.Key}";
+            if (kv.Value is TomlTable child)
+                FlattenTable(child, key, keys);
+            else
+                keys.Add(key);
+        }
     }
 
     private static void TrySetFromEnv(object target, string propName, string envVar)

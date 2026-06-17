@@ -20,21 +20,28 @@ public sealed class OllamaProvider : IProvider
         _http.BaseAddress = new Uri(baseUrl);
     }
 
+    // DYNAMIC limits. Ollama's /api/show endpoint returns per-model metadata including the
+    // architecture's context length (e.g. "llama.context_length"), so load it live. Falls back
+    // to a generic default if the model isn't found or reports no context length. Ollama does not
+    // report a max-output limit, so that stays a fixed default.
     public async Task<ModelInfo> GetModelInfoAsync(string modelId, CancellationToken ct)
     {
         try
         {
-            var resp = await _http.GetAsync("/api/tags", ct);
+            var requestBody = new JsonObject { ["model"] = modelId }.ToJsonString();
+            var content = new StringContent(requestBody, Encoding.UTF8, "application/json");
+            var resp = await _http.PostAsync("/api/show", content, ct);
             if (resp.IsSuccessStatusCode)
             {
                 var json = await resp.Content.ReadAsStringAsync(ct);
-                var doc = JsonDocument.Parse(json);
-                if (doc.RootElement.TryGetProperty("models", out var models))
+                var root = JsonDocument.Parse(json).RootElement;
+                if (root.TryGetProperty("model_info", out var info) && info.ValueKind == JsonValueKind.Object)
                 {
-                    foreach (var m in models.EnumerateArray())
+                    foreach (var prop in info.EnumerateObject())
                     {
-                        if (m.TryGetProperty("name", out var name) && name.GetString() == modelId)
-                            return new ModelInfo(modelId, 128_000, 4_096);
+                        if (prop.Name.EndsWith(".context_length", StringComparison.Ordinal)
+                            && prop.Value.TryGetInt32(out var ctxLen) && ctxLen > 0)
+                            return new ModelInfo(modelId, ctxLen, 4_096, ModelInfoSource.Api);
                     }
                 }
             }
@@ -71,8 +78,16 @@ public sealed class OllamaProvider : IProvider
         if (!resp!.IsSuccessStatusCode)
         {
             var errBody = await resp.Content.ReadAsStringAsync(ct);
+            var detail = errBody.Trim();
+            try
+            {
+                var doc = JsonDocument.Parse(errBody);
+                if (doc.RootElement.TryGetProperty("error", out var err) && err.ValueKind == JsonValueKind.String)
+                    detail = err.GetString() ?? detail;
+            }
+            catch { }
             yield return new StreamError(new ProviderException(
-                new RequestError((int)resp.StatusCode, errBody)));
+                new RequestError((int)resp.StatusCode, detail)));
             yield break;
         }
 

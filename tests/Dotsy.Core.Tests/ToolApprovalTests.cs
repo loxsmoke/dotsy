@@ -27,7 +27,7 @@ public sealed class ToolApprovalTests
 
     private static DotsyConfig MakeConfig() => new()
     {
-        Model      = new ModelConfig { Id = "test-model", MaxOutputTokensPerRequest = 1024 },
+        Model      = new ModelConfig { Anthropic = new() { Id = "test-model" }, MaxOutputTokensPerRequest = 1024 },
         Agent      = new AgentConfig
         {
             MaxTurns = 100, NudgeLimit = 3, ParallelTools = false,

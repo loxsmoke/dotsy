@@ -14,7 +14,7 @@ public sealed class TrajectoryExportTests
     private static DotsyConfig MakeIntegrationConfig(string tmp, bool trajectoryEnabled) =>
         new()
         {
-            Model = new ModelConfig { Provider = "fake", Id = "test-model", MaxOutputTokensPerRequest = 1024 },
+            Model = new ModelConfig { Provider = "fake", Anthropic = new() { Id = "test-model" }, MaxOutputTokensPerRequest = 1024 },
             Agent = new AgentConfig
             {
                 MaxTurns = 1,

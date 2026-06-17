@@ -4,6 +4,9 @@ using Dotsy.Providers.OpenAi;
 
 namespace Dotsy.Providers.AzureOpenAi;
 
+// Inherits OpenAiProvider.GetModelInfoAsync, whose limits are HARDCODED (via ModelCatalog) —
+// Azure has no endpoint that reports token limits, and deployment names rarely match catalog
+// prefixes, so most Azure deployments fall back to the generic default.
 public sealed class AzureOpenAiProvider : OpenAiProvider
 {
     private readonly string _endpoint;

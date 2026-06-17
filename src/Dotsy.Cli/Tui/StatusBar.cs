@@ -24,12 +24,13 @@ internal sealed class StatusBar : Label
     public void SetSession(string sid)    { _sessionId    = sid; UpdateText(); }
     public void SetModel(string mid)      { _modelId      = mid   ?? "dotsy"; UpdateText(); }
     public void SetCtxPct(float pct)      { _ctxPct       = pct;              UpdateText(); }
+    public void ApplyTheme()              { UpdateText(); } // re-read Palette schemes after a live re-theme
     public string State => _state;
 
     private void UpdateText()
     {
         var sid = _sessionId.Length > 0 ? $"{_sessionId}  ·  " : "";
-        Text        = $"  dotsy  ·  {sid}{_modelId}  ·  [{_ctxPct:P0} ctx]  {_spinnerFrame} {_state}";
+        Text        = $"  dotsy  ·  {sid}{_modelId}  ·  [{_ctxPct:P0} ctx] {_spinnerFrame} {_state}";
         Text = Text.ToString()?.Replace(_state, FormatState()) ?? "";
         ColorScheme = _ctxPct > 0.80f ? Palette.ErrStatusScheme()
                     : _ctxPct > 0.50f ? Palette.WarnStatusScheme()

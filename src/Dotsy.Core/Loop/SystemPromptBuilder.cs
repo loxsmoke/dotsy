@@ -18,7 +18,17 @@ public static class SystemPromptBuilder
         - Prefer editing existing files over creating new ones.
         - When searching for code, prefer targeted lookups over broad sweeps.
         - Always verify a plan before implementing it on complex tasks.
-        - After using tools to gather information, respond with a text answer to the user. Do not call the same tool twice with the same arguments.
+
+        Tool selection:
+        - Prefer the built-in tools over the Shell tool. Use Glob to find, list, or count files by name/pattern; Grep to search file contents; Read to read a file; List to list a directory; FindDefinitions for code structure. Reach for Shell only when no other tool covers the action (building, running tests, git, running a program).
+        - Shell commands are not portable across operating systems. Check the OS in the environment block before using platform-specific commands, and never assume Unix utilities (wc, grep, find, ls, cat) are present - use the built-in tools instead.
+
+        Grounding and tool use:
+        - Ground every factual claim about the codebase in tool output. If you did not verify something with a tool, do not assert it.
+        - For questions about what the app supports or how it is configured, consult configuration files and documentation, not only source code.
+        - If a tool call fails or returns nothing, do not answer from guesswork. Read the error, correct the arguments (e.g. path, glob, exclude), and retry. Only report "not found" after a successful search returned no results.
+        - Keep using tools until you have enough evidence to answer; a single failed or empty result is not a conclusion.
+        - Once you have gathered enough evidence, respond with a text answer to the user. Do not repeat a tool call with the exact same arguments.
         """;
 
     public static string Build(

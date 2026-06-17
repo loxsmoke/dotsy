@@ -18,7 +18,8 @@ public sealed record SelfContextRequest(
     DateTimeOffset? GeneratedAt = null,
     string? ExecutablePath = null,
     int MaxChars = 30_000,
-    TimeSpan? ProbeTimeout = null);
+    TimeSpan? ProbeTimeout = null,
+    string? ResolvedTheme = null);
 
 public sealed class SelfContextBuilder
 {
@@ -45,14 +46,20 @@ public sealed class SelfContextBuilder
 
         await Task.WhenAll(gitTask, systemTask, gpuTask);
 
+        ConfigLoader.ConfigSourceInfo? configSources = null;
+        try { configSources = ConfigLoader.GetConfigSources(request.Cwd); }
+        catch { /* fall back to coarse source inference below */ }
+
         var sb = new StringBuilder();
         sb.AppendLine("# Dotsy Self Context");
         sb.AppendLine();
         sb.AppendLine($"Generated: {generatedAt:O}");
         sb.AppendLine();
         AppendApp(sb, request);
+        AppendContext(sb, request);
         AppendFolder(sb, gitTask.Result, request.Cwd);
-        AppendConfiguration(sb, request.Config);
+        AppendConfigFiles(sb, configSources);
+        AppendConfiguration(sb, request.Config, configSources);
         AppendSystem(sb, systemTask.Result);
         AppendGpu(sb, gpuTask.Result);
         AppendCommands(sb, request.Commands ?? SlashCommandCatalog.Commands);
@@ -77,8 +84,27 @@ public sealed class SelfContextBuilder
             ["Process ID", Environment.ProcessId.ToString()],
             ["Session ID", request.LoopContext.SessionId],
             ["Provider", request.Config.Model.Provider],
-            ["Model", request.Config.Model.Id],
+            ["Model", request.Config.Model.ActiveModelId],
+            ["Theme (configured)", string.IsNullOrWhiteSpace(request.Config.Tui.Theme) ? "dark" : request.Config.Tui.Theme],
+            ["Theme (resolved)", request.ResolvedTheme ?? Unknown],
             ["Mode", request.Mode]
+        ]);
+    }
+
+    private static void AppendContext(StringBuilder sb, SelfContextRequest request)
+    {
+        var budget = request.LoopContext.TokenBudget;
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        AppendSection(sb, "Context Window");
+        AppendTable(sb, ["Field", "Value"],
+        [
+            ["Context window (tokens)", budget.ContextWindow > 0 ? budget.ContextWindow.ToString("N0", inv) : Unknown],
+            ["Max output tokens / request", request.Config.Model.MaxOutputTokensPerRequest.ToString("N0", inv)],
+            ["Reserved tokens", budget.ReserveTokens.ToString("N0", inv)],
+            ["Keep-recent tokens", budget.KeepRecentTokens.ToString("N0", inv)],
+            ["Usable (window − reserve)", budget.Usable.ToString("N0", inv)],
+            ["Used tokens", budget.UsedTokens.ToString("N0", inv)],
+            ["Usage", $"{(budget.UsagePct * 100).ToString("F1", inv)}%"],
         ]);
     }
 
@@ -99,19 +125,43 @@ public sealed class SelfContextBuilder
         ]);
     }
 
-    private static void AppendConfiguration(StringBuilder sb, DotsyConfig config)
+    private static void AppendConfigFiles(StringBuilder sb, ConfigLoader.ConfigSourceInfo? sources)
+    {
+        AppendSection(sb, "Config Files");
+        if (sources is null)
+        {
+            sb.AppendLine("Config file locations are unavailable in this context.");
+            sb.AppendLine();
+            return;
+        }
+
+        AppendTable(sb, ["Scope", "Path", "Exists", "Notes"],
+        [
+            ["Global (system)", sources.GlobalPath, sources.GlobalExists ? "yes" : "no",
+                "API keys and provider config load only from here or environment variables. Edit this file to add or change a provider."],
+            ["Project", sources.ProjectPath ?? "(none found in cwd tree)", sources.ProjectExists ? "yes" : "no",
+                "Non-secret overrides only; API keys placed here are ignored by design."],
+        ]);
+        sb.AppendLine("The Source column in the Configuration table below names which of these files (or which environment variable) currently provides each key. A key marked \"default\" is not set in any file — add it to the Global config to change it.");
+        sb.AppendLine();
+    }
+
+    private static void AppendConfiguration(StringBuilder sb, DotsyConfig config, ConfigLoader.ConfigSourceInfo? sources)
     {
         AppendSection(sb, "Configuration");
         AppendTable(sb, ["Key", "Type", "Value", "Source", "Description"],
             ConfigEditor.ParamList.SelectMany(g => g.Params.Select(p =>
             {
                 var raw = GetConfigValue(config, p.Key);
+                var source = sources is not null && sources.KeySources.TryGetValue(p.Key, out var s)
+                    ? s
+                    : InferSource(config, p.Key, raw);
                 return new[]
                 {
                     p.Key,
                     p.Type,
                     IsSecretKey(p.Key) ? RedactSecret(raw) : FormatValue(raw),
-                    InferSource(config, p.Key, raw),
+                    source,
                     p.Description
                 };
             })).ToList());

@@ -13,11 +13,16 @@ internal sealed class MarkdownRenderer
 {
     private readonly Action<string, TGAttribute> _append;
     private readonly StringBuilder _line = new();
+    private readonly int _wrapWidth;
     private bool _inCodeBlock;
     private string _codeLang = "";
     private bool _inBlockComment;
 
-    public MarkdownRenderer(Action<string, TGAttribute> append) => _append = append;
+    public MarkdownRenderer(int wrapWidth, Action<string, TGAttribute> append)
+    {
+        _append = append;
+        _wrapWidth = wrapWidth > 0 ? wrapWidth : 48;
+    }
 
     public void Write(string chunk)
     {
@@ -92,7 +97,7 @@ internal sealed class MarkdownRenderer
         // Horizontal rule
         if (trimmed is "---" or "***" or "___" or "===")
         {
-            _append(new string('─', 48), Palette.Dim);
+            _append(new string('─', _wrapWidth), Palette.Dim);
             End();
             return;
         }

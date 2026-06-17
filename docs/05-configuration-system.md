@@ -5,7 +5,7 @@
 1. Built-in defaults (hardcoded in `DefaultConfig`)
 2. Global config: `~/.config/dotsy/config.toml`
 3. Project config: `.dotsy/config.toml` (walked up from cwd to fs root)
-4. Environment variables: `DOTSY_<SECTION>_<KEY>` (e.g. `DOTSY_MODEL_ID`)
+4. Environment variables: `DOTSY_<SECTION>_<KEY>` (e.g. `DOTSY_MODEL_ANTHROPIC_ID`)
 5. CLI flags: `--model`, `--provider`, `--max-output-tokens-per-request`, etc.
 
 ### 5.2 Config Schema (TOML)
@@ -13,23 +13,26 @@
 ```toml
 [model]
 provider = "anthropic"          # anthropic | openai | azure | ollama | openrouter | compatible
-id       = "claude-opus-4-7"
 max_output_tokens_per_request = 8192 # max output tokens per request
 
 [model.anthropic]
+id       = ""                   # e.g. claude-opus-4-7
 api_key  = ""                   # or env ANTHROPIC_API_KEY
 
 [model.openai]
+id       = ""                   # e.g. gpt-4o
 api_key  = ""
 base_url = "https://api.openai.com/v1"
 
 [model.azure]
+id           = ""
 api_key      = ""
 endpoint     = ""
 deployment   = ""
 api_version  = "2025-01-01"
 
 [model.ollama]
+id       = ""                   # e.g. llama3
 base_url = "http://localhost:11434"
 
 [agent]

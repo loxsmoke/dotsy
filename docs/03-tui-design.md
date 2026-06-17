@@ -376,7 +376,9 @@ A VS Code Dark+-inspired 16-colour palette, defined centrally in a `Palette` cla
 
 #### 3.12.1 Themes
 
-The `[tui].theme` config key selects the palette: `dark | light | system | borland`. All colours flow through the `Palette` class, so a theme is a complete replacement set of attributes; no view hardcodes colours. Unknown theme names fall back to `dark` with a startup warning.
+The `[tui].theme` config key selects the palette: `dark | light | system | borland`. All colours flow through the `Palette` class, so a theme is a complete replacement set of attributes; no view hardcodes colours. Unknown theme names fall back to `dark` with a startup warning (to stderr).
+
+A theme is modelled as a `Theme` object holding one attribute per semantic role (`Normal`, `Cmd`, `DiffAdd`, `SynKeyword`, `StatusBg`, …). `Palette` exposes those roles as properties that read from the active `Theme`, plus `ColorScheme` builders (`Scheme()`, `BtnScheme()`, `StatusScheme()`, …) composed from them. `Palette.Apply(name)` resolves the name (validating it, resolving `system`, falling back to `dark`) and swaps the active theme. `system` detection is best-effort via the `COLORFGBG` environment variable (a light background index of 7 or 15 ⇒ `light`); when no signal is available (e.g. Windows Terminal) it falls back to `dark`. `/self` reports both the configured value and the resolved concrete theme.
 
 | Theme | Intent |
 |-------|--------|
@@ -397,6 +399,7 @@ The `[tui].theme` config key selects the palette: `dark | light | system | borla
 | Success / OK | BrightGreen on Blue |
 | Errors / ERR | White on Red |
 | Warnings / RUNNING | BrightYellow on Blue |
+| Command entry field | BrightYellow on Blue (the `Input` role; TextView draws text via `ColorScheme.Focus`) |
 | Status bar | Black on Gray (yellow/red background ctx warnings unchanged) |
 | Approval overlay / dialogs | Black on Gray with BrightRed hotkeys |
 | Selection / focused row | Black on Gray |
@@ -406,3 +409,13 @@ The `[tui].theme` config key selects the palette: `dark | light | system | borla
 | Scrollbars | Gray track on Blue (the `▲ █ ░ ▼` glyphs already match the Borland look) |
 
 Exact attribute values for every theme are expected to need visual tuning on real terminals; the tables define intent, not pixel-perfect contracts.
+
+#### 3.12.2 Live re-theme and scrollback recolouring
+
+`/config tui.theme <name>` re-themes a running session without a restart. Re-theming has three parts:
+
+1. **Live colour reads.** Anything drawn through a `Palette.*` property (new conversation/tool text as it is appended) picks up the new theme automatically on the next draw.
+2. **Captured schemes.** Each view captures its `ColorScheme` at construction, so re-theme walks the view tree and reassigns schemes (`Palette.Scheme()` / `BtnScheme()`; `StatusBar` re-evaluates its own ctx-coloured scheme), then repaints.
+3. **Already-rendered cells.** The conversation panel, tool-output, and file-diff stores hold baked `Cell` values — `Terminal.Gui`'s `Cell` is a `record struct` with no field for a semantic role, so the role can't be stored in the cell. Instead the role is *recovered* at switch time: because every theme is a finite, known set of attributes, `Palette.BuildRecolorMap(previousTheme)` reverse-maps each cell's current `Attribute` to its role in the outgoing theme, then re-resolves that role through the incoming theme. Cells whose attribute isn't part of the outgoing theme pass through unchanged.
+
+This recolours existing scrollback in place, so a live theme switch updates the whole UI, not just new output. Two caveats follow from the reverse-map: roles that share an identical attribute *within* a theme are indistinguishable (harmless as long as such roles also share an attribute in the target theme — true for the bundled themes), and cells carrying an attribute foreign to the outgoing theme are left as-is. Switching always maps from the currently-active theme to the new one, so repeated switches compose correctly.

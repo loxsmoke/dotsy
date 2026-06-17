@@ -7,6 +7,7 @@ Dotsy is an AI coding assistant written in C# and .NET. It provides a terminal-f
 ## Specification
 
 - [Agent specification](docs/00-spec-main.md)
+- [Implementation todo](todo.md)
 
 ## Build
 

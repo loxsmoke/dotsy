@@ -10,7 +10,7 @@ public sealed class RequestBuilderTests
     private static DotsyConfig Config(int contextWindow = 200_000, int reserve = 16_384) =>
         new()
         {
-            Model    = new ModelConfig { Id = "test", MaxOutputTokensPerRequest = 1024 },
+            Model    = new ModelConfig { Anthropic = new() { Id = "test" }, MaxOutputTokensPerRequest = 1024 },
             Agent    = new AgentConfig(),
             Compaction  = new CompactionConfig { ReserveTokens = reserve },
             Retrieval   = new RetrievalConfig(),

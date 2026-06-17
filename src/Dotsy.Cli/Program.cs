@@ -63,9 +63,9 @@ runCommand.SetHandler(async (ctx) =>
     var file = ctx.ParseResult.GetValueForOption(fileOption);
     var outputFormat = ctx.ParseResult.GetValueForOption(outputFormatOption);
 
-    // Apply CLI overrides
-    if (modelOverride is not null) config.Model.Id = modelOverride;
+    // Apply CLI overrides. Provider first so the model override lands in the right section.
     if (providerOverride is not null) config.Model.Provider = providerOverride;
+    if (modelOverride is not null) config.Model.ActiveModelId = modelOverride;
     if (maxTurnsOverride.HasValue) config.Agent.MaxTurns = maxTurnsOverride.Value;
 
     // Read prompt from file if -f given
@@ -248,6 +248,11 @@ static void RunTui(
         return new AgentLoop(newProvider, TuiSessionContext.Registry!, permissions, TuiSessionContext.Config, sessionStore: TuiSessionContext.Session, trajectory: TuiSessionContext.Trajectory);
     };
 
+    // Live model-info lookup for /model. Resolves a provider from the current config each call so
+    // it reflects model/provider switches made via /config or /model at runtime.
+    TuiSessionContext.ModelInfoLookup = modelId =>
+        ProviderRegistry.Resolve(TuiSessionContext.Config).GetModelInfoAsync(modelId, CancellationToken.None);
+
     // Ctrl+Break on Windows fires ConsoleSpecialKey.ControlBreak via CancelKeyPress;
     // Terminal.Gui never sees it as a KeyDown, so we intercept it here and stop cleanly.
     Console.CancelKeyPress += (_, e) =>
@@ -258,6 +263,14 @@ static void RunTui(
             Application.Invoke(() => Application.RequestStop());
         }
     };
+
+    // Resolve and apply the configured color theme before any view is built. Unknown names
+    // fall back to dark with a warning; "system" resolves to dark/light by terminal detection.
+    var (resolvedTheme, themeFellBack) = Palette.Apply(config.Tui.Theme);
+    if (themeFellBack)
+        Console.Error.WriteLine(
+            $"warning: unknown tui.theme '{config.Tui.Theme}'; using 'dark'. " +
+            $"Valid: {string.Join(", ", Themes.Names)}");
 
     Application.Init();
     try
@@ -343,7 +356,7 @@ static async Task<int> RunHeadless(
     var trajectory = new TrajectoryRecorder(config, cwd);
 
     // Get model info for token budget
-    var modelInfo = await provider.GetModelInfoAsync(config.Model.Id, ct);
+    var modelInfo = await provider.GetModelInfoAsync(config.Model.ActiveModelId, ct);
     loopCtx.TokenBudget = new TokenBudget(
         modelInfo.ContextWindow,
         config.Compaction.ReserveTokens,
@@ -354,7 +367,7 @@ static async Task<int> RunHeadless(
     if (prompt.Trim().Equals("/compact", StringComparison.OrdinalIgnoreCase))
     {
         var compactExitCode = await RunHeadlessCompact(loop, loopCtx, cwd, outputFormat, sw, ct);
-        sessionStore.UpdateIndex("manual compaction", cwd, config.Model.Id);
+        sessionStore.UpdateIndex("manual compaction", cwd, config.Model.ActiveModelId);
         return compactExitCode;
     }
 
@@ -442,7 +455,7 @@ static async Task<int> RunHeadless(
     }
 
     var indexTitle = prompt.Length > 50 ? prompt[..50] + "…" : prompt;
-    sessionStore.UpdateIndex(indexTitle, cwd, config.Model.Id);
+    sessionStore.UpdateIndex(indexTitle, cwd, config.Model.ActiveModelId);
     TryExportTrajectory(trajectory, loopCtx, finalEnd ?? new LoopEnded(EndReason.Cancelled), msg =>
     {
         if (outputFormat == "stream-json")

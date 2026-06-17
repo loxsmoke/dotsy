@@ -18,28 +18,63 @@ public sealed class DotsyConfig
 public sealed class ModelConfig
 {
     public string Provider { get; set; } = "anthropic";
-    public string Id { get; set; } = "claude-opus-4-7";
     public int MaxOutputTokensPerRequest { get; set; } = 8192;
     public AnthropicConfig Anthropic { get; set; } = new();
     public OpenAiConfig OpenAi { get; set; } = new();
     public AzureConfig Azure { get; set; } = new();
     public OllamaConfig Ollama { get; set; } = new();
     public CompatibleConfig Compatible { get; set; } = new();
+    public GeminiConfig Gemini { get; set; } = new();
+
+    /// <summary>
+    /// The model ID of the active provider. Reads from / writes to the per-provider
+    /// section (e.g. <c>[model.anthropic] id</c>) selected by <see cref="Provider"/>.
+    /// </summary>
+    public string ActiveModelId
+    {
+        get => Provider.ToLowerInvariant() switch
+        {
+            "anthropic"    => Anthropic.Id,
+            "openai"       => OpenAi.Id,
+            "azure"        => Azure.Id,
+            "azure_openai" => Azure.Id,
+            "ollama"       => Ollama.Id,
+            "compatible"   => Compatible.Id,
+            "gemini"       => Gemini.Id,
+            _              => "",
+        };
+        set
+        {
+            switch (Provider.ToLowerInvariant())
+            {
+                case "anthropic":    Anthropic.Id = value;  break;
+                case "openai":       OpenAi.Id = value;     break;
+                case "azure":        Azure.Id = value;      break;
+                case "azure_openai": Azure.Id = value;      break;
+                case "ollama":       Ollama.Id = value;     break;
+                case "compatible":   Compatible.Id = value; break;
+                case "gemini":       Gemini.Id = value;     break;
+            }
+        }
+    }
 }
 
 public sealed class AnthropicConfig
 {
+    public string Id { get; set; } = "";
     public string ApiKey { get; set; } = "";
 }
 
 public sealed class OpenAiConfig
 {
+    public string Id { get; set; } = "";
     public string ApiKey { get; set; } = "";
     public string BaseUrl { get; set; } = "https://api.openai.com/v1";
 }
 
 public sealed class AzureConfig
 {
+    public string Id { get; set; } = "";
     public string ApiKey { get; set; } = "";
     public string Endpoint { get; set; } = "";
     public string Deployment { get; set; } = "";
@@ -48,13 +83,21 @@ public sealed class AzureConfig
 
 public sealed class OllamaConfig
 {
+    public string Id { get; set; } = "";
     public string BaseUrl { get; set; } = "http://localhost:11434";
 }
 
 public sealed class CompatibleConfig
 {
+    public string Id { get; set; } = "";
     public string ApiKey { get; set; } = "";
     public string BaseUrl { get; set; } = "";
+}
+
+public sealed class GeminiConfig
+{
+    public string Id { get; set; } = "";
+    public string ApiKey { get; set; } = "";
 }
 
 public sealed class AgentConfig

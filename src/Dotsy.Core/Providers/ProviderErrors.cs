@@ -20,16 +20,16 @@ public sealed class ProviderException(ProviderError error) : Exception(FormatMes
 
     private static string FormatMessage(ProviderError error) => error switch
     {
-        AuthError ae        => $"AuthError: {ae.Message}",
+        AuthError ae        => $"Authentication failed: {ae.Message}",
         RateLimitError rl   => rl.RetryAfter.HasValue
-                                 ? $"RateLimitError: retry after {rl.RetryAfter.Value.TotalSeconds}s"
-                                 : "RateLimitError: rate limit exceeded",
-        ServerError se      => $"ServerError: HTTP {se.StatusCode}",
-        NetworkError ne     => $"NetworkError: {ne.Inner.Message}",
-        ContextLengthError  => "ContextLengthError: context window exceeded",
+                                 ? $"Rate limit exceeded — retry after {rl.RetryAfter.Value.TotalSeconds:0}s"
+                                 : "Rate limit exceeded",
+        ServerError se      => $"Provider server error (HTTP {se.StatusCode})",
+        NetworkError ne     => $"Could not reach the provider: {ne.Inner.Message}",
+        ContextLengthError  => "context window exceeded",
         RequestError re     => string.IsNullOrEmpty(re.Detail)
-                                 ? $"RequestError: HTTP {re.StatusCode}"
-                                 : $"RequestError: HTTP {re.StatusCode}: {re.Detail}",
+                                 ? $"Request rejected (HTTP {re.StatusCode})"
+                                 : $"Request rejected (HTTP {re.StatusCode}): {re.Detail}",
         _                   => error.ToString()
     };
 }

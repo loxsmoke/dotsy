@@ -70,8 +70,57 @@ public sealed class ToolsTests
             CancellationToken.None);
 
         Assert.IsFalse(result.IsError, result.Content);
-        StringAssert.Contains(result.Content, "2\ttwo");
+        StringAssert.Contains(result.Content, "2 two");
         StringAssert.Contains(result.Content, "<truncated:");
+    }
+
+    [TestMethod]
+    public async Task ReadTool_AcceptsStartLineEndLineRange()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_tmpDir, "notes.txt"), "one\ntwo\nthree\nfour\nfive");
+
+        var result = await new ReadTool().ExecuteAsync(
+            Args("""{"path":"notes.txt","start_line":2,"end_line":3}"""),
+            Ctx(),
+            CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        StringAssert.Contains(result.Content, "2 two");
+        StringAssert.Contains(result.Content, "3 three");
+        Assert.IsFalse(result.Content.Contains("1 one"), result.Content);
+        Assert.IsFalse(result.Content.Contains("4 four"), result.Content);
+    }
+
+    [TestMethod]
+    public async Task ReadTool_AcceptsStartLineEndLineAsStrings()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_tmpDir, "notes.txt"), "one\ntwo\nthree\nfour\nfive");
+
+        var result = await new ReadTool().ExecuteAsync(
+            Args("""{"path":"notes.txt","start_line":"2","end_line":"3"}"""),
+            Ctx(),
+            CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        StringAssert.Contains(result.Content, "2 two");
+        StringAssert.Contains(result.Content, "3 three");
+        Assert.IsFalse(result.Content.Contains("1 one"), result.Content);
+        Assert.IsFalse(result.Content.Contains("4 four"), result.Content);
+    }
+
+    [TestMethod]
+    public async Task ReadTool_OffsetLimitTakePrecedenceOverStartEndLine()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_tmpDir, "notes.txt"), "one\ntwo\nthree\nfour\nfive");
+
+        var result = await new ReadTool().ExecuteAsync(
+            Args("""{"path":"notes.txt","offset":0,"limit":1,"start_line":3,"end_line":5}"""),
+            Ctx(),
+            CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        StringAssert.Contains(result.Content, "1 one");
+        Assert.IsFalse(result.Content.Contains("3 three"), result.Content);
     }
 
     [TestMethod]
@@ -86,7 +135,7 @@ public sealed class ToolsTests
 
         Assert.IsFalse(result.IsError, result.Content);
         Assert.IsFalse(result.Content.Contains('\r'), result.Content);
-        StringAssert.Contains(result.Content, "1\tone\n2\ttwo\n");
+        StringAssert.Contains(result.Content, "1 one\n2 two\n");
     }
 
     [TestMethod]
@@ -185,6 +234,41 @@ public sealed class ToolsTests
     }
 
     [TestMethod]
+    public async Task GlobTool_ReportsExactCountAndSkipsNoiseDirs()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_tmpDir, "a.cs"), "");
+        await File.WriteAllTextAsync(Path.Combine(_tmpDir, "b.cs"), "");
+        Directory.CreateDirectory(Path.Combine(_tmpDir, "obj"));
+        await File.WriteAllTextAsync(Path.Combine(_tmpDir, "obj", "Generated.cs"), "");
+        Directory.CreateDirectory(Path.Combine(_tmpDir, "bin"));
+        await File.WriteAllTextAsync(Path.Combine(_tmpDir, "bin", "X.cs"), "");
+
+        var result = await new GlobTool().ExecuteAsync(
+            Args("""{"pattern":"**/*.cs"}"""), Ctx(), CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        StringAssert.Contains(result.Content, "2 file(s) matched.");
+        Assert.IsFalse(result.Content.Contains("Generated.cs", StringComparison.Ordinal), "obj should be skipped");
+        Assert.IsFalse(result.Content.Replace('\\', '/').Contains("bin/X.cs", StringComparison.Ordinal), "bin should be skipped");
+    }
+
+    [TestMethod]
+    public async Task GlobTool_ExcludeParameterPrunesDirectory()
+    {
+        Directory.CreateDirectory(Path.Combine(_tmpDir, "src"));
+        await File.WriteAllTextAsync(Path.Combine(_tmpDir, "src", "a.cs"), "");
+        Directory.CreateDirectory(Path.Combine(_tmpDir, "extern"));
+        await File.WriteAllTextAsync(Path.Combine(_tmpDir, "extern", "lib.cs"), "");
+
+        var result = await new GlobTool().ExecuteAsync(
+            Args("""{"pattern":"**/*.cs","exclude":"extern"}"""), Ctx(), CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        StringAssert.Contains(result.Content, "1 file(s) matched.");
+        Assert.IsFalse(result.Content.Contains("lib.cs", StringComparison.Ordinal), "extern should be excluded");
+    }
+
+    [TestMethod]
     public async Task FindDefinitionsTool_ExtractsTypesAndMembers()
     {
         await File.WriteAllTextAsync(Path.Combine(_tmpDir, "Sample.cs"), """
@@ -206,6 +290,54 @@ public sealed class ToolsTests
         StringAssert.Contains(result.Content, "public sealed class Widget");
         StringAssert.Contains(result.Content, "public string Name");
         StringAssert.Contains(result.Content, "public void Run(");
+    }
+
+    [TestMethod]
+    public async Task FindDefinitionsTool_AcceptsGlobPattern()
+    {
+        var sub = Path.Combine(_tmpDir, "src", "Tui");
+        Directory.CreateDirectory(sub);
+        await File.WriteAllTextAsync(Path.Combine(sub, "Palette.cs"),
+            "namespace Demo; public static class Palette { }");
+
+        // A glob passed as `path` (the mistake from the original failing prompt) must match.
+        var result = await new FindDefinitionsTool().ExecuteAsync(
+            Args("""{"path":"**/*Palette.cs"}"""),
+            Ctx(),
+            CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        StringAssert.Contains(result.Content, "static class Palette");
+    }
+
+    [TestMethod]
+    public async Task FindDefinitionsTool_SearchesForBareFileNameInSubdirectory()
+    {
+        var sub = Path.Combine(_tmpDir, "src", "Tui");
+        Directory.CreateDirectory(sub);
+        await File.WriteAllTextAsync(Path.Combine(sub, "Palette.cs"),
+            "namespace Demo; public static class Palette { }");
+
+        // A bare file name that lives in a subdirectory (not at the cwd) must be found.
+        var result = await new FindDefinitionsTool().ExecuteAsync(
+            Args("""{"path":"Palette.cs"}"""),
+            Ctx(),
+            CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        StringAssert.Contains(result.Content, "static class Palette");
+    }
+
+    [TestMethod]
+    public async Task FindDefinitionsTool_ReturnsActionableErrorWhenNothingMatches()
+    {
+        var result = await new FindDefinitionsTool().ExecuteAsync(
+            Args("""{"path":"**/*DoesNotExist.cs"}"""),
+            Ctx(),
+            CancellationToken.None);
+
+        Assert.IsTrue(result.IsError);
+        StringAssert.Contains(result.Content, "Glob or Grep");
     }
 
     [TestMethod]
@@ -611,6 +743,49 @@ public sealed class ToolsTests
         Assert.IsFalse(editSchema.Contains("replace_all", StringComparison.Ordinal), editSchema);
         Assert.IsFalse(multiEditSchema.Contains("old_string", StringComparison.Ordinal), multiEditSchema);
         Assert.IsFalse(multiEditSchema.Contains("replace_all", StringComparison.Ordinal), multiEditSchema);
+    }
+
+    [TestMethod]
+    public async Task MultiEditTool_AcceptsStringEncodedEditsArray()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_tmpDir, "f.txt"), "hello world");
+
+        // Some models double-encode `edits` as a JSON string instead of an array.
+        var editsArray = """[{"old_string":"world","new_string":"there"}]""";
+        var inputJson = JsonSerializer.Serialize(new { path = "f.txt", edits = editsArray });
+
+        var result = await new MultiEditTool().ExecuteAsync(Args(inputJson), Ctx(), CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        Assert.AreEqual("hello there", await File.ReadAllTextAsync(Path.Combine(_tmpDir, "f.txt")));
+    }
+
+    [TestMethod]
+    public async Task MultiEditTool_AcceptsDoubleEncodedEditsString()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_tmpDir, "f.txt"), "hello world");
+
+        var arrayText = """[{"old_string":"world","new_string":"there"}]""";
+        var doubleEncoded = JsonSerializer.Serialize(arrayText); // a string that parses to the array string
+        var inputJson = JsonSerializer.Serialize(new { path = "f.txt", edits = doubleEncoded });
+
+        var result = await new MultiEditTool().ExecuteAsync(Args(inputJson), Ctx(), CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        Assert.AreEqual("hello there", await File.ReadAllTextAsync(Path.Combine(_tmpDir, "f.txt")));
+    }
+
+    [TestMethod]
+    public async Task MultiEditTool_GivesClearErrorWhenEditsIsNotAnArray()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_tmpDir, "f.txt"), "hello");
+        var inputJson = JsonSerializer.Serialize(new { path = "f.txt", edits = "not an array" });
+
+        var result = await new MultiEditTool().ExecuteAsync(Args(inputJson), Ctx(), CancellationToken.None);
+
+        Assert.IsTrue(result.IsError);
+        StringAssert.Contains(result.Content, "edits must be an array");
+        Assert.AreEqual("hello", await File.ReadAllTextAsync(Path.Combine(_tmpDir, "f.txt")), "file untouched on error");
     }
 
     [TestMethod]

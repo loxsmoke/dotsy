@@ -1,3 +1,4 @@
+using System.Net;
 using Dotsy.Core.Providers;
 using Dotsy.Providers.OpenAi;
 using Dotsy.Providers.Tests.Helpers;
@@ -10,6 +11,12 @@ public sealed class OpenAiProviderTests
     private static OpenAiProvider Provider(string sseBody)
     {
         var http = new HttpClient(new FakeSseHandler(sseBody));
+        return new OpenAiProvider("test-key", "https://api.openai.com", http);
+    }
+
+    private static OpenAiProvider Provider(string body, HttpStatusCode status)
+    {
+        var http = new HttpClient(new FakeSseHandler(body, status));
         return new OpenAiProvider("test-key", "https://api.openai.com", http);
     }
 
@@ -108,6 +115,63 @@ public sealed class OpenAiProviderTests
         var usage = events.OfType<UsageUpdate>().Single();
         Assert.AreEqual(20, usage.InputTokens);
         Assert.AreEqual(8,  usage.OutputTokens);
+    }
+
+    // ── Error reporting ───────────────────────────────────────────────────────
+
+    [TestMethod]
+    public async Task Stream_HttpError_SurfacesApiMessageAsDetail()
+    {
+        const string errBody = """
+            {"error":{"message":"invalid model ID","type":"invalid_request_error"}}
+            """;
+
+        var events = await Collect(
+            Provider(errBody, HttpStatusCode.BadRequest).StreamAsync(MinimalRequest(), CancellationToken.None));
+
+        var err = events.OfType<StreamError>().Single();
+        var pex = (ProviderException)err.Ex;
+        var req = (RequestError)pex.Error;
+        Assert.AreEqual(400, req.StatusCode);
+        Assert.AreEqual("invalid model ID", req.Detail);
+        StringAssert.Contains(pex.Message, "invalid model ID");
+    }
+
+    // ── Tool result serialization ─────────────────────────────────────────────
+
+    [TestMethod]
+    public async Task ParallelToolResults_EachGetsToolMessage()
+    {
+        // Assistant fires two tool calls in one turn; the loop returns both results in a
+        // single user message. OpenAI requires a tool message for each tool_call_id, so the
+        // serialized request must carry both — otherwise the API rejects with HTTP 400.
+        var args = System.Text.Json.JsonDocument.Parse("{}").RootElement;
+        var request = new ChatRequest("gpt-4o", "sys",
+        [
+            new UserMessage([new TextBlock("search")]),
+            new AssistantMessage(
+            [
+                new ToolUseBlock("call_A", "Grep", args),
+                new ToolUseBlock("call_B", "Read", args),
+            ]),
+            new UserMessage(
+            [
+                new ToolResultBlock("call_A", "grep result"),
+                new ToolResultBlock("call_B", "read result"),
+            ]),
+        ], [], 1024);
+
+        var handler = new FakeSseHandler("data: [DONE]\n\n");
+        var provider = new OpenAiProvider("test-key", "https://api.openai.com", new HttpClient(handler));
+
+        await Collect(provider.StreamAsync(request, CancellationToken.None));
+
+        var body = handler.LastRequestBody!;
+        StringAssert.Contains(body, "call_A");
+        StringAssert.Contains(body, "call_B");
+        // Both must appear as tool_call_id responses, not just the first.
+        var toolMsgCount = System.Text.RegularExpressions.Regex.Matches(body, "\"tool_call_id\"").Count;
+        Assert.AreEqual(2, toolMsgCount, $"Expected two tool messages, got body: {body}");
     }
 
     // ── Tool call argument accumulation ───────────────────────────────────────

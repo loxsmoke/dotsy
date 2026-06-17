@@ -45,7 +45,15 @@ internal sealed class FileListView : ListView
         void Str(string s, TGAttribute a)
         {
             Application.Driver!.SetAttribute(a);
-            foreach (var ch in s) { if (col >= width) return; Application.Driver.AddRune(new System.Text.Rune(ch)); col++; }
+            // Iterate runes, not chars: new Rune(char) throws on a surrogate half (astral emoji
+            // in a filename). EnumerateRunes pairs surrogates / substitutes U+FFFD.
+            foreach (var rune in s.EnumerateRunes())
+            {
+                if (rune.GetColumns() <= 0) continue;       // skip zero-width (desyncs columns)
+                if (col >= width) return;
+                Application.Driver.AddRune(Glyphs.Safe(rune)); // replace emoji (2-col vs 1-col mismatch)
+                col++;
+            }
         }
 
         if (item is null) { Str(new string(' ', width), normAt); return; }

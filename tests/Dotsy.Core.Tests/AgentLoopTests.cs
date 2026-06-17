@@ -13,7 +13,7 @@ public sealed class AgentLoopTests
     private static DotsyConfig MakeConfig(int maxTurns = 1000, int nudgeLimit = 3) =>
         new()
         {
-            Model    = new ModelConfig { Id = "test-model", MaxOutputTokensPerRequest = 1024 },
+            Model    = new ModelConfig { Anthropic = new() { Id = "test-model" }, MaxOutputTokensPerRequest = 1024 },
             Agent    = new AgentConfig
             {
                 MaxTurns = maxTurns, NudgeLimit = nudgeLimit, ParallelTools = true,
@@ -32,7 +32,7 @@ public sealed class AgentLoopTests
     private static DotsyConfig MakeCompactionConfig() =>
         new()
         {
-            Model = new ModelConfig { Id = "test-model", MaxOutputTokensPerRequest = 1024 },
+            Model = new ModelConfig { Anthropic = new() { Id = "test-model" }, MaxOutputTokensPerRequest = 1024 },
             Agent = new AgentConfig
             {
                 MaxTurns = 1, NudgeLimit = 1, ParallelTools = true,
@@ -108,6 +108,44 @@ public sealed class AgentLoopTests
         Assert.IsNotNull(ended);
         Assert.AreEqual(EndReason.TurnLimitReached, ended.Reason);
         Assert.AreEqual(2, events.OfType<TurnComplete>().Count(), "Exactly 2 turns ran");
+    }
+
+    // ── Failing-tool loop guard ───────────────────────────────────────────────
+
+    // A ReadOnly tool that always fails, like Read against a path that doesn't exist.
+    private sealed class AlwaysFailsTool : Dotsy.Core.Tools.Interfaces.ITool
+    {
+        public string Name => "FailRead";
+        public string Description => "always fails";
+        public System.Text.Json.JsonElement InputSchema =>
+            System.Text.Json.JsonSerializer.SerializeToElement(new { type = "object" });
+        public ToolSafety Safety => ToolSafety.ReadOnly;
+        public bool IsCompletionSignal => false;
+        public Task<ToolResult> ExecuteAsync(System.Text.Json.JsonElement input, ToolContext ctx, CancellationToken ct)
+            => Task.FromResult(ToolResult.Err("File not found"));
+    }
+
+    [TestMethod]
+    public async Task AllErrorTurns_BreakLoop_EvenWhenFailingArgsVary()
+    {
+        // nudgeLimit high (every turn has tool calls anyway) and args differ each turn so the
+        // exact-duplicate trap never fires — only the consecutive-all-errors guard can stop this.
+        var config = MakeConfig(maxTurns: 1000, nudgeLimit: 1000);
+        var turns = new IReadOnlyList<ProviderEvent>[6];
+        for (int i = 0; i < turns.Length; i++)
+            turns[i] = [new ToolCallDelta($"c{i}", "FailRead", $$"""{"path":"guess{{i}}.cs"}"""), new StreamEnd(StopReason.ToolUse)];
+
+        var provider = new FakeProvider(turns);
+        var registry = new ToolRegistry();
+        registry.Register(new AlwaysFailsTool());
+        var loop = new AgentLoop(provider, registry, YoloStore(), config);
+
+        var events = await Collect(loop.RunAsync(EmptyCtx(), Path.GetTempPath(), CancellationToken.None));
+
+        var ended = events.OfType<LoopEnded>().LastOrDefault();
+        Assert.IsNotNull(ended, "Expected the loop to stop");
+        Assert.AreEqual(EndReason.NudgeLimitReached, ended.Reason);
+        Assert.IsTrue(provider.CallCount <= 5, $"Loop should bail quickly, made {provider.CallCount} calls");
     }
 
     // ── DoneTool completion signal ────────────────────────────────────────────

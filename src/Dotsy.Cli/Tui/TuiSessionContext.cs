@@ -1,5 +1,6 @@
 using Dotsy.Core.Config;
 using Dotsy.Core.Loop;
+using Dotsy.Core.Providers;
 using Dotsy.Core.Session;
 using Dotsy.Core.Tools;
 using Dotsy.Mcp;
@@ -30,4 +31,10 @@ public static class TuiSessionContext
     /// Set by Program.cs; throws on invalid provider config.
     /// </summary>
     public static Func<AgentLoop>? LoopFactory { get; set; }
+
+    /// <summary>
+    /// Looks up <see cref="ModelInfo"/> (context window + source) for a model id using the current
+    /// provider/config. Set by Program.cs; used by /model to report the live context window.
+    /// </summary>
+    public static Func<string, Task<ModelInfo>>? ModelInfoLookup { get; set; }
 }

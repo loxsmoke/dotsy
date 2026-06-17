@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 
 using Dotsy.Core.Utils;
 using Dotsy.Core.Tools.Interfaces;
@@ -9,18 +8,36 @@ namespace Dotsy.Core.Tools;
 
 public sealed class GlobTool : ITool
 {
+    // Listed paths are capped so a huge match set doesn't flood the context; the exact total is
+    // always reported regardless, so "how many" questions get a precise number.
+    private const int MaxListed = 300;
+
+    // Build/VCS directories that are noise for almost every query, skipped unless explicitly matched.
+    private static readonly HashSet<string> NoiseDirs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".git", "bin", "obj", "node_modules", ".vs", ".idea"
+    };
+
     public string Name => "Glob";
-    public string Description => "Find files matching a glob pattern. Results sorted by last write time (newest first).";
+    public string Description =>
+        "Find files matching a glob pattern. Reports the total match count and lists results "
+        + "(newest first). Skips build/VCS dirs (.git, bin, obj, node_modules) by default; use "
+        + "exclude to skip more. Prefer this over a shell command for finding or counting files.";
     public JsonElement InputSchema => ToolSchemas.GlobSchema;
     public ToolSafety Safety => ToolSafety.ReadOnly;
     public bool IsCompletionSignal => false;
 
-    public string FormatPanelArgument(JsonElement input, string cwd) =>
-        input.GetStringPropertyOrEmpty("pattern");
+    public string FormatPanelArgument(JsonElement input, string cwd)
+    {
+        var pattern = input.GetStringPropertyOrEmpty("pattern");
+        var exclude = input.GetStringPropertyOrEmpty("exclude");
+        return string.IsNullOrEmpty(exclude) ? pattern : $"{pattern} (!{exclude})";
+    }
 
     public Task<ToolResult> ExecuteAsync(JsonElement input, ToolContext ctx, CancellationToken ct)
     {
         var pattern = input.GetProperty("pattern").GetString() ?? "";
+        var exclude = input.GetStringPropertyOrEmpty("exclude");
         var searchRoot = input.TryGetProperty("path", out var p) && p.ValueKind == JsonValueKind.String
             ? Path.IsPathRooted(p.GetString()!) ? p.GetString()! : Path.GetFullPath(Path.Combine(ctx.Cwd, p.GetString()!))
             : ctx.Cwd;
@@ -30,18 +47,27 @@ public sealed class GlobTool : ITool
 
         try
         {
-            var matcher = CreateMatcher(NormalizeGlob(pattern));
-            var files = Directory.EnumerateFiles(searchRoot, "*", SearchOption.AllDirectories)
-                .Where(f => matcher(Path.GetRelativePath(searchRoot, f)))
-                .OrderByDescending(f => new FileInfo(f).LastWriteTimeUtc)
+            var matcher = GlobMatcher.Create(pattern);
+            var excludeMatcher = string.IsNullOrEmpty(exclude) ? null : GlobMatcher.Create(exclude);
+
+            var matches = EnumerateFiles(searchRoot, exclude, excludeMatcher, ct)
+                .Where(rel => matcher(rel))
                 .ToList();
 
-            if (files.Count == 0)
-                return Task.FromResult(ToolResult.Ok("No files matched."));
+            if (matches.Count == 0)
+                return Task.FromResult(ToolResult.Ok("0 files matched."));
+
+            matches.Sort((a, b) =>
+                File.GetLastWriteTimeUtc(Path.Combine(searchRoot, b))
+                    .CompareTo(File.GetLastWriteTimeUtc(Path.Combine(searchRoot, a))));
 
             var sb = new StringBuilder();
-            foreach (var f in files)
-                sb.AppendLine(Path.GetRelativePath(searchRoot, f));
+            sb.AppendLine($"{matches.Count} file(s) matched.");
+            sb.AppendLine();
+            foreach (var rel in matches.Take(MaxListed))
+                sb.AppendLine(rel);
+            if (matches.Count > MaxListed)
+                sb.AppendLine($"<showing first {MaxListed} of {matches.Count}>");
 
             return Task.FromResult(ToolResult.Ok(sb.ToString()));
         }
@@ -51,59 +77,51 @@ public sealed class GlobTool : ITool
         }
     }
 
-    private static string NormalizeGlob(string pattern) =>
-        pattern.Replace('\\', '/').TrimStart('/');
-
-    private static Func<string, bool> CreateMatcher(string pattern)
+    // Manual recursive walk so noise/excluded directories can be pruned (Directory.EnumerateFiles
+    // with AllDirectories descends into everything). Yields paths relative to the search root.
+    private static IEnumerable<string> EnumerateFiles(
+        string root, string exclude, Func<string, bool>? excludeMatcher, CancellationToken ct)
     {
-        bool matchFileNameOnly = !pattern.Contains('/', StringComparison.Ordinal);
-        var regex = new Regex("^" + GlobToRegex(pattern) + "$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        return path =>
-        {
-            var candidate = path.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
-            if (matchFileNameOnly)
-                candidate = Path.GetFileName(candidate);
-            return regex.IsMatch(candidate);
-        };
-    }
+        var stack = new Stack<string>();
+        stack.Push(root);
 
-    private static string GlobToRegex(string pattern)
-    {
-        var sb = new StringBuilder();
-        for (int i = 0; i < pattern.Length; i++)
+        while (stack.Count > 0)
         {
-            var ch = pattern[i];
-            if (ch == '*')
+            if (ct.IsCancellationRequested) yield break;
+            var dir = stack.Pop();
+
+            string[] subdirs;
+            string[] files;
+            try
             {
-                bool doubleStar = i + 1 < pattern.Length && pattern[i + 1] == '*';
-                if (doubleStar)
-                {
-                    i++;
-                    if (i + 1 < pattern.Length && pattern[i + 1] == '/')
-                    {
-                        i++;
-                        sb.Append("(?:.*/)?");
-                    }
-                    else
-                    {
-                        sb.Append(".*");
-                    }
-                }
-                else
-                {
-                    sb.Append("[^/]*");
-                }
+                subdirs = Directory.GetDirectories(dir);
+                files = Directory.GetFiles(dir);
             }
-            else if (ch == '?')
+            catch { continue; } // unreadable directory — skip
+
+            foreach (var f in files)
             {
-                sb.Append("[^/]");
+                var rel = Path.GetRelativePath(root, f);
+                if (excludeMatcher is not null && excludeMatcher(rel)) continue;
+                yield return rel;
             }
-            else
+
+            foreach (var sd in subdirs)
             {
-                sb.Append(Regex.Escape(ch.ToString()));
+                var name = Path.GetFileName(sd);
+                if (NoiseDirs.Contains(name)) continue;
+
+                if (excludeMatcher is not null)
+                {
+                    var rel = Path.GetRelativePath(root, sd);
+                    // Prune a directory by exact name (e.g. "extern") or glob match on its path.
+                    if (name.Equals(exclude, StringComparison.OrdinalIgnoreCase)
+                        || excludeMatcher(rel))
+                        continue;
+                }
+
+                stack.Push(sd);
             }
         }
-
-        return sb.ToString();
     }
 }

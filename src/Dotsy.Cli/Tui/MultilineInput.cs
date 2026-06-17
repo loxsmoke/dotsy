@@ -39,7 +39,7 @@ internal sealed class MultilineInput : TextView
         WordWrap = true;
         AllowsTab = false;
         TabStop = TabBehavior.TabStop;
-        ColorScheme = Palette.Scheme();
+        ColorScheme = Palette.InputScheme();
         CursorVisibility = CursorVisibility.Underline;
 
         HasFocusChanged += OnHasFocusChanged;
@@ -76,11 +76,25 @@ internal sealed class MultilineInput : TextView
 
     protected override bool OnKeyDown(Key key)
     {
-        if (IsShiftSelectionKey(key))
+        // Shift+navigation extends the selection. Invoke the matching TextView "extend" command
+        // directly instead of relying on the bound key being matched — selection then works even
+        // where the shift+arrow keybinding lookup misbehaves.
+        foreach (var (selKey, command) in ShiftSelectionCommands)
         {
-            FlushPasteBuffer();
-            return base.OnKeyDown(key);
+            if (key == selKey)
+            {
+                FlushPasteBuffer();
+                InvokeCommand(command);
+                key.Handled = true;
+                return true;
+            }
         }
+
+        // Plain navigation collapses any active selection (from Shift, Ctrl+A, or the mouse).
+        // TextView only auto-clears selections it started itself via Shift, so clear it here for
+        // selections made by SelectAll or the mouse before letting the cursor move normally.
+        if (IsSelecting && IsPlainNavigationKey(key))
+            IsSelecting = false;
 
         // Enter: submit, or buffer as a literal newline while mid-paste.
         if (key.KeyCode == KeyCode.Enter)
@@ -166,8 +180,8 @@ internal sealed class MultilineInput : TextView
         if (key.KeyCode == KeyCode.Tab || key.KeyCode == KeyCode.Esc)
             return false;
 
-        // Printable chars: buffer for paste coalescing.
-        if (!key.IsCtrl && !key.IsAlt && key.AsRune.Value >= 32)
+        // Printable chars: buffer for paste coalescing. Skip wide characters (emojis, etc).
+        if (!key.IsCtrl && !key.IsAlt && key.AsRune.Value >= 32 && !IsWideCharacter(key.AsRune))
         {
             _pasteBuffer.Append(key.AsRune.ToString());
             ResetFlushTimer();
@@ -205,7 +219,9 @@ internal sealed class MultilineInput : TextView
         _flushTimer?.Dispose();
         _flushTimer = null;
         if (_pasteBuffer.Length == 0) return;
-        var text = _pasteBuffer.ToString();
+        // Replace emoji-presentation runes: the terminal renders them 2 columns while TextView's
+        // cursor model counts 1, which desyncs editing (cursor jumps lines, text inserts off-place).
+        var text = Glyphs.Sanitize(_pasteBuffer.ToString());
         _pasteBuffer.Clear();
         InsertText(text);
     }
@@ -218,19 +234,71 @@ internal sealed class MultilineInput : TextView
         || ev.Flags.HasFlag(MouseFlags.Button3DoubleClicked)
         || ev.Flags.HasFlag(MouseFlags.Button3TripleClicked);
 
-    private static bool IsShiftSelectionKey(Key key) =>
-        key == Key.CursorLeft.WithShift
-        || key == Key.CursorRight.WithShift
-        || key == Key.CursorUp.WithShift
-        || key == Key.CursorDown.WithShift
-        || key == Key.Home.WithShift
-        || key == Key.End.WithShift
-        || key == Key.PageUp.WithShift
-        || key == Key.PageDown.WithShift
-        || key == Key.CursorLeft.WithCtrl.WithShift
-        || key == Key.CursorRight.WithCtrl.WithShift
-        || key == Key.Home.WithCtrl.WithShift
-        || key == Key.End.WithCtrl.WithShift;
+    // Shift+navigation keys mapped to the TextView command that extends the selection.
+    private static readonly (Key Key, Command Command)[] ShiftSelectionCommands =
+    [
+        (Key.CursorLeft.WithShift,           Command.LeftExtend),
+        (Key.CursorRight.WithShift,          Command.RightExtend),
+        (Key.CursorUp.WithShift,             Command.UpExtend),
+        (Key.CursorDown.WithShift,           Command.DownExtend),
+        (Key.Home.WithShift,                 Command.LeftStartExtend),
+        (Key.End.WithShift,                  Command.RightEndExtend),
+        (Key.PageUp.WithShift,               Command.PageUpExtend),
+        (Key.PageDown.WithShift,             Command.PageDownExtend),
+        (Key.CursorLeft.WithCtrl.WithShift,  Command.WordLeftExtend),
+        (Key.CursorRight.WithCtrl.WithShift, Command.WordRightExtend),
+        (Key.Home.WithCtrl.WithShift,        Command.StartExtend),
+        (Key.End.WithCtrl.WithShift,         Command.EndExtend),
+    ];
+
+    // Cursor-movement keys (without Shift) that should collapse an existing selection.
+    private static readonly Key[] PlainNavigationKeys =
+    [
+        Key.CursorLeft, Key.CursorRight, Key.CursorUp, Key.CursorDown,
+        Key.Home, Key.End, Key.PageUp, Key.PageDown,
+        Key.CursorLeft.WithCtrl, Key.CursorRight.WithCtrl,
+        Key.Home.WithCtrl, Key.End.WithCtrl,
+    ];
+
+    private static bool IsPlainNavigationKey(Key key)
+    {
+        foreach (var navKey in PlainNavigationKeys)
+            if (key == navKey)
+                return true;
+        return false;
+    }
+
+    // Detect wide characters (emojis, CJK, combining marks) that render >1 cell wide.
+    // These break Terminal.Gui's layout calculations when pasted.
+    private static bool IsWideCharacter(Rune rune)
+    {
+        var cat = System.Globalization.CharUnicodeInfo.GetUnicodeCategory(rune.ToString(), 0);
+        // Mark, Surrogate, PrivateUse categories can be problematic
+        if (cat == System.Globalization.UnicodeCategory.Format ||
+            cat == System.Globalization.UnicodeCategory.NonSpacingMark ||
+            cat == System.Globalization.UnicodeCategory.EnclosingMark)
+            return true;
+
+        var c = rune.Value;
+        // Emoji ranges and common wide blocks
+        if ((c >= 0x1F300 && c <= 0x1F9FF) ||  // Emoji (modern block)
+            (c >= 0x1F000 && c <= 0x1F02F) ||  // Emoticons
+            (c >= 0x2600 && c <= 0x27BF) ||    // Misc symbols (includes ❌ U+274C)
+            (c >= 0x2300 && c <= 0x23FF) ||    // Miscellaneous Technical
+            (c >= 0x2B50 && c <= 0x2BFF) ||    // Miscellaneous Symbols and Pictographs
+            (c >= 0x4E00 && c <= 0x9FFF) ||    // CJK unified ideographs
+            (c >= 0x3040 && c <= 0x309F) ||    // Hiragana
+            (c >= 0x30A0 && c <= 0x30FF) ||    // Katakana
+            (c >= 0xAC00 && c <= 0xD7AF) ||    // Hangul
+            (c >= 0xFE00 && c <= 0xFE0F) ||    // Variation selectors (emoji modifiers)
+            (c == 0x200D) ||                   // Zero-width joiner
+            (c == 0x200B) ||                   // Zero-width space
+            (c == 0x200C) ||                   // Zero-width non-joiner
+            (c == 0xFEFF))                     // Zero-width no-break space
+            return true;
+
+        return false;
+    }
 
     protected override void Dispose(bool disposing)
     {

@@ -1,0 +1,31 @@
+{
+  "profiles": {
+    "Dotsy Help apphost": {
+      "commandName": "Executable",
+      "executablePath": "$(ProjectDir)bin\\$(Configuration)\\net10.0\\dotsy.exe",
+      "workingDirectory": "C:\\dev\\ai\\experiment"
+    },
+    "Dotsy Help via dotnet": {
+      "commandName": "Executable",
+      "executablePath": "dotnet.exe",
+      "commandLineArgs": "\"$(ProjectDir)bin\\$(Configuration)\\net10.0\\dotsy.dll\" --help",
+      "workingDirectory": "$(SolutionDir)"
+    },
+    "Dotsy Help": {
+      "commandName": "Project",
+      "commandLineArgs": "--help",
+      "workingDirectory": "$(SolutionDir)"
+    },
+    "Dotsy Headless Smoke": {
+      "commandName": "Project",
+      "commandLineArgs": "run --prompt \"Say hello from the Visual Studio debugger.\" --max-turns 1",
+      "workingDirectory": "$(SolutionDir)"
+    },
+    "Dotsy TUI": {
+      "commandName": "Project",
+      "commandLineArgs": "run",
+      "workingDirectory": "$(SolutionDir)"
+    }
+  },
+  "$schema": "https://json.schemastore.org/launchsettings.json"
+}

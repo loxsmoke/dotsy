@@ -20,25 +20,28 @@ public static class ConfigEditor
     [
         new("model",
         [
-            new("model.provider",   "string", "active provider: anthropic | openai | ollama | azure_openai | compatible"),
-            new("model.id",         "string", "model ID, e.g. claude-sonnet-4-6, gpt-4o"),
+            new("model.provider",   "string", "active provider: anthropic | openai | ollama | azure_openai | compatible | gemini"),
             new("model.max_output_tokens_per_request", "int", "max output tokens per request"),
         ]),
         new("model.anthropic",
         [
+            new("model.anthropic.id",      "string", "Anthropic model ID, e.g. claude-sonnet-4-6"),
             new("model.anthropic.api_key", "string", "Anthropic API key (overrides ANTHROPIC_API_KEY env var)"),
         ]),
         new("model.openai",
         [
+            new("model.openai.id",       "string", "OpenAI model ID, e.g. gpt-4o"),
             new("model.openai.api_key",  "string", "OpenAI API key (overrides OPENAI_API_KEY env var)"),
             new("model.openai.base_url", "string", "base URL, change for OpenAI-compatible providers"),
         ]),
         new("model.ollama",
         [
+            new("model.ollama.id",       "string", "Ollama model ID, e.g. llama3"),
             new("model.ollama.base_url", "string", "Ollama server URL"),
         ]),
         new("model.azure",
         [
+            new("model.azure.id",         "string", "Azure model ID"),
             new("model.azure.api_key",    "string", "Azure OpenAI API key"),
             new("model.azure.endpoint",   "string", "Azure endpoint URL"),
             new("model.azure.deployment", "string", "Azure deployment name"),
@@ -46,8 +49,14 @@ public static class ConfigEditor
         ]),
         new("model.compatible",
         [
+            new("model.compatible.id",       "string", "model ID for compatible provider"),
             new("model.compatible.api_key",  "string", "API key for compatible provider"),
             new("model.compatible.base_url", "string", "base URL for compatible provider"),
+        ]),
+        new("model.gemini",
+        [
+            new("model.gemini.id",      "string", "Gemini model ID, e.g. gemini-2.5-flash-lite"),
+            new("model.gemini.api_key", "string", "Google Gemini API key (overrides GEMINI_API_KEY env var)"),
         ]),
         new("agent",
         [
@@ -85,6 +94,7 @@ public static class ConfigEditor
         [
             new("tui.left-panel-width-percentage", "int", "conversation panel width percentage"),
             new("tui.verbose", "bool", "show tool calls and results inline in the conversation panel"),
+            new("tui.theme", "string", "color theme: dark | light | system | borland"),
         ]),
     ];
 
@@ -98,32 +108,41 @@ public static class ConfigEditor
         new("model",
         [
             new("provider",   cfg.Model.Provider,             string.IsNullOrEmpty(cfg.Model.Provider)),
-            new("id",         cfg.Model.Id,                   string.IsNullOrEmpty(cfg.Model.Id)),
             new("max_output_tokens_per_request", cfg.Model.MaxOutputTokensPerRequest.ToString(), false),
         ]),
         new("model.anthropic",
         [
+            new("id",        cfg.Model.Anthropic.Id,           string.IsNullOrEmpty(cfg.Model.Anthropic.Id)),
             new("api_key",   Mask(cfg.Model.Anthropic.ApiKey), string.IsNullOrEmpty(cfg.Model.Anthropic.ApiKey)),
         ]),
         new("model.openai",
         [
+            new("id",       cfg.Model.OpenAi.Id,            string.IsNullOrEmpty(cfg.Model.OpenAi.Id)),
             new("api_key",  Mask(cfg.Model.OpenAi.ApiKey),  string.IsNullOrEmpty(cfg.Model.OpenAi.ApiKey)),
             new("base_url", cfg.Model.OpenAi.BaseUrl,       false),
         ]),
         new("model.ollama",
         [
+            new("id",       cfg.Model.Ollama.Id,      string.IsNullOrEmpty(cfg.Model.Ollama.Id)),
             new("base_url", cfg.Model.Ollama.BaseUrl, false),
         ]),
         new("model.azure",
         [
+            new("id",         cfg.Model.Azure.Id,            string.IsNullOrEmpty(cfg.Model.Azure.Id)),
             new("api_key",    Mask(cfg.Model.Azure.ApiKey),  string.IsNullOrEmpty(cfg.Model.Azure.ApiKey)),
             new("endpoint",   cfg.Model.Azure.Endpoint,      string.IsNullOrEmpty(cfg.Model.Azure.Endpoint)),
             new("deployment", cfg.Model.Azure.Deployment,    string.IsNullOrEmpty(cfg.Model.Azure.Deployment)),
         ]),
         new("model.compatible",
         [
+            new("id",       cfg.Model.Compatible.Id,           string.IsNullOrEmpty(cfg.Model.Compatible.Id)),
             new("api_key",  Mask(cfg.Model.Compatible.ApiKey),  string.IsNullOrEmpty(cfg.Model.Compatible.ApiKey)),
             new("base_url", cfg.Model.Compatible.BaseUrl,       string.IsNullOrEmpty(cfg.Model.Compatible.BaseUrl)),
+        ]),
+        new("model.gemini",
+        [
+            new("id",      cfg.Model.Gemini.Id,           string.IsNullOrEmpty(cfg.Model.Gemini.Id)),
+            new("api_key", Mask(cfg.Model.Gemini.ApiKey),  string.IsNullOrEmpty(cfg.Model.Gemini.ApiKey)),
         ]),
         new("agent",
         [
@@ -161,6 +180,7 @@ public static class ConfigEditor
         [
             new("left-panel-width-percentage", cfg.Tui.LeftPanelWidthPercentage.ToString(), false),
             new("verbose", cfg.Tui.Verbose.ToString().ToLower(), false),
+            new("theme", cfg.Tui.Theme, string.IsNullOrEmpty(cfg.Tui.Theme)),
         ]),
     ];
 

@@ -36,6 +36,9 @@ public sealed class AnthropicProvider : IProvider
         _http.DefaultRequestHeaders.Add("anthropic-beta", "interleaved-thinking-2025-05-14");
     }
 
+    // DYNAMIC limits. Anthropic's /v1/models endpoint reports real context_window /
+    // max_output_tokens, so load them live. Falls back to a conservative default if the
+    // model isn't listed or the call fails.
     public async Task<ModelInfo> GetModelInfoAsync(string modelId, CancellationToken ct)
     {
         try
@@ -53,7 +56,7 @@ public sealed class AnthropicProvider : IProvider
                         {
                             var ctx = m.TryGetProperty("context_window", out var cw) ? cw.GetInt32() : 200_000;
                             var max = m.TryGetProperty("max_output_tokens", out var mo) ? mo.GetInt32() : 8_192;
-                            return new ModelInfo(modelId, ctx, max);
+                            return new ModelInfo(modelId, ctx, max, ModelInfoSource.Api);
                         }
                     }
                 }
@@ -298,7 +301,7 @@ public sealed class AnthropicProvider : IProvider
                             "rate_limit_error" => new RateLimitError(null),
                             "overloaded_error" => new ServerError(529),
                             _ when msg.Contains("context", StringComparison.OrdinalIgnoreCase) => new ContextLengthError(),
-                            _ => new RequestError(400)
+                            _ => new RequestError(400, string.IsNullOrEmpty(msg) ? (errType ?? "") : msg)
                         };
                         yield return new StreamError(new ProviderException(provErr));
                     }
@@ -362,7 +365,13 @@ public sealed class AnthropicProvider : IProvider
         }
         else
         {
-            error = new RequestError(status);
+            var (errType, errMsg, reqId) = ParseErrorBody(body);
+            var detail = !string.IsNullOrEmpty(errMsg) ? errMsg
+                       : !string.IsNullOrEmpty(errType) ? errType
+                       : body.Trim();
+            if (!string.IsNullOrEmpty(reqId))
+                detail += $" (request {reqId})";
+            error = new RequestError(status, detail);
         }
 
         yield return new StreamError(new ProviderException(error));

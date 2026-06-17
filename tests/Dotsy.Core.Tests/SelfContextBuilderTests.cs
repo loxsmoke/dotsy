@@ -33,6 +33,38 @@ public sealed class SelfContextBuilderTests
     }
 
     [TestMethod]
+    public async Task BuildMarkdown_IncludesConfigFilesSectionAndProjectKeySource()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), $"dotsy_self_{Guid.NewGuid():N}");
+        var projectConfig = Path.Combine(tmp, ".dotsy", "config.toml");
+        Directory.CreateDirectory(Path.Combine(tmp, ".dotsy"));
+        try
+        {
+            await File.WriteAllTextAsync(projectConfig, """
+                [agent]
+                max_turns = 42
+                """);
+
+            var markdown = await new SelfContextBuilder().BuildMarkdownAsync(new SelfContextRequest(
+                ConfigLoader.Load(tmp),
+                new LoopContext("session-123"),
+                tmp,
+                ProbeTimeout: TimeSpan.Zero));
+
+            StringAssert.Contains(markdown, "## Config Files");
+            StringAssert.Contains(markdown, "Global (system)");
+            StringAssert.Contains(markdown, ConfigLoader.GlobalConfigPath.Replace("|", "\\|"));
+            // The project-set key's Source column points at the project config file.
+            StringAssert.Contains(markdown, $"| agent.max_turns | int | 42 | {projectConfig.Replace("|", "\\|")} |");
+        }
+        finally
+        {
+            if (Directory.Exists(tmp))
+                Directory.Delete(tmp, recursive: true);
+        }
+    }
+
+    [TestMethod]
     public async Task BuildMarkdown_RedactsSecretValuesWithoutLeakingRawValue()
     {
         var config = new DotsyConfig();
@@ -49,6 +81,47 @@ public sealed class SelfContextBuilderTests
         StringAssert.Contains(markdown, "| model.openai.api_key | string | placeholder |");
         Assert.IsFalse(markdown.Contains("real-secret-value"));
         Assert.IsFalse(markdown.Contains("sk-example-placeholder"));
+    }
+
+    [TestMethod]
+    public async Task BuildMarkdown_ReportsConfiguredAndResolvedTheme()
+    {
+        var config = new DotsyConfig();
+        config.Tui.Theme = "system";
+
+        var markdown = await new SelfContextBuilder().BuildMarkdownAsync(new SelfContextRequest(
+            config,
+            new LoopContext("session-123"),
+            Directory.GetCurrentDirectory(),
+            ResolvedTheme: "dark",
+            ProbeTimeout: TimeSpan.Zero));
+
+        StringAssert.Contains(markdown, "| Theme (configured) | system |");
+        StringAssert.Contains(markdown, "| Theme (resolved) | dark |");
+    }
+
+    [TestMethod]
+    public async Task BuildMarkdown_IncludesContextWindowSection()
+    {
+        var ctx = new LoopContext("session-123")
+        {
+            TokenBudget = new TokenBudget(
+                ContextWindow: 1_000_000,
+                ReserveTokens: 16_384,
+                KeepRecentTokens: 20_000,
+                UsedTokens: 250_000),
+        };
+
+        var markdown = await new SelfContextBuilder().BuildMarkdownAsync(new SelfContextRequest(
+            new DotsyConfig(),
+            ctx,
+            Directory.GetCurrentDirectory(),
+            ProbeTimeout: TimeSpan.Zero));
+
+        StringAssert.Contains(markdown, "## Context Window");
+        StringAssert.Contains(markdown, "| Context window (tokens) | 1,000,000 |");
+        StringAssert.Contains(markdown, "| Used tokens | 250,000 |");
+        StringAssert.Contains(markdown, "| Usage | 25.0% |");
     }
 
     [TestMethod]

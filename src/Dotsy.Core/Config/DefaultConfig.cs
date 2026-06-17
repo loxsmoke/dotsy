@@ -7,13 +7,13 @@ public static class DefaultConfig
         Model = new ModelConfig
         {
             Provider = "anthropic",
-            Id = "claude-opus-4-7",
             MaxOutputTokensPerRequest = 8192,
-            Anthropic = new AnthropicConfig { ApiKey = "" },
-            OpenAi = new OpenAiConfig { ApiKey = "", BaseUrl = "https://api.openai.com/v1" },
-            Azure = new AzureConfig { ApiKey = "", Endpoint = "", Deployment = "", ApiVersion = "2025-01-01" },
-            Ollama = new OllamaConfig { BaseUrl = "http://localhost:11434" },
-            Compatible = new CompatibleConfig { ApiKey = "", BaseUrl = "" }
+            Anthropic = new AnthropicConfig { Id = "", ApiKey = "" },
+            OpenAi = new OpenAiConfig { Id = "", ApiKey = "", BaseUrl = "https://api.openai.com/v1" },
+            Azure = new AzureConfig { Id = "", ApiKey = "", Endpoint = "", Deployment = "", ApiVersion = "2025-01-01" },
+            Ollama = new OllamaConfig { Id = "", BaseUrl = "http://localhost:11434" },
+            Compatible = new CompatibleConfig { Id = "", ApiKey = "", BaseUrl = "" },
+            Gemini = new GeminiConfig { Id = "", ApiKey = "" }
         },
         Agent = new AgentConfig
         {

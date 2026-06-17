@@ -3,6 +3,7 @@ using Dotsy.Core.Providers;
 using Dotsy.Providers.Anthropic;
 using Dotsy.Providers.AzureOpenAi;
 using Dotsy.Providers.Ollama;
+using Dotsy.Providers.Gemini;
 using Dotsy.Providers.OpenAi;
 using Dotsy.Providers.OpenAiCompatible;
 
@@ -27,6 +28,7 @@ public static class ProviderRegistry
                 http),
             "ollama" => new OllamaProvider(model.Ollama.BaseUrl, http),
             "compatible" => new OpenAiCompatibleProvider(apiKey, model.Compatible.BaseUrl, http),
+            "gemini" => new GeminiProvider(apiKey, http: http),
             _ => throw new InvalidOperationException($"Unknown provider: {model.Provider}")
         };
     }
@@ -45,6 +47,10 @@ public static class ProviderRegistry
         "compatible" => FirstNonEmpty(
             model.Compatible.ApiKey,
             Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? ""),
+        "gemini" => FirstNonEmpty(
+            model.Gemini.ApiKey,
+            Environment.GetEnvironmentVariable("GEMINI_API_KEY") ?? "",
+            Environment.GetEnvironmentVariable("GOOGLE_API_KEY") ?? ""),
         _ => ""
     };
 
