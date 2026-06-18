@@ -7,7 +7,8 @@ namespace Dotsy.Core.Tools;
 
 public sealed class EditTool : ITool
 {
-    public string Name => "Edit";
+    public const string ToolName = "Edit";
+    public string Name => ToolName;
     public string Description => "Edit a file by replacing an exact 1-based inclusive line range. Read the file first, then provide path, start_line, end_line, and new_string.";
     public JsonElement InputSchema => ToolSchemas.EditSchema;
     public ToolSafety Safety => ToolSafety.Sequential;

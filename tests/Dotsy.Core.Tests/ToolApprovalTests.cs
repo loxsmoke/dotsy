@@ -79,12 +79,12 @@ public sealed class ToolApprovalTests
 
     private string ArgsFor(string toolName) => toolName switch
     {
-        "Edit"      => $"{{\"path\":\"{Esc(Path.Combine(_tmpDir, "f.cs"))}\",\"start_line\":1,\"end_line\":1,\"new_string\":\"y\"}}",
-        "MultiEdit" => $"{{\"path\":\"{Esc(Path.Combine(_tmpDir, "f.cs"))}\",\"edits\":[{{\"start_line\":1,\"end_line\":1,\"new_string\":\"y\"}}]}}",
-        "Shell"     => "{\"command\":\"echo hi\"}",
-        "WebFetch"  => "{\"url\":\"https://example.com\"}",
-        "WebSearch" => "{\"query\":\"hello\"}",
-        "Write"     => $"{{\"path\":\"{Esc(Path.Combine(_tmpDir, "out.txt"))}\",\"content\":\"test\"}}",
+        EditTool.ToolName      => $"{{\"path\":\"{Esc(Path.Combine(_tmpDir, "f.cs"))}\",\"start_line\":1,\"end_line\":1,\"new_string\":\"y\"}}",
+        MultiEditTool.ToolName => $"{{\"path\":\"{Esc(Path.Combine(_tmpDir, "f.cs"))}\",\"edits\":[{{\"start_line\":1,\"end_line\":1,\"new_string\":\"y\"}}]}}",
+        ShellTool.ToolName     => "{\"command\":\"echo hi\"}",
+        WebFetchTool.ToolName  => "{\"url\":\"https://example.com\"}",
+        WebSearchTool.ToolName => "{\"query\":\"hello\"}",
+        WriteTool.ToolName     => $"{{\"path\":\"{Esc(Path.Combine(_tmpDir, "out.txt"))}\",\"content\":\"test\"}}",
         _ => throw new ArgumentException(toolName)
     };
 
@@ -94,12 +94,12 @@ public sealed class ToolApprovalTests
     // ── No prompter blocks all tools that require confirmation ────────────────
 
     [DataTestMethod]
-    [DataRow("Edit")]
-    [DataRow("MultiEdit")]
-    [DataRow("Shell")]
-    [DataRow("WebFetch")]
-    [DataRow("WebSearch")]
-    [DataRow("Write")]
+    [DataRow(EditTool.ToolName)]
+    [DataRow(MultiEditTool.ToolName)]
+    [DataRow(ShellTool.ToolName)]
+    [DataRow(WebFetchTool.ToolName)]
+    [DataRow(WebSearchTool.ToolName)]
+    [DataRow(WriteTool.ToolName)]
     public async Task NoPrompter_ReturnsPermissionError(string toolName)
     {
         var loop = new AgentLoop(MakeProvider(toolName, ArgsFor(toolName)), MakeRegistry(), AskStore(), MakeConfig());
@@ -118,12 +118,12 @@ public sealed class ToolApprovalTests
     // ── Deny decision blocks execution ────────────────────────────────────────
 
     [DataTestMethod]
-    [DataRow("Edit")]
-    [DataRow("MultiEdit")]
-    [DataRow("Shell")]
-    [DataRow("WebFetch")]
-    [DataRow("WebSearch")]
-    [DataRow("Write")]
+    [DataRow(EditTool.ToolName)]
+    [DataRow(MultiEditTool.ToolName)]
+    [DataRow(ShellTool.ToolName)]
+    [DataRow(WebFetchTool.ToolName)]
+    [DataRow(WebSearchTool.ToolName)]
+    [DataRow(WriteTool.ToolName)]
     public async Task DenyDecision_ReturnsPermissionDeniedError(string toolName)
     {
         var loop = new AgentLoop(MakeProvider(toolName, ArgsFor(toolName)), MakeRegistry(), AskStore(), MakeConfig());

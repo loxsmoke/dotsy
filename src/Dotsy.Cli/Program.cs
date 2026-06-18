@@ -13,11 +13,15 @@ using Dotsy.Providers;
 using Terminal.Gui;
 using CliCommand = System.CommandLine.Command;
 
-var cwd = Environment.CurrentDirectory;
-var config = ConfigLoader.Load(cwd);
+// Version information
+const string Version = "1.0.0";
+var currentDirectory = Environment.CurrentDirectory;
+var config = ConfigLoader.Load(currentDirectory);
 
 // ── root command ──────────────────────────────────────────────────────────
-var rootCommand = new RootCommand("Dotsy — AI coding agent");
+// Note: RootCommand's invocation pipeline registers a built-in `--version`
+// option, so we don't add our own (doing so collides on the `--version` key).
+var rootCommand = new RootCommand($"Dotsy — AI coding agent v{Version}");
 
 var modelOption = new Option<string?>("--model", "Model ID override");
 var providerOption = new Option<string?>("--provider", "Provider name override");
@@ -75,7 +79,7 @@ runCommand.SetHandler(async (ctx) =>
     // Auto-cleanup old sessions
     if (config.Session.CleanupDays > 0 && config.Session.LogEnabled)
     {
-        var cleanDir = SessionStore.ResolveDir(config.Session.LogDir, cwd);
+        var cleanDir = SessionStore.ResolveDir(config.Session.LogDir, currentDirectory);
         if (Directory.Exists(cleanDir))
             SessionStore.CleanOldSessions(cleanDir, config.Session.CleanupDays);
     }
@@ -86,65 +90,24 @@ runCommand.SetHandler(async (ctx) =>
     if (isHeadless)
     {
         var exitCode = await RunHeadless(
-            config, cwd, prompt ?? "", resumeId, noHistory, yolo, outputFormat ?? "text",
+            config, currentDirectory, prompt ?? "", resumeId, noHistory, yolo, outputFormat ?? "text",
             ctx.GetCancellationToken());
         ctx.ExitCode = exitCode;
     }
     else
     {
-        RunTui(config, cwd, resumeId, noHistory, yolo, ctx.GetCancellationToken());
+        RunTui(config, currentDirectory, resumeId, noHistory, yolo, ctx.GetCancellationToken());
     }
 });
 
 rootCommand.AddCommand(runCommand);
+// No subcommand → default to `run`.
 rootCommand.SetHandler(() => runCommand.Invoke([]));
-
-// ── dotsy sessions ─────────────────────────────────────────────────────────
-var sessionsCommand = new CliCommand("sessions", "Session management");
-
-var sessionsListCommand = new CliCommand("list", "List sessions");
-var cwdFilterOption = new Option<string?>("--cwd", "Filter by working directory");
-sessionsListCommand.AddOption(cwdFilterOption);
-sessionsListCommand.SetHandler((ctx) =>
-{
-    var cwdFilter = ctx.ParseResult.GetValueForOption(cwdFilterOption);
-    var sessionDir = SessionStore.ResolveDir(config.Session.LogDir, cwd);
-    var sessions = SessionStore.GetAllSessions(sessionDir, cwdFilter);
-    foreach (var s in sessions)
-        Console.WriteLine($"{s.UpdatedAt:yyyy-MM-dd HH:mm}  {s.SessionId,-12}  {s.Title,-40}  {s.Cwd}  [{s.MessageCount} msgs]");
-    if (sessions.Count == 0) Console.WriteLine("No sessions found.");
-});
-sessionsCommand.AddCommand(sessionsListCommand);
-
-var sessionsCleanCommand = new CliCommand("clean", "Delete old sessions");
-var olderThanOption = new Option<int>("--older-than", () => 30, "Days threshold");
-sessionsCleanCommand.AddOption(olderThanOption);
-sessionsCleanCommand.SetHandler((ctx) =>
-{
-    int days = ctx.ParseResult.GetValueForOption(olderThanOption);
-    var sessionDir = SessionStore.ResolveDir(config.Session.LogDir, cwd);
-    SessionStore.CleanOldSessions(sessionDir, days);
-    Console.WriteLine($"Cleaned sessions older than {days} days.");
-});
-sessionsCommand.AddCommand(sessionsCleanCommand);
-rootCommand.AddCommand(sessionsCommand);
-
-// ── dotsy config ───────────────────────────────────────────────────────────
-var configCommand = new CliCommand("config", "Configuration management");
-
-var configShowCommand = new CliCommand("show", "Show current configuration");
-configShowCommand.SetHandler(() =>
-    Console.WriteLine(JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true })));
-configCommand.AddCommand(configShowCommand);
-
-rootCommand.AddCommand(configCommand);
-
-// ── dotsy skills list ──────────────────────────────────────────────────────
 var skillsCommand = new CliCommand("skills", "Skills management");
 var skillsListCommand = new CliCommand("list", "List discovered skills");
 skillsListCommand.SetHandler(() =>
 {
-    var discovery = new SkillDiscovery(config.Skills, cwd);
+    var discovery = new SkillDiscovery(config.Skills, currentDirectory);
     var skills = discovery.FindAll();
     foreach (var s in skills)
         Console.WriteLine($"  {s.Name,-20}  {s.FilePath}");
@@ -159,7 +122,7 @@ return await rootCommand.InvokeAsync(args);
 // ─────────────────────────────────────────────────────────────────────────────
 
 static void RunTui(
-    DotsyConfig config, string cwd, string? resumeId, bool noHistory, bool yolo,
+    DotsyConfig config, string currentDirectory, string? resumeId, bool noHistory, bool yolo,
     CancellationToken ct)
 {
     IProvider baseProvider;
@@ -180,22 +143,22 @@ static void RunTui(
         return Task.CompletedTask;
     });
 
-    var skillDiscovery = new SkillDiscovery(config.Skills, cwd);
-    var permissions    = new PermissionStore(config.Permissions, cwd) { Yolo = yolo };
+    var skillDiscovery = new SkillDiscovery(config.Skills, currentDirectory);
+    var permissions    = new PermissionStore(config.Permissions, currentDirectory) { Yolo = yolo };
     var registry       = ToolRegistry.CreateWithBuiltIns(skillDiscovery);
-    WireSubTasks(config, cwd, registry, permissions);
+    WireSubTasks(config, currentDirectory, registry, permissions);
     TuiSessionContext.StartupMessages.Clear();
     var mcpManager = ConnectMcpServers(config, registry, msg =>
         TuiSessionContext.StartupMessages.Add(msg));
 
     // Session setup
-    var sessionDir = SessionStore.ResolveDir(config.Session.LogDir, cwd);
+    var sessionDir = SessionStore.ResolveDir(config.Session.LogDir, currentDirectory);
     string sessionId;
     LoopContext loopCtx;
 
     if (resumeId is not null)
     {
-        var loaded = SessionLoader.Load(resumeId, sessionDir) ?? SessionLoader.LoadMostRecent(sessionDir, cwd);
+        var loaded = SessionLoader.Load(resumeId, sessionDir) ?? SessionLoader.LoadMostRecent(sessionDir, currentDirectory);
         if (loaded is not null)
         {
             sessionId = loaded.SessionId;
@@ -216,16 +179,16 @@ static void RunTui(
     }
 
     var sessionStore = new SessionStore(sessionId, sessionDir, noHistory || !config.Session.LogEnabled);
-    var trajectory = new TrajectoryRecorder(config, cwd);
+    var trajectory = new TrajectoryRecorder(config, currentDirectory);
 
     // End agent turn after one text-only response so the user can reply
     config.Agent.NudgeLimit = 1;
 
     var loop = new AgentLoop(provider, registry, permissions, config, sessionStore: sessionStore, trajectory: trajectory);
 
-    TuiSessionContext.Config             = config;
-    TuiSessionContext.Cwd               = cwd;
-    TuiSessionContext.ProjectConfigPath = ConfigLoader.FindProjectConfig(cwd);
+    TuiSessionContext.Config      = config;
+    TuiSessionContext.Cwd         = currentDirectory;
+    TuiSessionContext.ProjectConfigPath = ConfigLoader.FindProjectConfig(currentDirectory);
     TuiSessionContext.Loop        = loop;
     TuiSessionContext.LoopCtx     = loopCtx;
     TuiSessionContext.Permissions = permissions;
@@ -292,7 +255,7 @@ static void RunTui(
 }
 
 static async Task<int> RunHeadless(
-    DotsyConfig config, string cwd, string prompt, string? resumeId,
+    DotsyConfig config, string workingDirectory, string prompt, string? resumeId,
     bool noHistory, bool yolo, string outputFormat, CancellationToken ct)
 {
     if (string.IsNullOrWhiteSpace(prompt))
@@ -313,10 +276,10 @@ static async Task<int> RunHeadless(
         return 2;
     }
 
-    var skillDiscovery = new SkillDiscovery(config.Skills, cwd);
-    var permissions = new PermissionStore(config.Permissions, cwd) { Yolo = yolo };
+    var skillDiscovery = new SkillDiscovery(config.Skills, workingDirectory);
+    var permissions = new PermissionStore(config.Permissions, workingDirectory) { Yolo = yolo };
     var registry = ToolRegistry.CreateWithBuiltIns(skillDiscovery);
-    WireSubTasks(config, cwd, registry, permissions);
+    WireSubTasks(config, workingDirectory, registry, permissions);
     using var mcpManager = ConnectMcpServers(config, registry, msg =>
     {
         if (outputFormat == "stream-json")
@@ -326,13 +289,13 @@ static async Task<int> RunHeadless(
     });
 
     // Session setup
-    var sessionDir = SessionStore.ResolveDir(config.Session.LogDir, cwd);
+    var sessionDir = SessionStore.ResolveDir(config.Session.LogDir, workingDirectory);
     string sessionId;
     LoopContext loopCtx;
 
     if (resumeId is not null)
     {
-        var loaded = SessionLoader.Load(resumeId, sessionDir) ?? SessionLoader.LoadMostRecent(sessionDir, cwd);
+        var loaded = SessionLoader.Load(resumeId, sessionDir) ?? SessionLoader.LoadMostRecent(sessionDir, workingDirectory);
         if (loaded is not null)
         {
             sessionId = loaded.SessionId;
@@ -353,7 +316,7 @@ static async Task<int> RunHeadless(
     }
 
     var sessionStore = new SessionStore(sessionId, sessionDir, noHistory || !config.Session.LogEnabled);
-    var trajectory = new TrajectoryRecorder(config, cwd);
+    var trajectory = new TrajectoryRecorder(config, workingDirectory);
 
     // Get model info for token budget
     var modelInfo = await provider.GetModelInfoAsync(config.Model.ActiveModelId, ct);
@@ -366,8 +329,8 @@ static async Task<int> RunHeadless(
     var loop = new AgentLoop(provider, registry, permissions, config, sessionStore: sessionStore, trajectory: trajectory);
     if (prompt.Trim().Equals("/compact", StringComparison.OrdinalIgnoreCase))
     {
-        var compactExitCode = await RunHeadlessCompact(loop, loopCtx, cwd, outputFormat, sw, ct);
-        sessionStore.UpdateIndex("manual compaction", cwd, config.Model.ActiveModelId);
+        var compactExitCode = await RunHeadlessCompact(loop, loopCtx, workingDirectory, outputFormat, sw, ct);
+        sessionStore.UpdateIndex("manual compaction", workingDirectory, config.Model.ActiveModelId);
         return compactExitCode;
     }
 
@@ -375,7 +338,7 @@ static async Task<int> RunHeadless(
     sessionStore.Append(new SessionRecord
     {
         Type = "user",
-        Cwd = cwd,
+        Cwd = workingDirectory,
         Message = new { content = prompt }
     });
 
@@ -386,7 +349,7 @@ static async Task<int> RunHeadless(
 
     if (outputFormat == "stream-json")
     {
-        await foreach (var ev in loop.RunAsync(loopCtx, cwd, ct))
+        await foreach (var ev in loop.RunAsync(loopCtx, workingDirectory, ct))
         {
             if (ev is LoopEnded le)
             {
@@ -405,7 +368,7 @@ static async Task<int> RunHeadless(
     }
     else
     {
-        await foreach (var ev in loop.RunAsync(loopCtx, cwd, ct))
+        await foreach (var ev in loop.RunAsync(loopCtx, workingDirectory, ct))
         {
             switch (ev)
             {
@@ -455,7 +418,7 @@ static async Task<int> RunHeadless(
     }
 
     var indexTitle = prompt.Length > 50 ? prompt[..50] + "…" : prompt;
-    sessionStore.UpdateIndex(indexTitle, cwd, config.Model.ActiveModelId);
+    sessionStore.UpdateIndex(indexTitle, workingDirectory, config.Model.ActiveModelId);
     TryExportTrajectory(trajectory, loopCtx, finalEnd ?? new LoopEnded(EndReason.Cancelled), msg =>
     {
         if (outputFormat == "stream-json")
@@ -541,7 +504,7 @@ static void WireSubTasks(
     ToolRegistry registry,
     PermissionStore permissions)
 {
-    if (!registry.TryGetTool("Task", out var tool) || tool is not TaskTool taskTool)
+    if (!registry.TryGetTool(TaskTool.ToolName, out var tool) || tool is not TaskTool taskTool)
         return;
 
     var manager = new AgentSubTaskManager(

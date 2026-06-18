@@ -7,7 +7,8 @@ namespace Dotsy.Core.Tools;
 
 public sealed class TaskTool : ITool
 {
-    public string Name => "Task";
+    public const string ToolName = "Task";
+    public string Name => ToolName;
     public string Description => "Launch a background sub-task agent, or check a launched sub-task by task_id.";
     public JsonElement InputSchema => ToolSchemas.TaskSchema;
     public ToolSafety Safety => ToolSafety.Sequential;

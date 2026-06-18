@@ -8,13 +8,13 @@ namespace Dotsy.Core.Tools;
 
 public sealed class WebSearchTool : ITool
 {
-    private readonly HttpClient _http;
-
-    public string Name => "WebSearch";
+    public const string ToolName = "WebSearch";
+    public string Name => ToolName;
     public string Description => "Search the web and return titles, snippets, and URLs.";
     public JsonElement InputSchema => ToolSchemas.WebSearchSchema;
     public ToolSafety Safety => ToolSafety.Sequential;
     public bool IsCompletionSignal => false;
+    private readonly HttpClient _http;
 
     public string FormatRunApproval(JsonElement input, string cwd)
     {

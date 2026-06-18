@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Dotsy.Core.Config;
+using Dotsy.Core.Tools;
 
 namespace Dotsy.Core.Loop;
 
@@ -218,9 +219,9 @@ public sealed class PermissionStore
 
     private bool IsWriteOutsideCwd(string toolName, string argument)
     {
-        if (!toolName.Equals("Write", StringComparison.OrdinalIgnoreCase) &&
-            !toolName.Equals("Edit", StringComparison.OrdinalIgnoreCase) &&
-            !toolName.Equals("MultiEdit", StringComparison.OrdinalIgnoreCase))
+        if (!toolName.Equals(WriteTool.ToolName, StringComparison.OrdinalIgnoreCase) &&
+            !toolName.Equals(EditTool.ToolName, StringComparison.OrdinalIgnoreCase) &&
+            !toolName.Equals(MultiEditTool.ToolName, StringComparison.OrdinalIgnoreCase))
             return false;
 
         var path = ExtractPathArgument(argument);
@@ -234,9 +235,9 @@ public sealed class PermissionStore
 
     private bool IsWriteInProjectNotDotsy(string toolName, string argument)
     {
-        if (!toolName.Equals("Write", StringComparison.OrdinalIgnoreCase) &&
-            !toolName.Equals("Edit", StringComparison.OrdinalIgnoreCase) &&
-            !toolName.Equals("MultiEdit", StringComparison.OrdinalIgnoreCase))
+        if (!toolName.Equals(WriteTool.ToolName, StringComparison.OrdinalIgnoreCase) &&
+            !toolName.Equals(EditTool.ToolName, StringComparison.OrdinalIgnoreCase) &&
+            !toolName.Equals(MultiEditTool.ToolName, StringComparison.OrdinalIgnoreCase))
             return false;
 
         string absPath;

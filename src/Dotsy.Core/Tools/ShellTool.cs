@@ -9,11 +9,11 @@ namespace Dotsy.Core.Tools;
 
 public sealed class ShellTool : ITool
 {
-    private const int MaxOutputChars = 30_000;
-    private const int DefaultTimeoutMs = 30_000;
-
-    public string Name => "Shell";
+    public const string ToolName = "Shell";
+    public string Name => ToolName;
     public string Description => "Execute a shell command. Captures combined stdout and stderr.";
+    public const int MaxOutputChars = 30_000;
+    public const int DefaultTimeoutMs = 30_000;
     public JsonElement InputSchema => ToolSchemas.ShellSchema;
     public ToolSafety Safety => ToolSafety.Destructive;
     public bool IsCompletionSignal => false;

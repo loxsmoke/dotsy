@@ -6,7 +6,8 @@ namespace Dotsy.Core.Tools;
 
 public sealed class WriteTool : ITool
 {
-    public string Name => "Write";
+    public const string ToolName = "Write";
+    public string Name => ToolName;
     public string Description => "Write or overwrite a file. Creates parent directories if missing.";
     public JsonElement InputSchema => ToolSchemas.WriteSchema;
     public ToolSafety Safety => ToolSafety.Destructive;

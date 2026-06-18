@@ -11,12 +11,24 @@ public sealed class ToolRegistry
     private readonly ConcurrentDictionary<string, ITool> _tools = new(StringComparer.OrdinalIgnoreCase);
     private readonly Action<string>? _log;
 
-    private static readonly HashSet<string> BuiltInNames = new(StringComparer.OrdinalIgnoreCase)
+    public static readonly HashSet<string> BuiltInNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Read", "Write", "Edit", "MultiEdit", "List",
-        "Grep", "Glob", "FindDefinitions",
-        "Shell", "WebFetch", "WebSearch",
-        "Skill", "Todo", "Ask", "Done", "Task"
+        ReadTool.ToolName,
+        WriteTool.ToolName,
+        EditTool.ToolName,
+        MultiEditTool.ToolName,
+        ListTool.ToolName,
+        GrepTool.ToolName,
+        GlobTool.ToolName,
+        FindDefsTool.ToolName,
+        ShellTool.ToolName,
+        WebFetchTool.ToolName,
+        WebSearchTool.ToolName,
+        SkillTool.ToolName,
+        TodoTool.ToolName,
+        AskTool.ToolName,
+        DoneTool.ToolName,
+        TaskTool.ToolName
     };
 
     public ToolRegistry(Action<string>? log = null)
@@ -64,7 +76,7 @@ public sealed class ToolRegistry
         registry.Register(new ListTool());
         registry.Register(new GrepTool());
         registry.Register(new GlobTool());
-        registry.Register(new FindDefinitionsTool());
+        registry.Register(new FindDefsTool());
         registry.Register(new ShellTool());
         registry.Register(new WebFetchTool(httpClient));
         registry.Register(new WebSearchTool(httpClient));

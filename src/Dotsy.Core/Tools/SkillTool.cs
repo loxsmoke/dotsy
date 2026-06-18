@@ -9,13 +9,13 @@ namespace Dotsy.Core.Tools;
 
 public sealed class SkillTool : ITool
 {
-    private readonly SkillDiscovery _discovery;
-
-    public string Name => "Skill";
+    public const string ToolName = "Skill";
+    public string Name => ToolName;
     public string Description => "Look up a skill by name and return its content.";
     public JsonElement InputSchema => ToolSchemas.SkillSchema;
     public ToolSafety Safety => ToolSafety.ReadOnly;
     public bool IsCompletionSignal => false;
+    private readonly SkillDiscovery _discovery;
 
     public string FormatPanelArgument(JsonElement input)
     {
@@ -69,7 +69,7 @@ public sealed class SkillTool : ITool
 
             var decision = new TaskCompletionSource<PermissionDecision>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
-            await ctx.EmitEvent(new PermissionRequired("Skill", skillName, decision));
+            await ctx.EmitEvent(new PermissionRequired(ToolName, skillName, decision));
 
             if (await decision.Task.WaitAsync(ct) == PermissionDecision.Deny)
                 return ToolResult.Err($"Permission denied: Skill({skillName})");

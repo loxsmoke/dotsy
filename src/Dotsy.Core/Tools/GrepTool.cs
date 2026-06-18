@@ -18,7 +18,8 @@ public sealed class GrepTool : ITool
 
     private RipgrepClient? _ripgrep;
 
-    public string Name => "Grep";
+    public const string ToolName = "Grep";
+    public string Name => ToolName;
     public string Description => "Search file contents using bundled ripgrep (rg). Respects .gitignore. Supports regex patterns. Filter files with the glob parameter (e.g. \"*.cs\") and skip files/directories with the exclude parameter (e.g. \"terminal.gui\"); the path parameter is the directory to search, not a glob.";
     public JsonElement InputSchema => ToolSchemas.GrepSchema;
     public ToolSafety Safety => ToolSafety.ReadOnly;

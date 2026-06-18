@@ -1,3 +1,4 @@
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using System.Reflection;
 using Tomlyn;
 using Tomlyn.Model;
@@ -227,10 +228,12 @@ public static class ConfigLoader
             "openai"       => KeySource("OPENAI_API_KEY",       config.Model.OpenAi.ApiKey),
             "azure_openai" => KeySource("AZURE_OPENAI_API_KEY", config.Model.Azure.ApiKey),
             "gemini"       => KeySource("GEMINI_API_KEY", config.Model.Gemini.ApiKey),
-            "ollama"       => "no key required",
+            "ollama"       => NoKeyRequired,
             _              => KeySource(null, ""),
         };
     }
+    public const string NoKeyRequired = "no key required";
+    public const string KeyNotSpecified = "not specified";
 
     private static string KeySource(string? envVar, string configuredValue)
     {
@@ -238,7 +241,7 @@ public static class ConfigLoader
             return $"env {envVar}";
         if (!string.IsNullOrEmpty(configuredValue))
             return GlobalConfigPath;
-        return "not specified";
+        return KeyNotSpecified;
     }
 
     /// <summary>Resolved location of each config file plus, for every catalogued key, which layer

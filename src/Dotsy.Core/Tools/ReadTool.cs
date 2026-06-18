@@ -12,7 +12,8 @@ public sealed class ReadTool : ITool
     private const int MaxLines = 2000;
     private const int MaxBytes = 51_200;
 
-    public string Name => "Read";
+    public const string ToolName = "Read";
+    public string Name => ToolName;
     public string Description => "Read a file. Returns up to 2000 lines starting at offset. Binary files are rejected.";
     public JsonElement InputSchema => ToolSchemas.ReadSchema;
     public ToolSafety Safety => ToolSafety.ReadOnly;

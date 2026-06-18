@@ -9,13 +9,13 @@ using Dotsy.Core.Utils;
 
 namespace Dotsy.Core.Tools;
 
-public sealed class FindDefinitionsTool : ITool
+public sealed class FindDefsTool : ITool
 {
-    private const int MaxFiles = 50;
-
-    public string Name => "FindDefinitions";
+    public const string ToolName = "FindDefs";
+    public string Name => ToolName;
     public string Description => "Extract C# type and member signatures from a file, directory (recursive), or glob. Returns a compact outline.";
-    public JsonElement InputSchema => ToolSchemas.FindDefinitionsSchema;
+    public const int MaxFiles = 50;
+    public JsonElement InputSchema => ToolSchemas.FindDefsSchema;
     public ToolSafety Safety => ToolSafety.ReadOnly;
     public bool IsCompletionSignal => false;
 

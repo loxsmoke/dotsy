@@ -109,7 +109,7 @@ internal static class ToolSchemas
         }
         """);
 
-    public static readonly JsonElement FindDefinitionsSchema = Parse("""
+    public static readonly JsonElement FindDefsSchema = Parse("""
         {
           "type": "object",
           "properties": {

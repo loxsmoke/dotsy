@@ -8,6 +8,13 @@ namespace Dotsy.Core.Tools;
 
 public sealed class GlobTool : ITool
 {
+    public const string ToolName = "Glob";
+    public string Name => ToolName;
+    public string Description =>
+        "Find files matching a glob pattern. Reports the total match count and lists results "
+        + "(newest first). Skips build/VCS dirs (.git, bin, obj, node_modules) by default; use "
+        + "exclude to skip more. Prefer this over a shell command for finding or counting files.";
+
     // Listed paths are capped so a huge match set doesn't flood the context; the exact total is
     // always reported regardless, so "how many" questions get a precise number.
     private const int MaxListed = 300;
@@ -18,11 +25,6 @@ public sealed class GlobTool : ITool
         ".git", "bin", "obj", "node_modules", ".vs", ".idea"
     };
 
-    public string Name => "Glob";
-    public string Description =>
-        "Find files matching a glob pattern. Reports the total match count and lists results "
-        + "(newest first). Skips build/VCS dirs (.git, bin, obj, node_modules) by default; use "
-        + "exclude to skip more. Prefer this over a shell command for finding or counting files.";
     public JsonElement InputSchema => ToolSchemas.GlobSchema;
     public ToolSafety Safety => ToolSafety.ReadOnly;
     public bool IsCompletionSignal => false;

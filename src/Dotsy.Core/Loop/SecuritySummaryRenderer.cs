@@ -152,28 +152,21 @@ public sealed class SecuritySummaryRenderer
 
     private static string ToolGroup(Dotsy.Core.Tools.Interfaces.ITool tool)
     {
-        if (tool.IsWriteTool || tool.Name is "Write" or "Edit" or "MultiEdit")
+        if (tool.IsWriteTool || tool.Name is WriteTool.ToolName or  EditTool.ToolName or MultiEditTool.ToolName)
             return "write";
-        if (tool.Name.Equals("Shell", StringComparison.OrdinalIgnoreCase))
+        if (tool.Name.Equals(ShellTool.ToolName, StringComparison.OrdinalIgnoreCase))
             return "shell";
-        if (tool.Name.Equals("Task", StringComparison.OrdinalIgnoreCase))
+        if (tool.Name.Equals(TaskTool.ToolName, StringComparison.OrdinalIgnoreCase))
             return "task subagent";
-        if (tool.Name.Equals("Skill", StringComparison.OrdinalIgnoreCase))
+        if (tool.Name.Equals(SkillTool.ToolName, StringComparison.OrdinalIgnoreCase))
             return "skills";
-        if (!BuiltInToolNames.Contains(tool.Name))
+        if (!ToolRegistry.BuiltInNames.Contains(tool.Name))
             return "mcp";
         if (tool.Safety == ToolSafety.ReadOnly)
             return "read-only";
         return tool.Safety.ToString().ToLowerInvariant();
     }
 
-    private static readonly HashSet<string> BuiltInToolNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Read", "Write", "Edit", "MultiEdit", "List",
-        "Grep", "Glob", "FindDefinitions",
-        "Shell", "WebFetch", "WebSearch",
-        "Skill", "Todo", "Ask", "Done", "Task"
-    };
 
     private static string CountOrNone(IReadOnlyCollection<string> items) =>
         items.Count == 0 ? "none" : items.Count.ToString();
@@ -203,29 +196,57 @@ public sealed class SecuritySummaryRenderer
     {
         var trimmed = argument.Trim();
         if (!trimmed.StartsWith('{'))
+        {
             return SummarizePlainArgument(trimmed);
+        }
 
         try
         {
             using var doc = JsonDocument.Parse(trimmed);
             var root = doc.RootElement;
-            return toolName.ToLowerInvariant() switch
+
+            if (toolName.Equals(WriteTool.ToolName, StringComparison.OrdinalIgnoreCase) ||
+                toolName.Equals(EditTool.ToolName, StringComparison.OrdinalIgnoreCase) ||
+                toolName.Equals(MultiEditTool.ToolName, StringComparison.OrdinalIgnoreCase) ||
+                toolName.Equals(ReadTool.ToolName, StringComparison.OrdinalIgnoreCase))
             {
-                "shell" => SummarizeJsonProperty(root, "command", "command"),
-                "write" => SummarizeJsonProperty(root, "path", "path"),
-                "edit" => SummarizeJsonProperty(root, "path", "path"),
-                "multiedit" => SummarizeJsonProperty(root, "path", "path"),
-                "read" => SummarizeJsonProperty(root, "path", "path"),
-                "grep" => SummarizeJsonProperty(root, "query", "query"),
-                "glob" => SummarizeJsonProperty(root, "pattern", "pattern"),
-                "webfetch" => SummarizeJsonProperty(root, "url", "url"),
-                "websearch" => SummarizeJsonProperty(root, "query", "query"),
-                "skill" => SummarizeJsonProperty(root, "name", "name"),
-                "task" => root.TryGetProperty("task_id", out var taskId)
+                return SummarizeJsonProperty(root, "path", "path");
+            }
+
+            if (toolName.Equals(ShellTool.ToolName, StringComparison.OrdinalIgnoreCase))
+            {
+                return SummarizeJsonProperty(root, "command", "command");
+            }
+
+            if (toolName.Equals(GrepTool.ToolName, StringComparison.OrdinalIgnoreCase) ||
+                toolName.Equals(WebSearchTool.ToolName, StringComparison.OrdinalIgnoreCase))
+            {
+                return SummarizeJsonProperty(root, "query", "query");
+            }
+
+            if (toolName.Equals(GlobTool.ToolName, StringComparison.OrdinalIgnoreCase))
+            {
+                return SummarizeJsonProperty(root, "pattern", "pattern");
+            }
+
+            if (toolName.Equals(WebFetchTool.ToolName, StringComparison.OrdinalIgnoreCase))
+            {
+                return SummarizeJsonProperty(root, "url", "url");
+            }
+
+            if (toolName.Equals(SkillTool.ToolName, StringComparison.OrdinalIgnoreCase))
+            {
+                return SummarizeJsonProperty(root, "name", "name");
+            }
+
+            if (toolName.Equals(TaskTool.ToolName, StringComparison.OrdinalIgnoreCase))
+            {
+                return root.TryGetProperty("task_id", out var taskId)
                     ? $"task id {ClipSingleLine(taskId.GetString() ?? "", 80)}"
-                    : SummarizeJsonProperty(root, "description", "description"),
-                _ => SummarizeJsonObject(root)
-            };
+                    : SummarizeJsonProperty(root, "description", "description");
+            }
+
+            return SummarizeJsonObject(root);
         }
         catch
         {

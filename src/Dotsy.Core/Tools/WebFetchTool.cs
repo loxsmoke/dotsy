@@ -9,16 +9,15 @@ namespace Dotsy.Core.Tools;
 
 public sealed class WebFetchTool : ITool
 {
-    private const int MaxBodyBytes = 100 * 1024;
-    private const int ErrorBodyBytes = 5 * 1024 * 1024;
-
-    private readonly HttpClient _http;
-
-    public string Name => "WebFetch";
+    public const string ToolName = "WebFetch";
+    public string Name => ToolName;
     public string Description => "Fetch a URL and return its content as Markdown. Upgrades HTTP to HTTPS.";
+    public const int MaxBodyBytes = 100 * 1024;
+    public const int ErrorBodyBytes = 5 * 1024 * 1024;
     public JsonElement InputSchema => ToolSchemas.WebFetchSchema;
     public ToolSafety Safety => ToolSafety.Sequential;
     public bool IsCompletionSignal => false;
+    private readonly HttpClient _http;
 
     public string FormatRunApproval(JsonElement input, string cwd) =>
         input.GetStringPropertyOrEmpty("url");

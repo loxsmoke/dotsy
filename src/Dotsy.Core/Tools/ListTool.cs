@@ -8,7 +8,8 @@ namespace Dotsy.Core.Tools;
 
 public sealed class ListTool : ITool
 {
-    public string Name => "List";
+    public const string ToolName = "List";
+    public string Name => ToolName;
     public string Description => "List directory contents. Appends / to directories. Supports recursive listing.";
     public JsonElement InputSchema => ToolSchemas.ListSchema;
     public ToolSafety Safety => ToolSafety.ReadOnly;

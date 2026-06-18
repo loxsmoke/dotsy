@@ -8,7 +8,8 @@ namespace Dotsy.Core.Tools;
 
 public sealed class TodoTool : ITool
 {
-    public string Name => "Todo";
+    public const string ToolName = "Todo";
+    public string Name => ToolName;
     public string Description => "Create or replace the structured task list for this session.";
     public JsonElement InputSchema => ToolSchemas.TodoSchema;
     public ToolSafety Safety => ToolSafety.ReadOnly;

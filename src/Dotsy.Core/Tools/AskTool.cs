@@ -8,7 +8,8 @@ namespace Dotsy.Core.Tools;
 
 public sealed class AskTool : ITool
 {
-    public string Name => "Ask";
+    public const string ToolName = "Ask";
+    public string Name => ToolName;
     public string Description => "Pause and ask the user a question. Returns the user's answer.";
     public JsonElement InputSchema => ToolSchemas.AskSchema;
     public ToolSafety Safety => ToolSafety.ReadOnly;

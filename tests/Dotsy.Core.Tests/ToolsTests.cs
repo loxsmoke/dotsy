@@ -269,7 +269,7 @@ public sealed class ToolsTests
     }
 
     [TestMethod]
-    public async Task FindDefinitionsTool_ExtractsTypesAndMembers()
+    public async Task FindDefsTool_ExtractsTypesAndMembers()
     {
         await File.WriteAllTextAsync(Path.Combine(_tmpDir, "Sample.cs"), """
             namespace Demo;
@@ -281,7 +281,7 @@ public sealed class ToolsTests
             }
             """);
 
-        var result = await new FindDefinitionsTool().ExecuteAsync(
+        var result = await new FindDefsTool().ExecuteAsync(
             Args("""{"path":"Sample.cs"}"""),
             Ctx(),
             CancellationToken.None);
@@ -293,7 +293,7 @@ public sealed class ToolsTests
     }
 
     [TestMethod]
-    public async Task FindDefinitionsTool_AcceptsGlobPattern()
+    public async Task FindDefsTool_AcceptsGlobPattern()
     {
         var sub = Path.Combine(_tmpDir, "src", "Tui");
         Directory.CreateDirectory(sub);
@@ -301,7 +301,7 @@ public sealed class ToolsTests
             "namespace Demo; public static class Palette { }");
 
         // A glob passed as `path` (the mistake from the original failing prompt) must match.
-        var result = await new FindDefinitionsTool().ExecuteAsync(
+        var result = await new FindDefsTool().ExecuteAsync(
             Args("""{"path":"**/*Palette.cs"}"""),
             Ctx(),
             CancellationToken.None);
@@ -311,7 +311,7 @@ public sealed class ToolsTests
     }
 
     [TestMethod]
-    public async Task FindDefinitionsTool_SearchesForBareFileNameInSubdirectory()
+    public async Task FindDefsTool_SearchesForBareFileNameInSubdirectory()
     {
         var sub = Path.Combine(_tmpDir, "src", "Tui");
         Directory.CreateDirectory(sub);
@@ -319,7 +319,7 @@ public sealed class ToolsTests
             "namespace Demo; public static class Palette { }");
 
         // A bare file name that lives in a subdirectory (not at the cwd) must be found.
-        var result = await new FindDefinitionsTool().ExecuteAsync(
+        var result = await new FindDefsTool().ExecuteAsync(
             Args("""{"path":"Palette.cs"}"""),
             Ctx(),
             CancellationToken.None);
@@ -329,9 +329,9 @@ public sealed class ToolsTests
     }
 
     [TestMethod]
-    public async Task FindDefinitionsTool_ReturnsActionableErrorWhenNothingMatches()
+    public async Task FindDefsTool_ReturnsActionableErrorWhenNothingMatches()
     {
-        var result = await new FindDefinitionsTool().ExecuteAsync(
+        var result = await new FindDefsTool().ExecuteAsync(
             Args("""{"path":"**/*DoesNotExist.cs"}"""),
             Ctx(),
             CancellationToken.None);

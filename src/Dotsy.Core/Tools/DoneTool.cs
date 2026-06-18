@@ -7,10 +7,10 @@ namespace Dotsy.Core.Tools;
 
 public sealed class DoneTool : ITool
 {
-    private const int PanelSummaryLimit = 50;
-
-    public string Name => "Done";
+    public const string ToolName = "Done";
+    public string Name => ToolName;
     public string Description => "Signal task completion with a summary. Ends the agent loop cleanly.";
+    public const int PanelSummaryLimit = 50;
     public JsonElement InputSchema => ToolSchemas.DoneSchema;
     public ToolSafety Safety => ToolSafety.ReadOnly;
     public bool IsCompletionSignal => true;

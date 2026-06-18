@@ -54,8 +54,8 @@ public sealed class SessionStore
     }
 
     /// <summary>Resolves the absolute session directory from a (possibly relative) logDir and cwd.</summary>
-    public static string ResolveDir(string logDir, string cwd) =>
-        Path.IsPathRooted(logDir) ? logDir : Path.Combine(cwd, logDir);
+    public static string ResolveDir(string logDir, string currentDirectory) =>
+        Path.IsPathRooted(logDir) ? logDir : Path.Combine(currentDirectory, logDir);
 
     public void Append(SessionRecord record)
     {

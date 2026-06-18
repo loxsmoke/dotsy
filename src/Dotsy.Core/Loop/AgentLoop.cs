@@ -55,11 +55,27 @@ public sealed class AgentLoop
         int toolEventIndex = 0;
         var retriedContextLengthError = false;
 
+        // Records the reason the loop terminated into the session log, then returns the event to
+        // yield. Routing every terminal LoopEnded through here keeps the JSONL diagnosable (e.g.
+        // telling a clean Done from a nudge-limit bail-out, which both render as "idle" in the TUI).
+        LoopEnded End(EndReason reason, string? message = null)
+        {
+            _sessionStore?.Append(new SessionRecord
+            {
+                Type = "end",
+                Cwd = cwd,
+                Message = message is null
+                    ? new { reason = reason.ToString() }
+                    : new { reason = reason.ToString(), message }
+            });
+            return new LoopEnded(reason, message);
+        }
+
         while (!ct.IsCancellationRequested)
         {
             if (_config.Agent.MaxTurns > 0 && turn >= _config.Agent.MaxTurns)
             {
-                yield return new LoopEnded(EndReason.TurnLimitReached);
+                yield return End(EndReason.TurnLimitReached);
                 yield break;
             }
 
@@ -80,7 +96,7 @@ public sealed class AgentLoop
             // Check token budget
             if (budget.ContextWindow > 0 && budget.UsedTokens > budget.ContextWindow - budget.ReserveTokens)
             {
-                yield return new LoopEnded(EndReason.ContextTooSmall);
+                yield return End(EndReason.ContextTooSmall);
                 yield break;
             }
 
@@ -126,7 +142,7 @@ public sealed class AgentLoop
                     }
                 }
 
-                yield return new LoopEnded(EndReason.ContextTooSmall, ctxError.Message);
+                yield return End(EndReason.ContextTooSmall, ctxError.Message);
                 yield break;
             }
 
@@ -188,7 +204,7 @@ public sealed class AgentLoop
                         }
                         else
                         {
-                            yield return new LoopEnded(EndReason.Error,
+                            yield return End(EndReason.Error,
                                 $"Error while invoking {ProviderDisplayName(_provider.Name)} API\n{serr.Ex.Message}");
                         }
                         hadError = true;
@@ -217,7 +233,7 @@ public sealed class AgentLoop
                     }
                 }
 
-                yield return new LoopEnded(EndReason.ContextTooSmall, contextLengthError.Message);
+                yield return End(EndReason.ContextTooSmall, contextLengthError.Message);
                 yield break;
             }
 
@@ -277,7 +293,7 @@ public sealed class AgentLoop
                 nudgeCount++;
                 if (_config.Agent.NudgeLimit > 0 && nudgeCount >= _config.Agent.NudgeLimit)
                 {
-                    yield return new LoopEnded(EndReason.NudgeLimitReached);
+                    yield return End(EndReason.NudgeLimitReached);
                     yield break;
                 }
             }
@@ -315,7 +331,7 @@ public sealed class AgentLoop
                     if (consecutiveDuplicates >= 2)
                     {
                         yield return new TurnComplete(budget.UsedTokens, false);
-                        yield return new LoopEnded(EndReason.NudgeLimitReached);
+                        yield return End(EndReason.NudgeLimitReached);
                         yield break;
                     }
                 }
@@ -378,7 +394,7 @@ public sealed class AgentLoop
                     if (consecutiveErrorTurns >= 4)
                     {
                         yield return new TurnComplete(budget.UsedTokens, false);
-                        yield return new LoopEnded(EndReason.NudgeLimitReached);
+                        yield return End(EndReason.NudgeLimitReached);
                         yield break;
                     }
                 }
@@ -410,7 +426,7 @@ public sealed class AgentLoop
 
             if (signalCompletion)
             {
-                yield return new LoopEnded(EndReason.TaskComplete);
+                yield return End(EndReason.TaskComplete);
                 yield break;
             }
 
@@ -454,7 +470,7 @@ public sealed class AgentLoop
             }
         }
 
-        yield return new LoopEnded(EndReason.Cancelled);
+        yield return End(EndReason.Cancelled);
     }
 
     private bool ShouldCompact(TokenBudget budget) =>
@@ -596,9 +612,9 @@ public sealed class AgentLoop
 
     private static string? TryGetPathArgument(string toolName, string args)
     {
-        if (!string.Equals(toolName, "Write", StringComparison.Ordinal)
-            && !string.Equals(toolName, "Edit", StringComparison.Ordinal)
-            && !string.Equals(toolName, "MultiEdit", StringComparison.Ordinal))
+        if (!string.Equals(toolName, WriteTool.ToolName, StringComparison.Ordinal)
+            && !string.Equals(toolName, EditTool.ToolName, StringComparison.Ordinal)
+            && !string.Equals(toolName, MultiEditTool.ToolName, StringComparison.Ordinal))
             return null;
 
         var input = TryParseArgs(args);
