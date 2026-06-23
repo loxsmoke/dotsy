@@ -26,7 +26,7 @@ public static class ProviderRegistry
                 model.Azure.Deployment,
                 model.Azure.ApiVersion,
                 http),
-            "ollama" => new OllamaProvider(model.Ollama.BaseUrl, http),
+            "ollama" => new OllamaProvider(model.Ollama.BaseUrl, http, model.Ollama.MaxContextTokens),
             "compatible" => new OpenAiCompatibleProvider(apiKey, model.Compatible.BaseUrl, http),
             "gemini" => new GeminiProvider(apiKey, http: http),
             _ => throw new InvalidOperationException($"Unknown provider: {model.Provider}")

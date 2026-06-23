@@ -28,6 +28,9 @@ internal sealed class FakeProvider : IProvider
     public Task<ModelInfo> GetModelInfoAsync(string modelId, CancellationToken ct)
         => Task.FromResult(new ModelInfo(modelId, 200_000, 8_192));
 
+    public Task<IReadOnlyList<ModelInfo>> GetModelsAsync(CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<ModelInfo>>(new[] { new ModelInfo("fake", 200_000, 8_192) });
+
     public async IAsyncEnumerable<ProviderEvent> StreamAsync(
         ChatRequest request,
         [EnumeratorCancellation] CancellationToken ct)

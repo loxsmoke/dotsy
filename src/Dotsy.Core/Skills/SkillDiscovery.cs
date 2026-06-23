@@ -1,6 +1,6 @@
 using Dotsy.Core.Config;
 
-namespace Dotsy.Core.Loop;
+namespace Dotsy.Core.Skills;
 
 public sealed class SkillRecord
 {

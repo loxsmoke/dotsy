@@ -1,4 +1,5 @@
-﻿using System.Drawing;
+using System.Drawing;
+using System.Text;
 using Terminal.Gui;
 using TGAttribute = Terminal.Gui.Attribute;
 
@@ -30,6 +31,7 @@ internal sealed class FileListView : ListView
             bool sel = HasFocus && idx == SelectedItem;
             DrawFileRow(idx < count ? RowGetter(idx) : null, sel, viewport.Width);
         }
+        DrawVerticalScrollBar();
         return true;
     }
 
@@ -113,6 +115,47 @@ internal sealed class FileListView : ListView
         // Even "first/.../filename" doesn't fit — show as much of the filename as possible
         var minimal = ".../" + parts[^1];
         return minimal.Length <= maxWidth ? minimal : Clip(minimal, maxWidth);
+    }
+
+    private void DrawVerticalScrollBar()
+    {
+        if (Application.Driver is null || Source is null) return;
+
+        int height = Viewport.Height;
+        int width = Viewport.Width;
+        int count = Source.Count;
+        if (height <= 0 || width <= 0 || count <= height) return;
+
+        Application.Driver.SetAttribute(new TGAttribute(ColorName16.Gray, ColorName16.Black));
+        if (height == 1)
+        {
+            Move(width - 1, 0);
+            Application.Driver.AddRune(new Rune('░'));
+            return;
+        }
+
+        Move(width - 1, 0);
+        Application.Driver.AddRune(new Rune('▲'));
+        if (height == 2)
+        {
+            Move(width - 1, 1);
+            Application.Driver.AddRune(new Rune('▼'));
+            return;
+        }
+
+        int trackHeight = height - 2;
+        int thumbHeight = Math.Max(1, trackHeight * height / Math.Max(1, count));
+        int maxTop = Math.Max(1, count - height);
+        int thumbTop = 1 + Math.Min(trackHeight - thumbHeight, TopItem * (trackHeight - thumbHeight) / maxTop);
+
+        for (int y = 1; y < height - 1; y++)
+        {
+            Move(width - 1, y);
+            var ch = y >= thumbTop && y < thumbTop + thumbHeight ? '█' : '░';
+            Application.Driver.AddRune(new Rune(ch));
+        }
+        Move(width - 1, height - 1);
+        Application.Driver.AddRune(new Rune('▼'));
     }
 
     // Clip string to maxWidth, adding trailing "..." to make truncation visible.

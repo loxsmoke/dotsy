@@ -6,6 +6,8 @@ using Dotsy.Core.Config;
 using Dotsy.Core.Loop;
 using Dotsy.Core.Tools;
 using Dotsy.Core.Tools.Interfaces;
+using Dotsy.Core.Loop.Data;
+using Dotsy.Core.Skills;
 
 namespace Dotsy.Core.Tests;
 
@@ -370,21 +372,83 @@ public sealed class ToolsTests
         Assert.AreEqual("12345678901234567890123456789012345678901234567890...", longSummary);
     }
 
+    private const string SampleTodo =
+        "# Todo\n\n## 1. Improvements\n- [x] done one\n- [ ] todo one\n\n## 2. Bug fixes\n- [ ] todo two\n";
+
     [TestMethod]
-    public async Task TodoTool_ReplacesLoopTodoItems()
+    public async Task TodoTool_ListTasks_FiltersByStatus()
     {
-        var loopContext = new LoopContext();
-        loopContext.TodoItems.Add("old");
+        await File.WriteAllTextAsync(Path.Combine(_tmpDir, TodoTool.FileName), SampleTodo);
 
         var result = await new TodoTool().ExecuteAsync(
-            Args("""{"items":["first","","second"]}"""),
-            Ctx(loopContext),
+            Args("""{"action":"list_tasks","status":"todo"}"""),
+            Ctx(),
             CancellationToken.None);
 
         Assert.IsFalse(result.IsError, result.Content);
-        CollectionAssert.AreEqual(new[] { "first", "second" }, loopContext.TodoItems);
-        StringAssert.Contains(result.Content, "1. first");
-        StringAssert.Contains(result.Content, "2. second");
+        StringAssert.Contains(result.Content, "todo one");
+        StringAssert.Contains(result.Content, "todo two");
+        Assert.IsFalse(result.Content.Contains("done one"), result.Content);
+    }
+
+    [TestMethod]
+    public async Task TodoTool_ListTasks_FiltersBySection()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_tmpDir, TodoTool.FileName), SampleTodo);
+
+        var result = await new TodoTool().ExecuteAsync(
+            Args("""{"action":"list_tasks","status":"all","section":"2"}"""),
+            Ctx(),
+            CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        StringAssert.Contains(result.Content, "todo two");
+        Assert.IsFalse(result.Content.Contains("todo one"), result.Content);
+    }
+
+    [TestMethod]
+    public async Task TodoTool_SetStatus_FlipsCheckboxInFile()
+    {
+        var path = Path.Combine(_tmpDir, TodoTool.FileName);
+        await File.WriteAllTextAsync(path, SampleTodo);
+
+        // Task index 2 is "[ ] todo one".
+        var result = await new TodoTool().ExecuteAsync(
+            Args("""{"action":"set_status","task":2,"done":true}"""),
+            Ctx(),
+            CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        var updated = await File.ReadAllTextAsync(path);
+        StringAssert.Contains(updated, "- [x] todo one");
+        StringAssert.Contains(updated, "- [ ] todo two"); // others untouched
+    }
+
+    [TestMethod]
+    public async Task TodoTool_ListSections_ReportsCounts()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_tmpDir, TodoTool.FileName), SampleTodo);
+
+        var result = await new TodoTool().ExecuteAsync(
+            Args("""{"action":"list_sections"}"""),
+            Ctx(),
+            CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        StringAssert.Contains(result.Content, "1. Improvements (1 todo, 1 done)");
+        StringAssert.Contains(result.Content, "2. Bug fixes (1 todo, 0 done)");
+    }
+
+    [TestMethod]
+    public async Task TodoTool_MissingFile_ReturnsError()
+    {
+        var result = await new TodoTool().ExecuteAsync(
+            Args("""{"action":"list_tasks"}"""),
+            Ctx(),
+            CancellationToken.None);
+
+        Assert.IsTrue(result.IsError);
+        StringAssert.Contains(result.Content, "not found");
     }
 
     [TestMethod]
@@ -701,15 +765,15 @@ public sealed class ToolsTests
     [TestMethod]
     public void TodoTool_FormatsPanelSummary()
     {
-        var single = new TodoTool().FormatPanelArgument(
-            Args("""{"items":["fix wrapping"]}"""),
+        var sections = new TodoTool().FormatPanelArgument(
+            Args("""{"action":"list_sections"}"""),
             _tmpDir);
-        var many = new TodoTool().FormatPanelArgument(
-            Args("""{"items":["one","two","three","four"]}"""),
+        var setStatus = new TodoTool().FormatPanelArgument(
+            Args("""{"action":"set_status","task":2,"done":true}"""),
             _tmpDir);
 
-        Assert.AreEqual("fix wrapping", single);
-        Assert.AreEqual("Todo  4 tasks. one, two, three...", many);
+        Assert.AreEqual("List sections", sections);
+        Assert.AreEqual("Set task 2 done", setStatus);
     }
 
     [TestMethod]

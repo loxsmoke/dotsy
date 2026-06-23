@@ -43,7 +43,7 @@ public static class ConfigLoader
             return;
 
         var text = File.ReadAllText(path);
-        if (!Toml.TryToModel(text, out TomlTable? table, out _, path))
+        if (!TomlSerializer.TryDeserialize(text, out TomlTable? table) || table is null)
             return;
 
         if (table.TryGetValue("model", out var modelObj) && modelObj is TomlTable model)
@@ -328,7 +328,7 @@ public static class ConfigLoader
         try
         {
             var text = File.ReadAllText(path);
-            if (Toml.TryToModel(text, out TomlTable? table, out _, path))
+            if (TomlSerializer.TryDeserialize(text, out TomlTable? table) && table is not null)
                 FlattenTable(table, "", keys);
         }
         catch { }
@@ -377,11 +377,14 @@ public static class ConfigLoader
             ? "left-panel-width-percentage"
             : ToSnakeCase(name);
 
-    // Misspelled key shipped in earlier builds; still accepted on read so saved configs keep working.
-    private static string? LegacyConfigKey(string name) =>
-        name == nameof(TuiConfig.LeftPanelWidthPercentage)
-            ? "left-poanel-width-percentage"
-            : null;
+    // Keys shipped under a different spelling in earlier builds; still accepted on read so saved
+    // configs keep working.
+    private static string? LegacyConfigKey(string name) => name switch
+    {
+        nameof(TuiConfig.LeftPanelWidthPercentage) => "left-poanel-width-percentage",
+        nameof(CompactionConfig.ToolPairSummarize) => "tool_pair_summarise", // British spelling
+        _ => null
+    };
 
     private static List<McpServerConfig> ParseMcpServers(object serversObj)
     {

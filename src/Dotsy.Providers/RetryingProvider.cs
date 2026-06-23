@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using Dotsy.Core.Loop;
+using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Providers;
 
 namespace Dotsy.Providers;
@@ -29,6 +30,9 @@ public sealed class RetryingProvider : IProvider
 
     public Task<ModelInfo> GetModelInfoAsync(string modelId, CancellationToken ct) =>
         _inner.GetModelInfoAsync(modelId, ct);
+
+    public Task<IReadOnlyList<ModelInfo>> GetModelsAsync(CancellationToken ct) =>
+        _inner.GetModelsAsync(ct);
 
     public async IAsyncEnumerable<ProviderEvent> StreamAsync(
         ChatRequest request,

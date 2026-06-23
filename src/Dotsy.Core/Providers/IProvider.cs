@@ -17,7 +17,7 @@ public interface IProvider
     /// <param name="ct">The cancellation token to cancel the operation.</param>
     /// <returns>A task that represents the asynchronous operation. The task result contains the model information.</returns>
     Task<ModelInfo> GetModelInfoAsync(string modelId, CancellationToken ct);
-
+    Task<IReadOnlyList<ModelInfo>> GetModelsAsync(CancellationToken ct);
     /// <summary>
     /// Streams provider events in response to a chat request.
     /// </summary>

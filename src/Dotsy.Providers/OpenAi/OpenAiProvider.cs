@@ -57,6 +57,34 @@ public class OpenAiProvider : IProvider
         return new ModelInfo(modelId, 128_000, 4_096);
     }
 
+    // The OpenAI-shaped /v1/models endpoint lists available model ids but reports no token
+    // limits, so fill those from ModelCatalog when known and fall back to a generic default.
+    public virtual async Task<IReadOnlyList<ModelInfo>> GetModelsAsync(CancellationToken ct)
+    {
+        try
+        {
+            var resp = await Http.GetAsync("/v1/models", ct);
+            if (resp.IsSuccessStatusCode)
+            {
+                var json = await resp.Content.ReadAsStringAsync(ct);
+                var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("data", out var data))
+                {
+                    return data.EnumerateArray()
+                        .Select(m => m.GetStringPropertyOrEmpty("id"))
+                        .Where(id => !string.IsNullOrEmpty(id))
+                        .Select(id => ModelCatalog.TryLookup(id, out var known)
+                            ? known
+                            : new ModelInfo(id, 128_000, 4_096))
+                        .ToList();
+                }
+            }
+        }
+        catch { }
+
+        return [];
+    }
+
     public async IAsyncEnumerable<ProviderEvent> StreamAsync(
         ChatRequest request,
         [EnumeratorCancellation] CancellationToken ct)

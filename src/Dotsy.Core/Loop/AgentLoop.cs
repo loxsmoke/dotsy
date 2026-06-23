@@ -1,9 +1,13 @@
 using System.Runtime.CompilerServices;
 using System.Text;
 using Dotsy.Core.Config;
+using Dotsy.Core.Git;
+using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Providers;
 using Dotsy.Core.Retrieval;
 using Dotsy.Core.Session;
+using Dotsy.Core.Session.Data;
+using Dotsy.Core.Skills;
 using Dotsy.Core.Tools;
 
 namespace Dotsy.Core.Loop;
@@ -52,6 +56,8 @@ public sealed class AgentLoop
         HashSet<string>? prevToolSigs = null;
         int consecutiveDuplicates = 0;
         int consecutiveErrorTurns = 0;
+        // Per-turn tool-call signatures over a sliding window, for multi-turn cycle detection.
+        var recentTurnSigs = new Queue<List<string>>();
         int toolEventIndex = 0;
         var retriedContextLengthError = false;
 
@@ -62,7 +68,7 @@ public sealed class AgentLoop
         {
             _sessionStore?.Append(new SessionRecord
             {
-                Type = "end",
+                Type = SessionRecordType.End,
                 Cwd = cwd,
                 Message = message is null
                     ? new { reason = reason.ToString() }
@@ -197,18 +203,25 @@ public sealed class AgentLoop
                     case StreamEnd se:
                         break;
 
-                    case StreamError serr:
-                        if (IsContextLengthError(serr.Ex))
-                        {
-                            contextLengthError = serr.Ex;
-                        }
-                        else
-                        {
-                            yield return End(EndReason.Error,
-                                $"Error while invoking {ProviderDisplayName(_provider.Name)} API\n{serr.Ex.Message}");
-                        }
-                        hadError = true;
-                        break;
+                     case StreamError serr:
+                         if (IsContextLengthError(serr.Ex))
+                         {
+                             contextLengthError = serr.Ex;
+                         }
+                         else if (serr.Ex is ProviderException { Error: ModelUnknownError mue })
+                         {
+                             var models = await _provider.GetModelsAsync(ct);
+                             var modelList = string.Join("\n", models.Select(m => $"- {m.Id}"));
+                             yield return End(EndReason.Error, 
+                                 $"Model unknown: {mue.Message}\n\nAvailable models for {ProviderDisplayName(_provider.Name)}:\n{modelList}");
+                         }
+                         else
+                         {
+                             yield return End(EndReason.Error,
+                                 $"Error while invoking {ProviderDisplayName(_provider.Name)} API\n{serr.Ex.Message}");
+                         }
+                         hadError = true;
+                         break;
                 }
 
                 if (hadError) break;
@@ -274,7 +287,7 @@ public sealed class AgentLoop
                 }
                 _sessionStore.Append(new SessionRecord
                 {
-                    Type = "assistant",
+                    Type = SessionRecordType.Assistant,
                     Cwd = cwd,
                     Message = messageObj,
                     Usage = lastInputTokens > 0 || lastOutputTokens > 0
@@ -306,24 +319,41 @@ public sealed class AgentLoop
             if (toolCalls.Count > 0)
             {
                 // Detect exact duplicate tool calls from the previous turn (loop trap)
-                var currentSigs = new HashSet<string>(
-                    toolCalls.Select(tc => $"{tc.Name}:{tc.Args.Trim()}"),
-                    StringComparer.Ordinal);
+                var currentSigList = toolCalls.Select(tc => $"{tc.Name}:{tc.Args.Trim()}").ToList();
+                var currentSigs = new HashSet<string>(currentSigList, StringComparer.Ordinal);
                 bool isDuplicate = prevToolSigs is not null
                     && currentSigs.Count > 0
                     && currentSigs.SetEquals(prevToolSigs);
 
-                if (isDuplicate)
+                // Rolling-window guard: catch multi-turn cycles (A,B,C,A,B,C…) the adjacent check
+                // misses. Trips when every distinct call this turn has already recurred enough times
+                // in the recent window that, counting this turn, it reaches RepeatThreshold.
+                bool isRepeating = false;
+                if (!isDuplicate && _config.Agent.RepeatThreshold > 1 && currentSigs.Count > 0)
+                {
+                    var windowCounts = recentTurnSigs
+                        .SelectMany(s => s)
+                        .GroupBy(s => s, StringComparer.Ordinal)
+                        .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+                    isRepeating = currentSigs.All(sig =>
+                        windowCounts.TryGetValue(sig, out var c) && c + 1 >= _config.Agent.RepeatThreshold);
+                }
+
+                if (isDuplicate || isRepeating)
                 {
                     consecutiveDuplicates++;
-                    const string hint = "You are repeating the exact same tool calls as the previous turn. "
-                        + "Do not use any tools. Synthesize the information already returned and respond to the user in plain text.";
+                    string hint = isDuplicate
+                        ? "You are repeating the exact same tool calls as the previous turn. "
+                          + "Do not use any tools. Synthesize the information already returned and respond to the user in plain text."
+                        : "You keep repeating the same reads and searches without making progress. "
+                          + "Stop gathering information. Either make a concrete change with Edit or Write, "
+                          + "or respond in plain text with what you found or why you are blocked.";
                     var blocks = new List<ContentBlock>();
                     for (int i = 0; i < toolCalls.Count; i++)
                     {
                         var (id, name, _) = toolCalls[i];
                         var idx = pendingToolIndex.TryGetValue(id, out var ti) ? ti : i;
-                        yield return new ToolFinished(idx, name, ToolResult.Ok("[skipped: duplicate]"));
+                        yield return new ToolFinished(idx, name, ToolResult.Ok("[skipped: loop guard]"));
                         blocks.Add(new ToolResultBlock(id, hint, false));
                     }
                     ctx.Messages.Add(new UserMessage(blocks));
@@ -382,13 +412,18 @@ public sealed class AgentLoop
                         }
                         _sessionStore.Append(new SessionRecord
                         {
-                            Type = "tool_result",
+                            Type = SessionRecordType.ToolResult,
                             Cwd = cwd,
                             Message = new { content = parts }
                         });
                     }
 
                     prevToolSigs = currentSigs;
+
+                    // Record this executed turn in the sliding window for cycle detection.
+                    recentTurnSigs.Enqueue(currentSigList);
+                    while (recentTurnSigs.Count > Math.Max(1, _config.Agent.RepeatWindowTurns))
+                        recentTurnSigs.Dequeue();
 
                     // Bail out of a failing-tool loop after a hint had a turn to land.
                     if (consecutiveErrorTurns >= 4)
@@ -421,7 +456,7 @@ public sealed class AgentLoop
             turn++;
             ctx.TurnCount = turn;
 
-            if (_config.Compaction.ToolPairSummarise)
+            if (_config.Compaction.ToolPairSummarize)
                 _ = ToolPairSummarizer.SummarizeOldPairsInBackground(ctx);
 
             if (signalCompletion)
@@ -755,7 +790,7 @@ public sealed class AgentLoop
 
         _sessionStore?.Append(new SessionRecord
         {
-            Type = "summary",
+            Type = SessionRecordType.Summary,
             Cwd = cwd,
             Message = newSummary
         });

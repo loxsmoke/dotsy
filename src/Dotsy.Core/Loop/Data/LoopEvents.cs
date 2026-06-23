@@ -1,6 +1,6 @@
 using Dotsy.Core.Tools;
 
-namespace Dotsy.Core.Loop;
+namespace Dotsy.Core.Loop.Data;
 
 public abstract record LoopEvent;
 
@@ -32,15 +32,3 @@ public record PermissionRequired(
 public record RetryScheduled(int AttemptNumber, int MaxAttempts, int DelaySeconds) : LoopEvent;
 
 public record ReflectionOccurred(string Error) : LoopEvent;
-
-public enum EndReason
-{
-    TaskComplete,
-    TurnLimitReached,
-    NudgeLimitReached,
-    ContextTooSmall,
-    Cancelled,
-    Error
-}
-
-public enum PermissionDecision { AllowOnce, AllowForProject, AlwaysAllow, Deny }

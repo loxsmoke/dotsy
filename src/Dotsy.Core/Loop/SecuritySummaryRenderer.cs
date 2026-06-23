@@ -1,17 +1,9 @@
 using System.Text;
 using System.Text.Json;
-using Dotsy.Core.Config;
+using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Tools;
 
 namespace Dotsy.Core.Loop;
-
-public sealed record SecuritySummaryRequest(
-    DotsyConfig Config,
-    PermissionStore Permissions,
-    string Cwd,
-    ToolRegistry? Registry = null,
-    LoopContext? LoopContext = null,
-    bool Headless = false);
 
 public sealed class SecuritySummaryRenderer
 {

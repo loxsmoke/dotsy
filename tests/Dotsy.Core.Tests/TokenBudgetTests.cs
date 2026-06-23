@@ -1,4 +1,5 @@
 using Dotsy.Core.Loop;
+using Dotsy.Core.Loop.Data;
 
 namespace Dotsy.Core.Tests;
 

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Dotsy.Core.Loop;
+using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Providers;
 
 namespace Dotsy.Core.Tests;

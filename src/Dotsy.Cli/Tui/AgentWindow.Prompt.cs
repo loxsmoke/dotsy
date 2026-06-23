@@ -1,6 +1,7 @@
-using Dotsy.Core.Loop;
+using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Providers;
 using Dotsy.Core.Session;
+using Dotsy.Core.Session.Data;
 using Dotsy.Core.Tools;
 using Terminal.Gui;
 
@@ -39,7 +40,7 @@ public partial class AgentWindow
         loopCtx.Messages.Add(new UserMessage([new TextBlock(promptText)]));
         TuiSessionContext.Session?.Append(new SessionRecord
         {
-            Type = "user",
+            Type = SessionRecordType.User,
             Cwd = cwd,
             Message = new { content = promptText }
         });

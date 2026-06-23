@@ -77,7 +77,7 @@ public partial class AgentWindow
     {
         if (e.Row >= toolCallRows.Count) return;
         var row = toolCallRows[e.Row];
-        var selected = toolCalllList.HasFocus && toolCalllList.SelectedItem == e.Row;
+        var selected = toolCallList.HasFocus && toolCallList.SelectedItem == e.Row;
         e.RowAttribute = selected
             ? new TGAttribute(ColorName16.White, ColorName16.DarkGray)
             : row.Status switch
@@ -118,9 +118,9 @@ public partial class AgentWindow
     // conversation panel tails its newest output. Does not change the selection.
     private void ScrollToolListToEnd()
     {
-        int vh = Math.Max(1, toolCalllList.Viewport.Height);
-        toolCalllList.TopItem = Math.Max(0, toolCallRows.Count - vh);
-        toolCalllList.SetNeedsDraw();
+        int vh = Math.Max(1, toolCallList.Viewport.Height);
+        toolCallList.TopItem = Math.Max(0, toolCallRows.Count - vh);
+        toolCallList.SetNeedsDraw();
     }
 
     public void UpdateTool(int idx, string status, int elapsedSec)
@@ -254,7 +254,7 @@ public partial class AgentWindow
         inspectFrame.Visible = false;
         promptLabel.Visible = true;
         promptInput.Visible = true;
-        toolCalllList.SetFocus();
+        toolCallList.SetFocus();
     }
 
     // Builds a colored inspect view for Edit / MultiEdit showing output then input parameters.

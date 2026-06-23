@@ -1,8 +1,10 @@
 using System.Text.Json;
 using Dotsy.Core.Config;
 using Dotsy.Core.Loop;
+using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Providers;
 using Dotsy.Core.Session;
+using Dotsy.Core.Session.Data;
 using Dotsy.Core.Tests.Helpers;
 using Dotsy.Core.Tools;
 
@@ -66,7 +68,7 @@ public sealed class TrajectoryExportTests
             disabled: noHistory || !config.Session.LogEnabled);
         sessionStore.Append(new SessionRecord
         {
-            Type = "user",
+            Type = SessionRecordType.User,
             Cwd = tmp,
             Message = new { content = "hello integration" }
         });

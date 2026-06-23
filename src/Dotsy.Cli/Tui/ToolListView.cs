@@ -1,4 +1,4 @@
-﻿using System.Drawing;
+using System.Drawing;
 using System.Text;
 using Terminal.Gui;
 using TGAttribute = Terminal.Gui.Attribute;
@@ -10,7 +10,7 @@ namespace Dotsy.Cli.Tui;
 // Ctrl+Left/Right scroll by 10 characters. Selection change resets the offset.
 internal sealed class ToolListView : ListView
 {
-    private int _hScrollOffset;
+    private int horizontalScrollOffset;
 
     // Lets the bracket renderer read each row's group so consecutive tool calls from the same
     // prompt can be drawn with a half-frame gutter. Set by AgentWindow.
@@ -20,7 +20,7 @@ internal sealed class ToolListView : ListView
     {
         KeyBindings.Add(Key.Home.WithCtrl, Command.Start);
         KeyBindings.Add(Key.End.WithCtrl, Command.End);
-        SelectedItemChanged += (_, _) => _hScrollOffset = 0;
+        SelectedItemChanged += (_, _) => horizontalScrollOffset = 0;
     }
 
     protected override bool OnKeyDown(Key key)
@@ -28,13 +28,13 @@ internal sealed class ToolListView : ListView
         if (key.IsAlt) return false;
         if (key == Key.CursorLeft.WithCtrl)
         {
-            _hScrollOffset = Math.Max(0, _hScrollOffset - 10);
+            horizontalScrollOffset = Math.Max(0, horizontalScrollOffset - 10);
             SetNeedsDraw();
             return true;
         }
         if (key == Key.CursorRight.WithCtrl)
         {
-            _hScrollOffset += 10;
+            horizontalScrollOffset += 10;
             SetNeedsDraw();
             return true;
         }
@@ -42,22 +42,22 @@ internal sealed class ToolListView : ListView
         switch (key.KeyCode)
         {
             case KeyCode.Home:
-                _hScrollOffset = 0;
+                horizontalScrollOffset = 0;
                 SetNeedsDraw();
                 return true;
             case KeyCode.End:
                 if (Source is not null && SelectedItem >= 0 && SelectedItem < Source.Count)
                 {
                     var text = Source.ToList()[SelectedItem]?.ToString() ?? "";
-                    _hScrollOffset = Math.Max(0, text.Length - Viewport.Width);
+                    horizontalScrollOffset = Math.Max(0, text.Length - Viewport.Width);
                 }
                 SetNeedsDraw();
                 return true;
             case KeyCode.CursorLeft:
-                if (_hScrollOffset > 0) { _hScrollOffset--; SetNeedsDraw(); }
+                if (horizontalScrollOffset > 0) { horizontalScrollOffset--; SetNeedsDraw(); }
                 return true;
             case KeyCode.CursorRight:
-                _hScrollOffset++;
+                horizontalScrollOffset++;
                 SetNeedsDraw();
                 return true;
         }
@@ -67,7 +67,7 @@ internal sealed class ToolListView : ListView
     protected override bool OnDrawingContent()
     {
         bool handled;
-        if (_hScrollOffset == 0)
+        if (horizontalScrollOffset == 0)
         {
             handled = base.OnDrawingContent();
         }
@@ -96,7 +96,7 @@ internal sealed class ToolListView : ListView
                 OnRowRender(rowArgs);
                 if (rowArgs.RowAttribute is { } ra) SetAttribute(ra);
 
-                Source.Render(this, isSelected, itemIdx, 0, row, renderWidth, _hScrollOffset);
+                Source.Render(this, isSelected, itemIdx, 0, row, renderWidth, horizontalScrollOffset);
             }
             handled = true;
         }
@@ -124,10 +124,13 @@ internal sealed class ToolListView : ListView
             var glyph = GroupGlyph(idx, count);
             if (glyph == '\0') continue;
 
-            bool selHi = HasFocus && idx == SelectedItem;
-            SetAttribute(selHi
-                ? new TGAttribute(ColorName16.Gray, ColorName16.DarkGray)
-                : new TGAttribute(ColorName16.DarkGray, ColorName16.Black));
+            bool isSelected = idx == SelectedItem;
+            var rowColor = HasFocus
+                ? isSelected ? ColorScheme!.Focus : GetNormalColor()
+                : isSelected ? ColorScheme!.HotNormal : GetNormalColor();
+
+            var fgColor = (HasFocus && isSelected) ? ColorName16.Gray : ColorName16.DarkGray;
+            SetAttribute(new TGAttribute(fgColor, rowColor.Background));
             Move(0, row);
             Driver.AddRune(new Rune(glyph));
         }

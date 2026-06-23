@@ -1,29 +1,91 @@
+using Dotsy.Cli.SlashCommands.Interfaces;
+using Dotsy.Cli.Tui;
+using Dotsy.Core.Config;
+using Dotsy.Core.Git;
+using Dotsy.Core.Loop;
+using Dotsy.Core.Loop.Data;
+using Dotsy.Core.Tools;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
-using Dotsy.Core.Config;
-using Dotsy.Core.Providers;
-using Dotsy.Core.Tools;
 
-namespace Dotsy.Core.Loop;
+namespace Dotsy.Cli.SlashCommands;
 
-public sealed record SelfContextRequest(
-    DotsyConfig Config,
-    LoopContext LoopContext,
-    string Cwd,
-    ToolRegistry? Registry = null,
-    IReadOnlyList<SlashCommand>? Commands = null,
-    string Mode = "tui",
-    DateTimeOffset? GeneratedAt = null,
-    string? ExecutablePath = null,
-    int MaxChars = 30_000,
-    TimeSpan? ProbeTimeout = null,
-    string? ResolvedTheme = null);
-
-public sealed class SelfContextBuilder
+/// <summary>
+/// <c>/self</c> — builds a self-context prompt describing the Dotsy runtime and submits it (with an
+/// optional question) as a user turn.
+/// </summary>
+internal sealed class SelfCommand : ISlashCommand
 {
+    public string Name => "self";
+
+    public bool RequiresIdle => true;
+
+    public IReadOnlyList<SlashCommandUsage> Usages =>
+    [
+        new("/self", "Ask the agent to summarize the current Dotsy runtime, configuration, environment, and command usage from a generated self-context prompt."),
+        new("/self <question>", "Ask a question about the current Dotsy runtime or usage with the generated self-context prompt injected as context."),
+    ];
+
     private const string Unknown = "unknown";
+
+    public void Execute(ISlashCommandHost host, string args)
+    {
+        var loopCtx = TuiSessionContext.LoopCtx;
+        if (loopCtx is null)
+        {
+            host.WriteError("session context not initialized");
+            return;
+        }
+
+        var display = string.IsNullOrEmpty(args) ? "/self" : "/self " + args;
+        var commandUsages = host.CommandUsages;
+        host.SetState("building self context");
+        Task.Run(async () =>
+        {
+            try
+            {
+                var prompt = await BuildPromptAsync(
+                    new SelfContextRequest(
+                        TuiSessionContext.Config,
+                        loopCtx,
+                        TuiSessionContext.Cwd,
+                        TuiSessionContext.Registry,
+                        commandUsages,
+                        Mode: "tui",
+                        ResolvedTheme: Palette.ActiveName),
+                    args);
+
+                host.Invoke(() =>
+                {
+                    host.SetState("idle");
+                    host.SubmitUserPrompt(display, prompt);
+                });
+            }
+            catch (Exception ex)
+            {
+                host.Invoke(() =>
+                {
+                    host.SetState("idle");
+                    host.WriteError($"self context failed: {ex.Message}");
+                });
+            }
+        });
+    }
+
+    public sealed record SelfContextRequest(
+        DotsyConfig Config,
+        LoopContext LoopContext,
+        string Cwd,
+        ToolRegistry? Registry = null,
+        IReadOnlyList<SlashCommandUsage>? Commands = null,
+        string Mode = "tui",
+        DateTimeOffset? GeneratedAt = null,
+        string? ExecutablePath = null,
+        int MaxChars = 30_000,
+        TimeSpan? ProbeTimeout = null,
+        string? ResolvedTheme = null);
 
     public async Task<string> BuildPromptAsync(SelfContextRequest request, string? question, CancellationToken ct = default)
     {
@@ -62,7 +124,7 @@ public sealed class SelfContextBuilder
         AppendConfiguration(sb, request.Config, configSources);
         AppendSystem(sb, systemTask.Result);
         AppendGpu(sb, gpuTask.Result);
-        AppendCommands(sb, request.Commands ?? SlashCommandCatalog.Commands);
+        AppendCommands(sb, request.Commands ?? []);
         AppendTools(sb, request.Registry);
 
         return Cap(sb.ToString().TrimEnd(), request.MaxChars);
@@ -70,7 +132,7 @@ public sealed class SelfContextBuilder
 
     private static void AppendApp(StringBuilder sb, SelfContextRequest request)
     {
-        var assembly = typeof(SelfContextBuilder).Assembly;
+        var assembly = typeof(SelfCommand).Assembly;
         var infoVersion = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
             ?? assembly.GetName().Version?.ToString()
             ?? Unknown;
@@ -201,7 +263,7 @@ public sealed class SelfContextBuilder
         ]);
     }
 
-    private static void AppendCommands(StringBuilder sb, IReadOnlyList<SlashCommand> commands)
+    private static void AppendCommands(StringBuilder sb, IReadOnlyList<SlashCommandUsage> commands)
     {
         AppendSection(sb, "Commands");
         AppendTable(sb, ["Syntax", "Description"],
@@ -382,7 +444,7 @@ public sealed class SelfContextBuilder
                 git?.UntrackedCount ?? 0,
                 SummarizeFiles(cwd, ["*.sln", "*.slnx", "*.csproj"], 12),
                 File.Exists(Path.Combine(cwd, ".dotsy", "config.toml")) ? "present" : "not present",
-                SummarizeFiles(cwd, ["AGENTS.md", "agents.md", ".agents", ".codex"], 12));
+                SummarizeFiles(cwd, [SystemPromptBuilder.ProjectContextFile, SystemPromptBuilder.ProjectContextFile.ToLowerInvariant(), ".agents", ".codex"], 12));
         }
     }
 
@@ -429,7 +491,6 @@ public sealed class SelfContextBuilder
                 cpuPct.ToString("F1", System.Globalization.CultureInfo.InvariantCulture));
         }
     }
-
     private sealed record GpuSnapshot(
         string Present,
         string Model,
@@ -472,24 +533,24 @@ public sealed class SelfContextBuilder
         return Unknown;
     }
 
-    private static string SummarizeFiles(string cwd, string[] patterns, int max)
+    private static string SummarizeFiles(string folder, string[] patterns, int maxFileCount)
     {
         try
         {
             var files = patterns
-                .SelectMany(pattern => Directory.EnumerateFiles(cwd, pattern, SearchOption.TopDirectoryOnly))
+                .SelectMany(pattern => Directory.EnumerateFiles(folder, pattern, SearchOption.TopDirectoryOnly))
                 .Select(Path.GetFileName)
                 .Where(name => !string.IsNullOrWhiteSpace(name))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
-                .Take(max + 1)
+                .Take(maxFileCount + 1)
                 .ToList();
 
             if (files.Count == 0)
                 return "none";
 
-            var suffix = files.Count > max ? ", ..." : "";
-            return string.Join(", ", files.Take(max)) + suffix;
+            var suffix = files.Count > maxFileCount ? ", ..." : "";
+            return string.Join(", ", files.Take(maxFileCount)) + suffix;
         }
         catch
         {
@@ -527,4 +588,5 @@ public sealed class SelfContextBuilder
             return null;
         }
     }
+
 }

@@ -1,5 +1,7 @@
+using Dotsy.Cli.SlashCommands;
 using Dotsy.Core.Config;
 using Dotsy.Core.Loop;
+using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Tools;
 
 namespace Dotsy.Core.Tests;
@@ -15,12 +17,12 @@ public sealed class SelfContextBuilderTests
         var registry = new ToolRegistry();
         registry.Register(new DoneTool());
 
-        var markdown = await new SelfContextBuilder().BuildMarkdownAsync(new SelfContextRequest(
+        var markdown = await new SelfCommand().BuildMarkdownAsync(new SelfCommand.SelfContextRequest(
             config,
             ctx,
             Directory.GetCurrentDirectory(),
             registry,
-            SlashCommandCatalog.Commands,
+            SlashCommandRegistry.CreateDefault().Usages,
             GeneratedAt: DateTimeOffset.Parse("2026-06-07T18:42:10-07:00"),
             ProbeTimeout: TimeSpan.Zero));
 
@@ -45,7 +47,7 @@ public sealed class SelfContextBuilderTests
                 max_turns = 42
                 """);
 
-            var markdown = await new SelfContextBuilder().BuildMarkdownAsync(new SelfContextRequest(
+            var markdown = await new SelfCommand().BuildMarkdownAsync(new SelfCommand.SelfContextRequest(
                 ConfigLoader.Load(tmp),
                 new LoopContext("session-123"),
                 tmp,
@@ -71,7 +73,7 @@ public sealed class SelfContextBuilderTests
         config.Model.Anthropic.ApiKey = "real-secret-value";
         config.Model.OpenAi.ApiKey = "sk-example-placeholder";
 
-        var markdown = await new SelfContextBuilder().BuildMarkdownAsync(new SelfContextRequest(
+        var markdown = await new SelfCommand().BuildMarkdownAsync(new SelfCommand.SelfContextRequest(
             config,
             new LoopContext("session-123"),
             Directory.GetCurrentDirectory(),
@@ -89,7 +91,7 @@ public sealed class SelfContextBuilderTests
         var config = new DotsyConfig();
         config.Tui.Theme = "system";
 
-        var markdown = await new SelfContextBuilder().BuildMarkdownAsync(new SelfContextRequest(
+        var markdown = await new SelfCommand().BuildMarkdownAsync(new SelfCommand.SelfContextRequest(
             config,
             new LoopContext("session-123"),
             Directory.GetCurrentDirectory(),
@@ -112,7 +114,7 @@ public sealed class SelfContextBuilderTests
                 UsedTokens: 250_000),
         };
 
-        var markdown = await new SelfContextBuilder().BuildMarkdownAsync(new SelfContextRequest(
+        var markdown = await new SelfCommand().BuildMarkdownAsync(new SelfCommand.SelfContextRequest(
             new DotsyConfig(),
             ctx,
             Directory.GetCurrentDirectory(),
@@ -127,7 +129,7 @@ public sealed class SelfContextBuilderTests
     [TestMethod]
     public async Task BuildMarkdown_ProbeTimeoutFallsBackToUnknown()
     {
-        var markdown = await new SelfContextBuilder().BuildMarkdownAsync(new SelfContextRequest(
+        var markdown = await new SelfCommand().BuildMarkdownAsync(new SelfCommand.SelfContextRequest(
             new DotsyConfig(),
             new LoopContext("session-123"),
             Directory.GetCurrentDirectory(),
@@ -140,7 +142,7 @@ public sealed class SelfContextBuilderTests
     [TestMethod]
     public async Task BuildMarkdown_AppliesPromptSizeCap()
     {
-        var markdown = await new SelfContextBuilder().BuildMarkdownAsync(new SelfContextRequest(
+        var markdown = await new SelfCommand().BuildMarkdownAsync(new SelfCommand.SelfContextRequest(
             new DotsyConfig(),
             new LoopContext("session-123"),
             Directory.GetCurrentDirectory(),
@@ -154,8 +156,8 @@ public sealed class SelfContextBuilderTests
     [TestMethod]
     public async Task BuildPrompt_PreservesQuestionTextAndUsesDefaultQuestionWhenEmpty()
     {
-        var builder = new SelfContextBuilder();
-        var request = new SelfContextRequest(
+        var builder = new SelfCommand();
+        var request = new SelfCommand.SelfContextRequest(
             new DotsyConfig(),
             new LoopContext("session-123"),
             Directory.GetCurrentDirectory(),

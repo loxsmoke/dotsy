@@ -1,3 +1,4 @@
+using Dotsy.Core.Session.Data;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 

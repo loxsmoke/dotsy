@@ -1,6 +1,6 @@
 using Dotsy.Core.Providers;
 
-namespace Dotsy.Core.Loop;
+namespace Dotsy.Core.Loop.Data;
 
 /// <summary>
 /// Maintains conversation state and metadata for an agent session.
@@ -25,22 +25,5 @@ public sealed class LoopContext
     public bool IsPlanMode { get; set; }
     public List<string> AddedFiles { get; } = [];
     public Dictionary<string, string> LoadedSkills { get; } = [];
-    public List<string> TodoItems { get; } = [];
     public int TurnCount { get; set; }
-}
-
-public record TokenBudget(
-    int ContextWindow,
-    int ReserveTokens,
-    int KeepRecentTokens,
-    int UsedTokens)
-{
-    public static readonly TokenBudget Empty = new(200_000, 16_384, 20_000, 0);
-
-    public int Usable => ContextWindow - ReserveTokens;
-    public float UsagePct => ContextWindow > 0 ? UsedTokens / (float)ContextWindow : 0f;
-    public bool ShouldCompact => UsedTokens > Usable;
-    public bool ShouldWarn => UsagePct >= 0.60f;
-
-    public TokenBudget WithUsed(int used) => this with { UsedTokens = used };
 }

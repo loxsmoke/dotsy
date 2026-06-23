@@ -1,5 +1,6 @@
 using Dotsy.Core.Config;
 using Dotsy.Core.Loop;
+using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Providers;
 using Dotsy.Core.Session;
 using Dotsy.Core.Tools;

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Tools;
 
 namespace Dotsy.Core.Tools.Interfaces
@@ -67,7 +68,7 @@ namespace Dotsy.Core.Tools
     public sealed class ToolContext
     {
         public required string Cwd { get; init; }
-        public required Loop.LoopContext LoopContext { get; init; }
-        public Func<Loop.LoopEvent, Task>? EmitEvent { get; init; }
+        public required LoopContext LoopContext { get; init; }
+        public Func<LoopEvent, Task>? EmitEvent { get; init; }
     }
 }

@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using Dotsy.Core.Providers;
-
+using Dotsy.Core.Skills;
 using Dotsy.Core.Tools.Interfaces;
 
 namespace Dotsy.Core.Tools;
@@ -64,7 +64,7 @@ public sealed class ToolRegistry
     }
 
     public static ToolRegistry CreateWithBuiltIns(
-        Loop.SkillDiscovery skillDiscovery,
+        SkillDiscovery skillDiscovery,
         HttpClient? httpClient = null,
         Action<string>? log = null)
     {

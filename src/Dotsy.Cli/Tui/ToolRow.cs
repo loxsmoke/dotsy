@@ -16,7 +16,11 @@ internal sealed record ToolRow(
     public override string ToString()
     {
         var icon = Status switch { "OK" => "✓", "ERR" => "✗", "RUNNING" => "◌", _ => " " };
-        var tail = Status == "RUNNING" ? $" {Elapsed}s…" : $" {Elapsed}s";
+        var tail = Status switch {
+            "RUNNING" => $" {Elapsed}s…",
+            _ when Elapsed <= 1 => "",
+            _ => $" {Elapsed}s"
+        };
         // Pad the name to a column, but always keep at least one space before the argument so
         // long tool names don't run straight into the argument text.
         var name = Name.Length >= 10 ? Name + " " : $"{Name,-10}";

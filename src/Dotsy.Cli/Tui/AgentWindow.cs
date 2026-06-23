@@ -1,7 +1,8 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
 using Dotsy.Core.Config;
-using Dotsy.Core.Loop;
+using Dotsy.Core.Git;
+using Dotsy.Core.Loop.Data;
 using Terminal.Gui;
 using TGAttribute = Terminal.Gui.Attribute;
 
@@ -21,7 +22,7 @@ public partial class AgentWindow : Toplevel, IDisposable
     private readonly ScrollableText convo;
     private readonly FrameView      fileFrame;
     private readonly FileListView   fileList;
-    private readonly ToolListView   toolCalllList;
+    private readonly ToolListView   toolCallList;
     private readonly InspectionFrameView inspectFrame;
     private readonly TextView       inspectText;
     private readonly FrameView      approvalFrame;
@@ -35,7 +36,7 @@ public partial class AgentWindow : Toplevel, IDisposable
     private int    inputHeight    = 1;
     private string lastInputText  = "";
     private int    lastInputWidth = -1;
-
+    private int    filePanelManualHeight = -1;
     // ── Slash completion ─────────────────────────────────────────────────────
     private readonly ObservableCollection<CompletionItem> completionItems = new();
 
@@ -112,13 +113,13 @@ public partial class AgentWindow : Toplevel, IDisposable
         fileList = new FileListView
         {
             X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(),
-            CanFocus = false, ColorScheme = Palette.Scheme() // enabled only when frame is visible
+             CanFocus = true, ColorScheme = Palette.Scheme() // enabled only when frame is visible
         };
         fileList.SetSource(fileRows);
         fileList.RowGetter        =  idx => idx < fileRows.Count ? fileRows[idx] : null;
         fileList.OpenSelectedItem += OnFileSelected;
         fileFrame.Add(fileList);
-        leftFrame.Add(convo, fileFrame);
+        leftFrame.Add(convo);
 
         convo.FrameChanged += (_, _) =>
         {
@@ -133,6 +134,15 @@ public partial class AgentWindow : Toplevel, IDisposable
         // TextView (base of ScrollableText) consumes printable keys via InvokeCommands,
         // so they never reach AgentWindow.OnKeyDown. Intercept here and redirect to _input.
         convo.KeyDown += (_, key) =>
+        {
+            if (approvalFrame?.Visible == true || inspectFrame?.Visible == true) return;
+            if (!IsPrintableChar(key)) return;
+            key.Handled = true;
+            promptInput!.SetFocus();
+            promptInput!.InsertText(key.AsRune.ToString());
+        };
+
+        fileList.KeyDown += (_, key) =>
         {
             if (approvalFrame?.Visible == true || inspectFrame?.Visible == true) return;
             if (!IsPrintableChar(key)) return;
@@ -156,16 +166,24 @@ public partial class AgentWindow : Toplevel, IDisposable
             Title = " Tools ", ColorScheme = Palette.Scheme()
         };
         rightFrame.Border!.Thickness = new Thickness(0, 1, 0, 1); // no left or right bar
-        toolCalllList = new ToolListView
+        toolCallList = new ToolListView
         {
             X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(),
             CanFocus = true, ColorScheme = Palette.Scheme()
         };
-        toolCalllList.SetSource(toolCallRows);
-        toolCalllList.RowGetter         = idx => idx >= 0 && idx < toolCallRows.Count ? toolCallRows[idx] : null;
-        toolCalllList.RowRender        += OnToolRowRender;
-        toolCalllList.OpenSelectedItem += OnToolSelected;
-        rightFrame.Add(toolCalllList);
+        toolCallList.SetSource(toolCallRows);
+        toolCallList.RowGetter         = idx => idx >= 0 && idx < toolCallRows.Count ? toolCallRows[idx] : null;
+        toolCallList.RowRender        += OnToolRowRender;
+        toolCallList.OpenSelectedItem += OnToolSelected;
+        toolCallList.KeyDown += (_, key) =>
+        {
+            if (approvalFrame?.Visible == true || inspectFrame?.Visible == true) return;
+            if (!IsPrintableChar(key)) return;
+            key.Handled = true;
+            promptInput!.SetFocus();
+            promptInput!.InsertText(key.AsRune.ToString());
+        };
+        rightFrame.Add(toolCallList, fileFrame);
 
         // Approval overlay (height=6: row 0=msg, row 2=main buttons, row 3=project button)
         approvalFrame = new FrameView
@@ -413,8 +431,11 @@ public partial class AgentWindow : Toplevel, IDisposable
             && TryResizePanelSplit(key, foc))
             return true;
 
+        if ((key == Key.CursorUp.WithAlt || key == Key.CursorDown.WithAlt)
+            && TryResizeFilePanelSplit(key, foc))
+            return true;
         // Prevent boundary navigation from stealing focus away from content panels
-        if (foc == convo || foc == toolCalllList || foc == fileList)
+        if (foc == convo || foc == toolCallList || foc == fileList)
         {
             switch (key.KeyCode)
             {
@@ -437,9 +458,11 @@ public partial class AgentWindow : Toplevel, IDisposable
 
             var focused = Application.Navigation?.GetFocused();
             View next = focused == convo
-                ? (fileFrame.Visible ? (View)fileList : toolCalllList)
-                : IsDescendant(focused, fileFrame)  ? toolCalllList
-                : IsDescendant(focused, rightFrame) ? (View)promptInput
+                ? toolCallList
+                : IsDescendant(focused, rightFrame) && !IsDescendant(focused, fileFrame)
+                    ? (fileFrame.Visible ? (View)fileList : (View)promptInput)
+                : IsDescendant(focused, fileFrame)
+                    ? (View)promptInput
                 : convo; // covers _input, null, unknown
             Application.Invoke(() => next.SetFocus());
             return true; // always consume — never let Toplevel base run Tab navigation
@@ -473,7 +496,7 @@ public partial class AgentWindow : Toplevel, IDisposable
     #region Split resizing
     private bool TryResizePanelSplit(Key key, View? focused)
     {
-        bool leftFocused = focused == convo || IsDescendant(focused, fileFrame);
+        bool leftFocused = focused == convo;
         bool rightFocused = IsDescendant(focused, rightFrame);
         if (!leftFocused && !rightFocused)
             return false;
@@ -540,8 +563,10 @@ public partial class AgentWindow : Toplevel, IDisposable
             catch (OperationCanceledException) { }
         });
     }
+
     private static int NormalizeLeftPanelWidthPercentage(int percentage) =>
         percentage is > 0 and < 100 ? percentage : DefaultLeftPanelWidthPercentage;
+
     private int GetLayoutWidth() =>
         Frame.Width > 0 ? Frame.Width : Application.Driver?.Cols ?? 0;
 
@@ -554,9 +579,26 @@ public partial class AgentWindow : Toplevel, IDisposable
         int maxPct = (int)Math.Floor((totalWidth - MinPanelWidth - 1) * 100.0 / totalWidth);
         return Math.Clamp(percentage, minPct, maxPct);
     }
+    private bool TryResizeFilePanelSplit(Key key, View? focused)
+    {
+        if (!IsDescendant(focused, rightFrame))
+            return false;
+
+        int delta = key == Key.CursorDown.WithAlt ? 1 : -1;
+        if (filePanelManualHeight == -1)
+        {
+            int currentH = Math.Clamp(fileRows.Count + 2, 3, (int)(Math.Max(10, rightFrame.Frame.Height - 2) * 0.30));
+            filePanelManualHeight = currentH;
+        }
+
+        filePanelManualHeight = Math.Clamp(filePanelManualHeight + delta, 3, rightFrame.Frame.Height - 2);
+        UpdateFilePanel();
+        return true;
+    }
     #endregion
 
     #region File panel
+
     public void AddFileDiff(string path, int added, int deleted, FileChangeType changeType, List<List<Cell>> diff) =>
         Application.Invoke(() =>
         {
@@ -567,31 +609,75 @@ public partial class AgentWindow : Toplevel, IDisposable
     private void UpdateFilePanel()
     {
         int total = fileRows.Count;
-        if (total == 0)
-        {
-            fileList.CanFocus  = false;
-            fileFrame.Visible  = false;
-            convo.Height = Dim.Fill();
-            leftFrame.SetNeedsDraw();
-            return;
-        }
+        int innerH = Math.Max(10, rightFrame.Frame.Height - 2);
+        int maxH   = Math.Max(3, (int)(innerH * 0.30));
+        int wantH  = total + 2; 
+
+        int h = filePanelManualHeight != -1 
+            ? Math.Clamp(filePanelManualHeight, 3, innerH) 
+            : Math.Clamp(wantH, 3, maxH);
 
         int addedFiles   = fileRows.Count(r => r.ChangeType == FileChangeType.Added);
         int deletedFiles = fileRows.Count(r => r.ChangeType == FileChangeType.Deleted);
         fileFrame.Title = $" changed files ({total}, +{addedFiles} -{deletedFiles}) ";
 
-        // Cap at 30% of the left-frame inner height (subtract 2 for its own border)
-        int innerH = Math.Max(10, leftFrame.Frame.Height - 2);
-        int maxH   = Math.Max(3, (int)(innerH * 0.30));
-        int wantH  = total + 2; // +2 for frame border rows
-        int h      = Math.Clamp(wantH, 3, maxH);
-
         fileFrame.Height  = h;
         fileFrame.Y       = Pos.AnchorEnd(h);
         fileFrame.Visible = true;
-        fileList.CanFocus = true;
-        convo.Height      = Dim.Fill(h);
-        leftFrame.SetNeedsDraw();
+        toolCallList.Height = Dim.Fill(h);
+        rightFrame.SetNeedsDraw();
+        ShowInspectFrame();
+    }
+
+    private void RefreshChangedFiles()
+    {
+        var cwd = TuiSessionContext.Cwd;
+        Task.Run(() =>
+        {
+            var files = GitContext.GetChangedFiles(cwd);
+            Application.Invoke(() =>
+            {
+                fileRows.Clear();
+                foreach (var f in files)
+                {
+                    var ct = f.IsNew ? FileChangeType.Added
+                               : f.IsDeleted ? FileChangeType.Deleted
+                               : FileChangeType.Modified;
+
+                    int added = 0, deleted = 0;
+
+                    if (!f.IsNew && !f.IsDeleted)
+                    {
+                        try
+                        {
+                            var repoPath = LibGit2Sharp.Repository.Discover(cwd);
+                            if (repoPath != null)
+                            {
+                                using var repo = new LibGit2Sharp.Repository(repoPath);
+                                var head = repo.Head;
+                                if (head.Tip != null)
+                                {
+                                    var diff = repo.Diff.Compare<LibGit2Sharp.Patch>(head.Tip.Tree, LibGit2Sharp.DiffTargets.WorkingDirectory);
+                                    foreach (var change in diff)
+                                    {
+                                        if (change.Path.Equals(f.Path, StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            added = change.LinesAdded;
+                                            deleted = change.LinesDeleted;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+
+                    fileRows.Add(new FileRow(f.Path, added, deleted, ct, []));
+                }
+                UpdateFilePanel();
+            });
+        });
     }
 
     private void OnFileRowRender(object? sender, ListViewRowEventArgs e)
@@ -625,65 +711,6 @@ public partial class AgentWindow : Toplevel, IDisposable
         lines.AddRange(row.Diff);
         inspectText.Load(lines);
         inspectFrame.Title = $" {row.Path}  [Ctrl+C copy · Ctrl+A all · Esc close] ";
-        ShowInspectFrame();
-    }
-
-    private void RefreshChangedFiles()
-    {
-        var cwd = TuiSessionContext.Cwd;
-        Task.Run(() =>
-        {
-            var files = GitContext.GetChangedFiles(cwd);
-            Application.Invoke(() =>
-            {
-                fileRows.Clear();
-                foreach (var f in files)
-                {
-                    var ct = f.IsNew ? FileChangeType.Added
-                           : f.IsDeleted ? FileChangeType.Deleted
-                           : FileChangeType.Modified;
-
-                    int added = 0, deleted = 0;
-
-                    // Calculate line changes for modified files using LibGit2Sharp
-                    if (!f.IsNew && !f.IsDeleted)
-                    {
-                        try
-                        {
-                            var repoPath = LibGit2Sharp.Repository.Discover(cwd);
-                            if (repoPath != null)
-                            {
-                                using var repo = new LibGit2Sharp.Repository(repoPath);
-                                // Get the current commit
-                                var head = repo.Head;
-                                if (head.Tip != null)
-                                {
-                                    // Compare working directory with HEAD (Patch carries per-file line counts)
-                                    var diff = repo.Diff.Compare<LibGit2Sharp.Patch>(head.Tip.Tree, LibGit2Sharp.DiffTargets.WorkingDirectory);
-
-                                    foreach (var change in diff)
-                                    {
-                                        if (change.Path.Equals(f.Path, StringComparison.OrdinalIgnoreCase))
-                                        {
-                                            added = change.LinesAdded;
-                                            deleted = change.LinesDeleted;
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        catch
-                        {
-                            // If we can't calculate diff, fall back to 0, 0
-                        }
-                    }
-
-                    fileRows.Add(new FileRow(f.Path, added, deleted, ct, []));
-                }
-                UpdateFilePanel();
-            });
-        });
     }
     #endregion
 

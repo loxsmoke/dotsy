@@ -1,7 +1,7 @@
 using System.Text;
 using LibGit2Sharp;
 
-namespace Dotsy.Core.Loop;
+namespace Dotsy.Core.Git;
 
 public sealed class GitIntegration
 {

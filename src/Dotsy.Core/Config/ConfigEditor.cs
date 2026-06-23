@@ -36,8 +36,9 @@ public static class ConfigEditor
         ]),
         new("model.ollama",
         [
-            new("model.ollama.id",       "string", "Ollama model ID, e.g. llama3"),
-            new("model.ollama.base_url", "string", "Ollama server URL"),
+            new("model.ollama.id",                 "string", "Ollama model ID, e.g. llama3"),
+            new("model.ollama.base_url",           "string", "Ollama server URL"),
+            new("model.ollama.max_context_tokens", "int",    "context window (num_ctx) requested when invoking Ollama"),
         ]),
         new("model.azure",
         [
@@ -69,10 +70,11 @@ public static class ConfigEditor
         ]),
         new("compaction",
         [
-            new("compaction.enabled",            "bool",  "auto-summarise context when usage exceeds threshold"),
-            new("compaction.threshold_pct",      "float", "usage fraction that triggers compaction, e.g. 0.80"),
-            new("compaction.reserve_tokens",     "int",   "tokens reserved for the compaction summary request"),
-            new("compaction.keep_recent_tokens", "int",   "recent tokens to retain verbatim after compaction"),
+            new("compaction.enabled",             "bool",  "auto-summarise context when usage exceeds threshold"),
+            new("compaction.threshold_pct",       "float", "usage fraction that triggers compaction, e.g. 0.80"),
+            new("compaction.reserve_tokens",      "int",   "tokens reserved for the compaction summary request"),
+            new("compaction.keep_recent_tokens",  "int",   "recent tokens to retain verbatim after compaction"),
+            new("compaction.tool_pair_summarize", "bool",  "collapse old tool call/result pairs into one-line notes"),
         ]),
         new("git",
         [
@@ -123,8 +125,9 @@ public static class ConfigEditor
         ]),
         new("model.ollama",
         [
-            new("id",       cfg.Model.Ollama.Id,      string.IsNullOrEmpty(cfg.Model.Ollama.Id)),
-            new("base_url", cfg.Model.Ollama.BaseUrl, false),
+            new("id",                 cfg.Model.Ollama.Id,      string.IsNullOrEmpty(cfg.Model.Ollama.Id)),
+            new("base_url",           cfg.Model.Ollama.BaseUrl, false),
+            new("max_context_tokens", cfg.Model.Ollama.MaxContextTokens.ToString(), false),
         ]),
         new("model.azure",
         [
@@ -150,15 +153,18 @@ public static class ConfigEditor
             new("parallel_tools",  cfg.Agent.ParallelTools.ToString().ToLower(),    false),
             new("auto_lint",       cfg.Agent.AutoLint.ToString().ToLower(),         false),
             new("auto_test",       cfg.Agent.AutoTest.ToString().ToLower(),         false),
-            new("nudge_limit",     cfg.Agent.NudgeLimit.ToString(),                 false),
-            new("max_reflections", cfg.Agent.MaxReflections.ToString(),             false),
+            new("nudge_limit",        cfg.Agent.NudgeLimit.ToString(),              false),
+            new("repeat_window_turns", cfg.Agent.RepeatWindowTurns.ToString(),      false),
+            new("repeat_threshold",   cfg.Agent.RepeatThreshold.ToString(),         false),
+            new("max_reflections",    cfg.Agent.MaxReflections.ToString(),          false),
         ]),
         new("compaction",
         [
-            new("enabled",             cfg.Compaction.Enabled.ToString().ToLower(),        false),
-            new("threshold_pct",       cfg.Compaction.ThresholdPct.ToString("F2"),         false),
-            new("reserve_tokens",      cfg.Compaction.ReserveTokens.ToString(),            false),
-            new("keep_recent_tokens",  cfg.Compaction.KeepRecentTokens.ToString(),         false),
+            new("enabled",              cfg.Compaction.Enabled.ToString().ToLower(),           false),
+            new("threshold_pct",        cfg.Compaction.ThresholdPct.ToString("F2"),           false),
+            new("reserve_tokens",       cfg.Compaction.ReserveTokens.ToString(),              false),
+            new("keep_recent_tokens",   cfg.Compaction.KeepRecentTokens.ToString(),           false),
+            new("tool_pair_summarize",  cfg.Compaction.ToolPairSummarize.ToString().ToLower(), false),
         ]),
         new("git",
         [
@@ -220,7 +226,7 @@ public static class ConfigEditor
         try
         {
             var text = File.ReadAllText(projectConfigPath);
-            if (!Toml.TryToModel(text, out TomlTable? table, out _, projectConfigPath) || table is null)
+            if (!TomlSerializer.TryDeserialize(text, out TomlTable? table) || table is null)
                 return ConfigFilePath;
 
             if (!table.TryGetValue(parts[0], out var s0) || s0 is not TomlTable section)
@@ -300,7 +306,7 @@ public static class ConfigEditor
         if (File.Exists(targetFile))
         {
             var existing = File.ReadAllText(targetFile);
-            if (Toml.TryToModel(existing, out TomlTable? t, out _, targetFile) && t is not null)
+            if (TomlSerializer.TryDeserialize(existing, out TomlTable? t) && t is not null)
                 table = t;
         }
 

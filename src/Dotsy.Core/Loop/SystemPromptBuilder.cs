@@ -1,5 +1,8 @@
 using System.Text;
 using Dotsy.Core.Config;
+using Dotsy.Core.Git;
+using Dotsy.Core.Loop.Data;
+using Dotsy.Core.Skills;
 
 namespace Dotsy.Core.Loop;
 
@@ -7,6 +10,11 @@ public static class SystemPromptBuilder
 {
     private const int MaxAddedFileChars = 20_000;
     private const int MaxAddedFilesTotalChars = 60_000;
+
+    // Project context file, auto-loaded from the repo root and injected every turn. Mirrors the
+    // cross-tool AGENTS.md convention so the same file works with other agents.
+    public const string ProjectContextFile = "AGENTS.md";
+    private const int MaxProjectContextChars = 20_000;
 
     public const string CompactionContinuationInstruction =
         "Context was summarised. Continue naturally based on the summary - do not mention that summarisation occurred.";
@@ -52,6 +60,12 @@ public static class SystemPromptBuilder
             sb.AppendLine();
             sb.AppendLine(envBlock);
         }
+
+        // Project context (auto-loaded AGENTS.md from the repo root)
+        AppendProjectContext(sb, cwd);
+
+        // Task-file guidance (only when a todo.md is present in the repo root)
+        AppendTodoGuidance(sb, cwd);
 
         // Available skills block (section 21)
         if (skillDiscovery is not null)
@@ -120,16 +134,6 @@ public static class SystemPromptBuilder
             sb.AppendLine(CompactionContinuationInstruction);
         }
 
-        // Todo items
-        if (ctx.TodoItems.Count > 0)
-        {
-            sb.AppendLine();
-            sb.AppendLine("<todo>");
-            foreach (var item in ctx.TodoItems)
-                sb.AppendLine($"- {item}");
-            sb.AppendLine("</todo>");
-        }
-
         return sb.ToString().TrimEnd();
     }
 
@@ -138,6 +142,56 @@ public static class SystemPromptBuilder
         var lines = markdown.Split('\n', StringSplitOptions.RemoveEmptyEntries);
         var first = lines.FirstOrDefault(l => !l.TrimStart().StartsWith('#')) ?? "";
         return first.Trim();
+    }
+
+    private static void AppendTodoGuidance(StringBuilder sb, string cwd)
+    {
+        if (!File.Exists(Path.Combine(cwd, Tools.TodoTool.FileName)))
+            return;
+
+        sb.AppendLine();
+        sb.AppendLine("<task_file>");
+        sb.AppendLine(
+            $"This repository has a {Tools.TodoTool.FileName} task list. Use the {Tools.TodoTool.ToolName} tool to "
+            + "work with it instead of reading or editing the file directly:");
+        sb.AppendLine("- Call list_tasks (status=todo) to find outstanding work before starting a task.");
+        sb.AppendLine("- Call list_sections to see how tasks are grouped.");
+        sb.AppendLine(
+            "- After you finish AND verify a task, call set_status with its index to mark it done. "
+            + "Do not mark a task done until the work is complete.");
+        sb.AppendLine($"Do not Read or Edit {Tools.TodoTool.FileName} directly for these operations.");
+        sb.AppendLine("</task_file>");
+    }
+
+    private static void AppendProjectContext(StringBuilder sb, string cwd)
+    {
+        var path = Path.Combine(cwd, ProjectContextFile);
+        if (!File.Exists(path))
+            return;
+
+        string content;
+        try
+        {
+            content = File.ReadAllText(path).Trim();
+        }
+        catch
+        {
+            return; // unreadable — skip silently rather than fail the turn
+        }
+
+        if (content.Length == 0)
+            return;
+
+        if (content.Length > MaxProjectContextChars)
+            content = content[..MaxProjectContextChars] + "\n<truncated>";
+
+        sb.AppendLine();
+        sb.AppendLine("<project_context>");
+        sb.AppendLine(
+            $"Project-specific instructions and facts from {ProjectContextFile}. Treat these as "
+            + "authoritative for this repository; prefer them over assumptions.");
+        sb.AppendLine(content);
+        sb.AppendLine("</project_context>");
     }
 
     private static void AppendAddedFiles(StringBuilder sb, string cwd, LoopContext ctx)

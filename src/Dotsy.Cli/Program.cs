@@ -5,8 +5,11 @@ using System.Text.Json;
 using Dotsy.Cli.Tui;
 using Dotsy.Core.Config;
 using Dotsy.Core.Loop;
+using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Providers;
 using Dotsy.Core.Session;
+using Dotsy.Core.Session.Data;
+using Dotsy.Core.Skills;
 using Dotsy.Core.Tools;
 using Dotsy.Mcp;
 using Dotsy.Providers;
@@ -96,7 +99,7 @@ runCommand.SetHandler(async (ctx) =>
     }
     else
     {
-        RunTui(config, currentDirectory, resumeId, noHistory, yolo, ctx.GetCancellationToken());
+        await RunTui(config, currentDirectory, resumeId, noHistory, yolo, ctx.GetCancellationToken());
     }
 });
 
@@ -121,7 +124,7 @@ return await rootCommand.InvokeAsync(args);
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-static void RunTui(
+static async Task RunTui(
     DotsyConfig config, string currentDirectory, string? resumeId, bool noHistory, bool yolo,
     CancellationToken ct)
 {
@@ -180,6 +183,15 @@ static void RunTui(
 
     var sessionStore = new SessionStore(sessionId, sessionDir, noHistory || !config.Session.LogEnabled);
     var trajectory = new TrajectoryRecorder(config, currentDirectory);
+
+    // Size the token budget to the model's active context window so compaction triggers at the
+    // right point (for Ollama this honors model.ollama.max_context_tokens, sent as num_ctx).
+    var modelInfo = await provider.GetModelInfoAsync(config.Model.ActiveModelId, ct);
+    loopCtx.TokenBudget = new TokenBudget(
+        modelInfo.ContextWindow,
+        config.Compaction.ReserveTokens,
+        config.Compaction.KeepRecentTokens,
+        0);
 
     // End agent turn after one text-only response so the user can reply
     config.Agent.NudgeLimit = 1;
@@ -337,7 +349,7 @@ static async Task<int> RunHeadless(
     loopCtx.Messages.Add(new UserMessage([new TextBlock(prompt)]));
     sessionStore.Append(new SessionRecord
     {
-        Type = "user",
+        Type = SessionRecordType.User,
         Cwd = workingDirectory,
         Message = new { content = prompt }
     });

@@ -1,4 +1,4 @@
-﻿using Terminal.Gui;
+using Terminal.Gui;
 
 namespace Dotsy.Cli.Tui;
 
@@ -6,6 +6,12 @@ namespace Dotsy.Cli.Tui;
 internal sealed class FlatButton : View
 {
     public event EventHandler? Fired;
+
+    public FlatButton(string label, Pos x, Pos y) : this(label)
+    {
+        X = x;
+        Y = y;
+    }
 
     public FlatButton(string label)
     {

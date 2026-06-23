@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using Dotsy.Core.Config;
+using Dotsy.Core.Git;
 using Dotsy.Core.Loop;
+using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Providers;
 using Dotsy.Core.Tests.Helpers;
 using Dotsy.Core.Tools;
@@ -146,6 +148,76 @@ public sealed class AgentLoopTests
         Assert.IsNotNull(ended, "Expected the loop to stop");
         Assert.AreEqual(EndReason.NudgeLimitReached, ended.Reason);
         Assert.IsTrue(provider.CallCount <= 5, $"Loop should bail quickly, made {provider.CallCount} calls");
+    }
+
+    // ── Rolling-window cycle guard ────────────────────────────────────────────
+
+    // A ReadOnly tool that always succeeds, like Read/Grep against real files.
+    private sealed class AlwaysOkTool : Dotsy.Core.Tools.Interfaces.ITool
+    {
+        public string Name => "Look";
+        public string Description => "always ok";
+        public System.Text.Json.JsonElement InputSchema =>
+            System.Text.Json.JsonSerializer.SerializeToElement(new { type = "object" });
+        public ToolSafety Safety => ToolSafety.ReadOnly;
+        public bool IsCompletionSignal => false;
+        public Task<ToolResult> ExecuteAsync(System.Text.Json.JsonElement input, ToolContext ctx, CancellationToken ct)
+            => Task.FromResult(ToolResult.Ok("ok"));
+    }
+
+    [TestMethod]
+    public async Task RepeatingCycle_OfSuccessfulTools_BreaksLoop()
+    {
+        // A 3-step cycle (a,b,c,a,b,c…) of successful reads. No two adjacent turns are identical,
+        // so the exact-duplicate trap never fires; only the rolling-window guard can stop this.
+        var config = MakeConfig(maxTurns: 1000, nudgeLimit: 1000);
+        config.Agent.RepeatWindowTurns = 8;
+        config.Agent.RepeatThreshold = 3;
+
+        var keys = new[] { "a", "b", "c" };
+        var turns = new List<IReadOnlyList<ProviderEvent>>();
+        for (int cycle = 0; cycle < 4; cycle++)
+            foreach (var k in keys)
+                turns.Add([new ToolCallDelta("c", "Look", $$"""{"p":"{{k}}"}"""), new StreamEnd(StopReason.ToolUse)]);
+
+        var provider = new FakeProvider(turns.ToArray());
+        var registry = new ToolRegistry();
+        registry.Register(new AlwaysOkTool());
+        var loop = new AgentLoop(provider, registry, YoloStore(), config);
+
+        var events = await Collect(loop.RunAsync(EmptyCtx(), Path.GetTempPath(), CancellationToken.None));
+
+        var ended = events.OfType<LoopEnded>().LastOrDefault();
+        Assert.IsNotNull(ended, "Expected the loop to stop");
+        Assert.AreEqual(EndReason.NudgeLimitReached, ended.Reason);
+        Assert.IsTrue(provider.CallCount <= 9, $"Loop should bail within ~2 cycles, made {provider.CallCount} calls");
+    }
+
+    [TestMethod]
+    public async Task DistinctReads_DoNotTripCycleGuard()
+    {
+        // Every turn reads a different file (genuine progress); the guard must not fire. The run
+        // ends via TaskComplete on the final Done call, proving all distinct turns executed.
+        var config = MakeConfig(maxTurns: 1000, nudgeLimit: 1000);
+        config.Agent.RepeatWindowTurns = 8;
+        config.Agent.RepeatThreshold = 3;
+
+        var turns = new List<IReadOnlyList<ProviderEvent>>();
+        for (int i = 0; i < 6; i++)
+            turns.Add([new ToolCallDelta("c", "Look", $$"""{"p":"file{{i}}"}"""), new StreamEnd(StopReason.ToolUse)]);
+        turns.Add([new ToolCallDelta("done", "Done", "{\"summary\":\"finished\"}"), new StreamEnd(StopReason.ToolUse)]);
+
+        var provider = new FakeProvider(turns.ToArray());
+        var registry = new ToolRegistry();
+        registry.Register(new AlwaysOkTool());
+        registry.Register(new DoneTool());
+        var loop = new AgentLoop(provider, registry, YoloStore(), config);
+
+        var events = await Collect(loop.RunAsync(EmptyCtx(), Path.GetTempPath(), CancellationToken.None));
+
+        var ended = events.OfType<LoopEnded>().LastOrDefault();
+        Assert.IsNotNull(ended);
+        Assert.AreEqual(EndReason.TaskComplete, ended.Reason);
     }
 
     // ── DoneTool completion signal ────────────────────────────────────────────

@@ -11,7 +11,7 @@ public static class DefaultConfig
             Anthropic = new AnthropicConfig { Id = "", ApiKey = "" },
             OpenAi = new OpenAiConfig { Id = "", ApiKey = "", BaseUrl = "https://api.openai.com/v1" },
             Azure = new AzureConfig { Id = "", ApiKey = "", Endpoint = "", Deployment = "", ApiVersion = "2025-01-01" },
-            Ollama = new OllamaConfig { Id = "", BaseUrl = "http://localhost:11434" },
+            Ollama = new OllamaConfig { Id = "", BaseUrl = "http://localhost:11434", MaxContextTokens = 131_072 },
             Compatible = new CompatibleConfig { Id = "", ApiKey = "", BaseUrl = "" },
             Gemini = new GeminiConfig { Id = "", ApiKey = "" }
         },
@@ -22,6 +22,8 @@ public static class DefaultConfig
             ParallelTools = true,
             AutoCommit = false,
             NudgeLimit = 3,
+            RepeatWindowTurns = 8,
+            RepeatThreshold = 3,
             AutoLint = false,
             AutoTest = false,
             MaxReflections = 3,
@@ -34,7 +36,7 @@ public static class DefaultConfig
             ThresholdPct = 0.80f,
             ReserveTokens = 16_384,
             KeepRecentTokens = 20_000,
-            ToolPairSummarise = true
+            ToolPairSummarize = true
         },
         Retrieval = new RetrievalConfig
         {

@@ -43,6 +43,19 @@ public sealed class AnthropicProvider : IProvider
     {
         try
         {
+            var models = await GetModelsAsync(ct);
+            var m = models.FirstOrDefault(x => x.Id == modelId);
+            if (m is not null) return m;
+        }
+        catch { }
+
+        return new ModelInfo(modelId, 200_000, 8_192);
+    }
+
+    public async Task<IReadOnlyList<ModelInfo>> GetModelsAsync(CancellationToken ct)
+    {
+        try
+        {
             var resp = await _http.GetAsync("/v1/models", ct);
             if (resp.IsSuccessStatusCode)
             {
@@ -50,21 +63,17 @@ public sealed class AnthropicProvider : IProvider
                 var doc = JsonDocument.Parse(json);
                 if (doc.RootElement.TryGetProperty("data", out var data))
                 {
-                    foreach (var m in data.EnumerateArray())
-                    {
-                        if (m.GetStringPropertyOrEmpty("id") == modelId)
-                        {
-                            var ctx = m.TryGetProperty("context_window", out var cw) ? cw.GetInt32() : 200_000;
-                            var max = m.TryGetProperty("max_output_tokens", out var mo) ? mo.GetInt32() : 8_192;
-                            return new ModelInfo(modelId, ctx, max, ModelInfoSource.Api);
-                        }
-                    }
+                    return data.EnumerateArray().Select(m => new ModelInfo(
+                        m.GetStringPropertyOrEmpty("id"),
+                        m.TryGetProperty("context_window", out var cw) ? cw.GetInt32() : 200_000,
+                        m.TryGetProperty("max_output_tokens", out var mo) ? mo.GetInt32() : 8_192,
+                        ModelInfoSource.Api)).ToList();
                 }
             }
         }
         catch { }
 
-        return new ModelInfo(modelId, 200_000, 8_192);
+        return BundledModels;
     }
 
     public async IAsyncEnumerable<ProviderEvent> StreamAsync(
@@ -301,6 +310,8 @@ public sealed class AnthropicProvider : IProvider
                             "rate_limit_error" => new RateLimitError(null),
                             "overloaded_error" => new ServerError(529),
                             _ when msg.Contains("context", StringComparison.OrdinalIgnoreCase) => new ContextLengthError(),
+                            _ when msg.Contains("model unknown", StringComparison.OrdinalIgnoreCase) || 
+                                   msg.Contains("not found", StringComparison.OrdinalIgnoreCase) && msg.Contains("model", StringComparison.OrdinalIgnoreCase) => new ModelUnknownError(msg),
                             _ => new RequestError(400, string.IsNullOrEmpty(msg) ? (errType ?? "") : msg)
                         };
                         yield return new StreamError(new ProviderException(provErr));
@@ -371,7 +382,15 @@ public sealed class AnthropicProvider : IProvider
                        : body.Trim();
             if (!string.IsNullOrEmpty(reqId))
                 detail += $" (request {reqId})";
-            error = new RequestError(status, detail);
+            if (detail.Contains("model unknown", StringComparison.OrdinalIgnoreCase) ||
+                (detail.Contains("model", StringComparison.OrdinalIgnoreCase) && detail.Contains("not found", StringComparison.OrdinalIgnoreCase)))
+            {
+                error = new ModelUnknownError(detail);
+            }
+            else
+            {
+                error = new RequestError(status, detail);
+            }
         }
 
         yield return new StreamError(new ProviderException(error));

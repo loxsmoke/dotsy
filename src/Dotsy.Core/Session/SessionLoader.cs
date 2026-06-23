@@ -1,16 +1,9 @@
 using System.Text.Json;
 using Dotsy.Core.Utils;
 using Dotsy.Core.Providers;
+using Dotsy.Core.Session.Data;
 
 namespace Dotsy.Core.Session;
-
-public sealed class LoadedSession
-{
-    public required string SessionId { get; init; }
-    public required List<Message> Messages { get; init; }
-    public string? CompactionSummary { get; init; }
-    public string? Cwd { get; init; }
-}
 
 public static class SessionLoader
 {

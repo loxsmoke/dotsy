@@ -1,9 +1,10 @@
 using System.Text;
 using System.Text.Json;
-using Dotsy.Core.Loop;
-using static Dotsy.Core.Loop.SkillLoader;
+using static Dotsy.Core.Skills.SkillLoader;
 
 using Dotsy.Core.Tools.Interfaces;
+using Dotsy.Core.Loop.Data;
+using Dotsy.Core.Skills;
 
 namespace Dotsy.Core.Tools;
 

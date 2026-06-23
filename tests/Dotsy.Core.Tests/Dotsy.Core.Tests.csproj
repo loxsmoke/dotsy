@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Dotsy.Core\Dotsy.Core.csproj" />
+    <ProjectReference Include="..\..\src\Dotsy.Cli\Dotsy.Cli.csproj" />
   </ItemGroup>
 
 </Project>

@@ -85,6 +85,9 @@ public sealed class OllamaConfig
 {
     public string Id { get; set; } = "";
     public string BaseUrl { get; set; } = "http://localhost:11434";
+    // Context window (num_ctx) requested when invoking Ollama. Ollama otherwise loads models at a
+    // small default (e.g. 8192); this sizes the window the model actually runs with. 128K decimal.
+    public int MaxContextTokens { get; set; } = 131_072;
 }
 
 public sealed class CompatibleConfig
@@ -107,6 +110,11 @@ public sealed class AgentConfig
     public bool ParallelTools { get; set; } = true;
     public bool AutoCommit { get; set; } = false;
     public int NudgeLimit { get; set; } = 3;
+    // Rolling-window loop guard: if a tool-call signature recurs RepeatThreshold times within the
+    // last RepeatWindowTurns turns, the agent is nudged out of a multi-turn read/search cycle.
+    // Set RepeatThreshold to 0 to disable.
+    public int RepeatWindowTurns { get; set; } = 8;
+    public int RepeatThreshold { get; set; } = 3;
     public bool AutoLint { get; set; } = false;
     public bool AutoTest { get; set; } = false;
     public int MaxReflections { get; set; } = 3;
@@ -120,7 +128,7 @@ public sealed class CompactionConfig
     public float ThresholdPct { get; set; } = 0.80f;
     public int ReserveTokens { get; set; } = 16_384;
     public int KeepRecentTokens { get; set; } = 20_000;
-    public bool ToolPairSummarise { get; set; } = true;
+    public bool ToolPairSummarize { get; set; } = true;
 }
 
 public sealed class RetrievalConfig

@@ -1,6 +1,9 @@
 using System.Text.Json;
+using Dotsy.Cli.SlashCommands;
 using Dotsy.Core.Config;
 using Dotsy.Core.Loop;
+using Dotsy.Core.Loop.Data;
+using Dotsy.Core.Skills;
 using Dotsy.Core.Tools;
 using Dotsy.Core.Tools.Interfaces;
 
@@ -26,10 +29,11 @@ public sealed class SecuritySummaryRendererTests
     }
 
     [TestMethod]
-    public void SlashCommandCatalog_IncludesSec()
+    public void SlashCommandRegistry_IncludesSec()
     {
-        Assert.IsTrue(SlashCommandCatalog.Names.Contains("sec", StringComparer.OrdinalIgnoreCase));
-        Assert.IsTrue(SlashCommandCatalog.Commands.Any(c => c.Syntax == "/sec"));
+        var registry = SlashCommandRegistry.CreateDefault();
+        Assert.IsTrue(registry.Names.Contains("sec", StringComparer.OrdinalIgnoreCase));
+        Assert.IsTrue(registry.Usages.Any(u => u.Syntax == "/sec"));
     }
 
     [TestMethod]

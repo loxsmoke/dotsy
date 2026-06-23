@@ -1,8 +1,8 @@
 using System.Text.Json;
-using Dotsy.Core.Loop;
 using Dotsy.Core.Utils;
 
 using Dotsy.Core.Tools.Interfaces;
+using Dotsy.Core.Loop.Data;
 
 namespace Dotsy.Core.Tools;
 

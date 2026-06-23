@@ -1,8 +1,8 @@
 using System.Text;
+using System.Text.Json;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
-using Microsoft.Data.Sqlite;
 
 namespace Dotsy.Core.Retrieval;
 
@@ -16,32 +16,35 @@ public sealed class FileOutline
 
 public sealed class RoslynIndex : IDisposable
 {
-    private readonly string _dbPath;
-    private SqliteConnection? _db;
+    private readonly string _cachePath;
+    private Dictionary<string, CacheEntry>? _cache;
+    private bool _dirty;
+
+    private sealed class CacheEntry
+    {
+        public string LastWrite { get; set; } = "";
+        public string Outline { get; set; } = "";
+        public List<string> Refs { get; set; } = new();
+    }
 
     public RoslynIndex(string cacheDir)
     {
-        _dbPath = Path.Combine(cacheDir, "roslyn-index.db");
+        _cachePath = Path.Combine(cacheDir, "roslyn-index.json");
         Directory.CreateDirectory(cacheDir);
     }
 
     public void Open()
     {
-        var connString = new SqliteConnectionStringBuilder
+        if (File.Exists(_cachePath))
         {
-            DataSource = _dbPath,
-            Pooling = false
-        }.ToString();
-        _db = new SqliteConnection(connString);
-        _db.Open();
-        _db.Execute("""
-            CREATE TABLE IF NOT EXISTS file_outlines (
-                path TEXT PRIMARY KEY,
-                last_write TEXT NOT NULL,
-                outline TEXT NOT NULL,
-                refs TEXT NOT NULL
-            )
-            """);
+            try
+            {
+                var json = File.ReadAllText(_cachePath);
+                _cache = JsonSerializer.Deserialize<Dictionary<string, CacheEntry>>(json);
+            }
+            catch { _cache = null; }
+        }
+        _cache ??= new Dictionary<string, CacheEntry>();
     }
 
     public IReadOnlyList<FileOutline> ScanDirectory(string root, int maxFiles = 200)
@@ -65,25 +68,17 @@ public sealed class RoslynIndex : IDisposable
     {
         var lastWrite = File.GetLastWriteTimeUtc(filePath).ToString("O");
 
-        if (_db is not null)
+        if (_cache is not null
+            && _cache.TryGetValue(filePath, out var entry)
+            && entry.LastWrite == lastWrite)
         {
-            using var cmd = _db.CreateCommand();
-            cmd.CommandText = "SELECT outline, refs FROM file_outlines WHERE path = @p AND last_write = @lw";
-            cmd.Parameters.AddWithValue("@p", filePath);
-            cmd.Parameters.AddWithValue("@lw", lastWrite);
-            using var reader = cmd.ExecuteReader();
-            if (reader.Read())
+            return new FileOutline
             {
-                var cachedOutline = reader.GetString(0);
-                var cachedRefs = reader.GetString(1).Split('|', StringSplitOptions.RemoveEmptyEntries);
-                return new FileOutline
-                {
-                    FilePath = filePath,
-                    Outline = cachedOutline,
-                    ReferencedFiles = cachedRefs,
-                    LastWrite = File.GetLastWriteTimeUtc(filePath)
-                };
-            }
+                FilePath = filePath,
+                Outline = entry.Outline,
+                ReferencedFiles = entry.Refs,
+                LastWrite = File.GetLastWriteTimeUtc(filePath)
+            };
         }
 
         return BuildAndCache(filePath, lastWrite);
@@ -101,18 +96,15 @@ public sealed class RoslynIndex : IDisposable
         var outline = BuildOutline(root, filePath);
         var refs = ExtractTypeReferences(root);
 
-        if (_db is not null)
+        if (_cache is not null)
         {
-            using var cmd = _db.CreateCommand();
-            cmd.CommandText = """
-                INSERT OR REPLACE INTO file_outlines (path, last_write, outline, refs)
-                VALUES (@p, @lw, @o, @r)
-                """;
-            cmd.Parameters.AddWithValue("@p", filePath);
-            cmd.Parameters.AddWithValue("@lw", lastWrite);
-            cmd.Parameters.AddWithValue("@o", outline);
-            cmd.Parameters.AddWithValue("@r", string.Join("|", refs));
-            cmd.ExecuteNonQuery();
+            _cache[filePath] = new CacheEntry
+            {
+                LastWrite = lastWrite,
+                Outline = outline,
+                Refs = refs
+            };
+            _dirty = true;
         }
 
         return new FileOutline
@@ -169,15 +161,16 @@ public sealed class RoslynIndex : IDisposable
         return refs.Take(100).ToList();
     }
 
-    public void Dispose() => _db?.Dispose();
-}
-
-public static class SqliteExtensions
-{
-    public static void Execute(this SqliteConnection conn, string sql)
+    public void Dispose()
     {
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = sql;
-        cmd.ExecuteNonQuery();
+        if (!_dirty || _cache is null)
+            return;
+
+        try
+        {
+            var json = JsonSerializer.Serialize(_cache);
+            File.WriteAllText(_cachePath, json);
+        }
+        catch { }
     }
 }

@@ -10,22 +10,39 @@ namespace Dotsy.Providers.Ollama;
 public sealed class OllamaProvider : IProvider
 {
     private readonly HttpClient _http;
+    private readonly int _maxContextTokens;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _thinkingCapable = new();
 
     public string Name => "ollama";
 
-    public OllamaProvider(string baseUrl = "http://localhost:11434", HttpClient? http = null)
+    public OllamaProvider(string baseUrl = "http://localhost:11434", HttpClient? http = null, int maxContextTokens = 0)
     {
         // No timeout: local models can take arbitrarily long to generate responses.
         _http = http ?? new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
         _http.BaseAddress = new Uri(baseUrl);
+        _maxContextTokens = maxContextTokens;
     }
 
-    // DYNAMIC limits. Ollama's /api/show endpoint returns per-model metadata including the
-    // architecture's context length (e.g. "llama.context_length"), so load it live. Falls back
-    // to a generic default if the model isn't found or reports no context length. Ollama does not
-    // report a max-output limit, so that stays a fixed default.
+    // DYNAMIC limits. We want the context window the model is ACTUALLY running with (num_ctx),
+    // not the architecture's maximum. Ollama loads a model at a modest default (e.g. 8192) unless
+    // told otherwise, so the two differ widely — a model capable of 256K is typically served at 8K.
+    //   1. If max_context_tokens is configured we send it as num_ctx on every chat call, so the
+    //      model runs with exactly that. It is the authoritative active window — for both the /model
+    //      display and the token budget — so it wins outright.
+    //   2. Otherwise Ollama picks the window: /api/ps reports the live num_ctx of each loaded model
+    //      (what `ollama ps` shows), so prefer it to match what generation actually honors.
+    //   3. If the model isn't loaded yet, fall back to /api/show's architecture context length
+    //      (the capability ceiling, flagged Advertised) as a best-effort estimate.
+    //   4. Failing all, a generic default. Ollama reports no max-output limit, so that stays fixed.
     public async Task<ModelInfo> GetModelInfoAsync(string modelId, CancellationToken ct)
     {
+        if (_maxContextTokens > 0)
+            return new ModelInfo(modelId, _maxContextTokens, 4_096, ModelInfoSource.Api);
+
+        var loadedCtx = await TryGetLoadedContextLengthAsync(modelId, ct);
+        if (loadedCtx is > 0)
+            return new ModelInfo(modelId, loadedCtx.Value, 4_096, ModelInfoSource.Api);
+
         try
         {
             var requestBody = new JsonObject { ["model"] = modelId }.ToJsonString();
@@ -41,7 +58,7 @@ public sealed class OllamaProvider : IProvider
                     {
                         if (prop.Name.EndsWith(".context_length", StringComparison.Ordinal)
                             && prop.Value.TryGetInt32(out var ctxLen) && ctxLen > 0)
-                            return new ModelInfo(modelId, ctxLen, 4_096, ModelInfoSource.Api);
+                            return new ModelInfo(modelId, ctxLen, 4_096, ModelInfoSource.Advertised);
                     }
                 }
             }
@@ -51,11 +68,124 @@ public sealed class OllamaProvider : IProvider
         return new ModelInfo(modelId, 128_000, 4_096);
     }
 
+    // The context window (num_ctx) the model is currently loaded with, via /api/ps — the same
+    // figure `ollama ps` prints under CONTEXT. Returns null when the model isn't running (nothing
+    // is loaded until the first request) or the running Ollama is too old to report context_length.
+    private async Task<int?> TryGetLoadedContextLengthAsync(string modelId, CancellationToken ct)
+    {
+        try
+        {
+            var resp = await _http.GetAsync("/api/ps", ct);
+            if (!resp.IsSuccessStatusCode)
+                return null;
+
+            var json = await resp.Content.ReadAsStringAsync(ct);
+            var root = JsonDocument.Parse(json).RootElement;
+            if (!root.TryGetProperty("models", out var models) || models.ValueKind != JsonValueKind.Array)
+                return null;
+
+            foreach (var m in models.EnumerateArray())
+            {
+                if (!ModelNameMatches(m.GetStringPropertyOrEmpty("name"), modelId)
+                    && !ModelNameMatches(m.GetStringPropertyOrEmpty("model"), modelId))
+                    continue;
+
+                if (m.TryGetProperty("context_length", out var ctxLen)
+                    && ctxLen.TryGetInt32(out var n) && n > 0)
+                    return n;
+            }
+        }
+        catch { }
+
+        return null;
+    }
+
+    // Matches a loaded model name against the configured id, tolerating an implicit ":latest" tag
+    // on either side (config may say "qwen3" while /api/ps reports "qwen3:latest").
+    private static bool ModelNameMatches(string loaded, string requested)
+    {
+        if (string.IsNullOrEmpty(loaded) || string.IsNullOrEmpty(requested))
+            return false;
+        if (string.Equals(loaded, requested, StringComparison.Ordinal))
+            return true;
+
+        static string StripLatest(string s) =>
+            s.EndsWith(":latest", StringComparison.Ordinal) ? s[..^":latest".Length] : s;
+        return string.Equals(StripLatest(loaded), StripLatest(requested), StringComparison.Ordinal);
+    }
+
+    // Lists locally-installed models via /api/tags. That endpoint reports names but not context
+    // length (which lives in /api/show per model), so report a generic default here; callers that
+    // need accurate limits resolve them via GetModelInfoAsync.
+    public async Task<IReadOnlyList<ModelInfo>> GetModelsAsync(CancellationToken ct)
+    {
+        try
+        {
+            var resp = await _http.GetAsync("/api/tags", ct);
+            if (resp.IsSuccessStatusCode)
+            {
+                var json = await resp.Content.ReadAsStringAsync(ct);
+                var root = JsonDocument.Parse(json).RootElement;
+                if (root.TryGetProperty("models", out var models) && models.ValueKind == JsonValueKind.Array)
+                {
+                    return models.EnumerateArray()
+                        .Select(m => m.GetStringPropertyOrEmpty("name"))
+                        .Where(name => !string.IsNullOrEmpty(name))
+                        .Select(name => new ModelInfo(name, 128_000, 4_096, ModelInfoSource.Api))
+                        .ToList();
+                }
+            }
+        }
+        catch { }
+
+        return [];
+    }
+
+    // Whether the model advertises the "thinking" capability via /api/show. Sending
+    // think:true to a model that lacks it returns a 400, so we must check first.
+    // Cached per model since capabilities don't change within a process.
+    private async Task<bool> SupportsThinkingAsync(string modelId, CancellationToken ct)
+    {
+        if (_thinkingCapable.TryGetValue(modelId, out var cached))
+            return cached;
+
+        bool supported = false;
+        try
+        {
+            var requestBody = new JsonObject { ["model"] = modelId }.ToJsonString();
+            var content = new StringContent(requestBody, Encoding.UTF8, "application/json");
+            var resp = await _http.PostAsync("/api/show", content, ct);
+            if (resp.IsSuccessStatusCode)
+            {
+                var json = await resp.Content.ReadAsStringAsync(ct);
+                var root = JsonDocument.Parse(json).RootElement;
+                if (root.TryGetProperty("capabilities", out var caps) && caps.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var cap in caps.EnumerateArray())
+                    {
+                        if (cap.ValueKind == JsonValueKind.String &&
+                            string.Equals(cap.GetString(), "thinking", StringComparison.Ordinal))
+                        {
+                            supported = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        catch { }
+
+        _thinkingCapable[modelId] = supported;
+        return supported;
+    }
+
     public async IAsyncEnumerable<ProviderEvent> StreamAsync(
         ChatRequest request,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        var body = BuildRequestBody(request);
+        // Ask thinking-capable models to emit reasoning in a separate `thinking` field.
+        var think = await SupportsThinkingAsync(request.ModelId, ct);
+        var body = BuildRequestBody(request, think, _maxContextTokens);
         var content = new StringContent(body, Encoding.UTF8, "application/json");
 
         HttpResponseMessage? resp = null;
@@ -95,13 +225,20 @@ public sealed class OllamaProvider : IProvider
             yield return ev;
     }
 
-    private static string BuildRequestBody(ChatRequest request)
+    private static string BuildRequestBody(ChatRequest request, bool think, int maxContextTokens)
     {
         var obj = new JsonObject
         {
             ["model"] = request.ModelId,
             ["stream"] = true
         };
+        if (think)
+            obj["think"] = true;
+
+        // Size the context window the model is loaded/run with. Without num_ctx, Ollama uses a small
+        // server default (often 8192) regardless of the model's capacity, silently truncating input.
+        if (maxContextTokens > 0)
+            obj["options"] = new JsonObject { ["num_ctx"] = maxContextTokens };
 
         var messages = new JsonArray();
         if (!string.IsNullOrEmpty(request.SystemPrompt))
@@ -199,10 +336,8 @@ public sealed class OllamaProvider : IProvider
         using var stream = await resp.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
 
-        var tcIds = new Dictionary<int, string>();
-        var tcNames = new Dictionary<int, string>();
-        var tcArgs = new Dictionary<int, StringBuilder>();
         var rawToolCalls = new RawToolCallParser();
+        var thinkParser = new ThinkTagParser();
 
         while (!ct.IsCancellationRequested)
         {
@@ -219,14 +354,32 @@ public sealed class OllamaProvider : IProvider
 
             if (chunk.TryGetProperty("message", out var message))
             {
+                // Native reasoning field, emitted when think:true and the model supports it.
+                if (message.TryGetProperty("thinking", out var thinkingProp) &&
+                    thinkingProp.ValueKind == JsonValueKind.String)
+                {
+                    var reasoning = thinkingProp.GetString() ?? "";
+                    if (reasoning.Length > 0)
+                        yield return new ThinkingDelta(reasoning);
+                }
+
                 if (message.TryGetProperty("content", out var contentProp) &&
                     contentProp.ValueKind == JsonValueKind.String)
                 {
                     var text = contentProp.GetString() ?? "";
                     if (text.Length > 0)
                     {
-                        foreach (var ev in rawToolCalls.Process(text))
-                            yield return ev;
+                        // Some models inline reasoning as <think>…</think> in content rather than
+                        // the dedicated field; split it out so it renders as thinking, and run the
+                        // remaining answer text through the tool-call parser.
+                        foreach (var seg in thinkParser.Process(text))
+                        {
+                            if (seg.IsThinking)
+                                yield return new ThinkingDelta(seg.Text);
+                            else
+                                foreach (var ev in rawToolCalls.Process(seg.Text))
+                                    yield return ev;
+                        }
                     }
                 }
 
@@ -249,6 +402,14 @@ public sealed class OllamaProvider : IProvider
 
             if (done)
             {
+                foreach (var seg in thinkParser.Complete())
+                {
+                    if (seg.IsThinking)
+                        yield return new ThinkingDelta(seg.Text);
+                    else
+                        foreach (var ev in rawToolCalls.Process(seg.Text))
+                            yield return ev;
+                }
                 foreach (var ev in rawToolCalls.Complete())
                     yield return ev;
                 if (chunk.TryGetProperty("eval_count", out var evalCount))
@@ -401,6 +562,69 @@ public sealed class OllamaProvider : IProvider
             {
                 return JsonValue.Create(value)!;
             }
+        }
+    }
+
+    // Splits a streamed content string into plain-text and <think>…</think> reasoning
+    // segments, tolerating tags that straddle chunk boundaries (a trailing partial tag is
+    // held back until the next chunk completes or disproves it).
+    private sealed class ThinkTagParser
+    {
+        private const string OpenTag = "<think>";
+        private const string CloseTag = "</think>";
+        private readonly StringBuilder _buffer = new();
+        private bool _inThink;
+
+        public readonly record struct Segment(bool IsThinking, string Text);
+
+        public IEnumerable<Segment> Process(string text)
+        {
+            _buffer.Append(text);
+
+            while (_buffer.Length > 0)
+            {
+                var current = _buffer.ToString();
+                var (tag, isThinking) = _inThink ? (CloseTag, true) : (OpenTag, false);
+                var at = current.IndexOf(tag, StringComparison.Ordinal);
+
+                if (at < 0)
+                {
+                    // No complete tag. Emit everything except a possible partial tag at the end.
+                    var keep = LongestSuffixThatStarts(tag, current);
+                    var emit = current.Length - keep;
+                    if (emit > 0)
+                    {
+                        yield return new Segment(isThinking, current[..emit]);
+                        _buffer.Remove(0, emit);
+                    }
+                    yield break;
+                }
+
+                if (at > 0)
+                    yield return new Segment(isThinking, current[..at]);
+                _buffer.Remove(0, at + tag.Length);
+                _inThink = !_inThink;
+            }
+        }
+
+        public IEnumerable<Segment> Complete()
+        {
+            if (_buffer.Length == 0)
+                yield break;
+            var text = _buffer.ToString();
+            _buffer.Clear();
+            yield return new Segment(_inThink, text);
+        }
+
+        private static int LongestSuffixThatStarts(string prefix, string text)
+        {
+            var max = Math.Min(prefix.Length - 1, text.Length);
+            for (var len = max; len > 0; len--)
+            {
+                if (text.AsSpan(text.Length - len, len).SequenceEqual(prefix.AsSpan(0, len)))
+                    return len;
+            }
+            return 0;
         }
     }
 }

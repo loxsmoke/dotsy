@@ -164,12 +164,30 @@ internal static class ToolSchemas
         {
           "type": "object",
           "properties": {
-            "items": {
-              "type": "array",
-              "items": { "type": "string" }
+            "action": {
+              "type": "string",
+              "enum": ["list_sections", "list_tasks", "set_status"],
+              "description": "list_sections: sections with task counts. list_tasks: tasks filtered by section/status. set_status: mark a task done or not done."
+            },
+            "section": {
+              "type": "string",
+              "description": "list_tasks only: limit to a section by its title or leading number (e.g. \"Bug fixes\" or \"2\"). Omit for all sections."
+            },
+            "status": {
+              "type": "string",
+              "enum": ["todo", "done", "all"],
+              "description": "list_tasks only: filter by completion. Defaults to todo."
+            },
+            "task": {
+              "type": "integer",
+              "description": "set_status only: the 1-based task index returned by list_tasks."
+            },
+            "done": {
+              "type": "boolean",
+              "description": "set_status only: true marks the task done ([x]), false reopens it ([ ])."
             }
           },
-          "required": ["items"]
+          "required": ["action"]
         }
         """);
 

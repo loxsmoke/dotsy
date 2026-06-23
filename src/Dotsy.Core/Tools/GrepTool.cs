@@ -1,11 +1,10 @@
 using System.Text;
 using System.Text.Json;
-
-using Dotsy.Core.Loop;
 using Dotsy.Core.Utils;
 using Dotsy.Core.Tools.Interfaces;
 using Ivy.Ripgrep;
 using Microsoft.Extensions.Logging.Abstractions;
+using Dotsy.Core.Loop.Data;
 
 namespace Dotsy.Core.Tools;
 

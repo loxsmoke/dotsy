@@ -18,6 +18,10 @@
     <ProjectReference Include="..\Dotsy.Mcp\Dotsy.Mcp.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Dotsy.Core.Tests" />
+  </ItemGroup>
+
   <ItemGroup Condition="'$(UseTerminalGuiSource)' == 'true'">
     <ProjectReference Include="$(TerminalGuiSourceRoot)\Terminal.Gui\Terminal.Gui.csproj" />
   </ItemGroup>
@@ -27,7 +31,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="LibGit2Sharp" Version="0.30.0" />
+    <PackageReference Include="LibGit2Sharp" Version="0.31.0" />
     <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
   </ItemGroup>
 

@@ -1,6 +1,6 @@
 using Dotsy.Core.Providers;
 
-namespace Dotsy.Core.Loop;
+namespace Dotsy.Core.Loop.Data;
 
 public sealed class TokenUsageTracker
 {

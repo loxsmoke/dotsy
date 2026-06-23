@@ -1,5 +1,7 @@
 using Dotsy.Core.Config;
 using Dotsy.Core.Loop;
+using Dotsy.Core.Loop.Data;
+using Dotsy.Core.Skills;
 
 namespace Dotsy.Core.Tests;
 
@@ -42,6 +44,55 @@ public sealed class SystemPromptBuilderTests
             StringAssert.Contains(prompt, "Files added via /add are read-only context");
             StringAssert.Contains(prompt, "<file path=\"notes.txt\">");
             StringAssert.Contains(prompt, "important context");
+        }
+        finally
+        {
+            if (Directory.Exists(tmp))
+                Directory.Delete(tmp, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public async Task Build_InjectsProjectContextFromAgentsMd()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), $"dotsy_prompt_agents_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(tmp, "AGENTS.md"),
+                "The solution file is Dotsy.slnx (not .sln).\n");
+            var config = DefaultConfig.Create();
+            config.Agent.InjectEnvironment = false;
+            config.Retrieval.RepoMapTokens = 0;
+
+            var prompt = SystemPromptBuilder.Build(config, tmp, new LoopContext());
+
+            StringAssert.Contains(prompt, "<project_context>");
+            StringAssert.Contains(prompt, "from AGENTS.md");
+            StringAssert.Contains(prompt, "The solution file is Dotsy.slnx (not .sln).");
+        }
+        finally
+        {
+            if (Directory.Exists(tmp))
+                Directory.Delete(tmp, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    public void Build_OmitsProjectContextWhenNoAgentsMd()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), $"dotsy_prompt_noagents_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            var config = DefaultConfig.Create();
+            config.Agent.InjectEnvironment = false;
+            config.Retrieval.RepoMapTokens = 0;
+
+            var prompt = SystemPromptBuilder.Build(config, tmp, new LoopContext());
+
+            Assert.IsFalse(prompt.Contains("<project_context>", StringComparison.Ordinal));
         }
         finally
         {
