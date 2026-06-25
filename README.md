@@ -1,7 +1,7 @@
 # Dotsy
 
 [![CI](https://github.com/loxsmoke/dotsy/actions/workflows/ci.yml/badge.svg)](https://github.com/loxsmoke/dotsy/actions/workflows/ci.yml)
-[![Coverage](https://img.shields.io/badge/coverage-unknown-lightgrey)](https://github.com/loxsmoke/dotsy/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/badge/coverage-33.47%25-orange)](https://github.com/loxsmoke/dotsy/actions/workflows/ci.yml)
 
 Dotsy is an AI coding assistant written in C# and .NET. It provides a terminal-first agent experience with a TUI, multi-provider model support, MCP tooling, repository-aware code retrieval, session history, and headless command execution.
 
