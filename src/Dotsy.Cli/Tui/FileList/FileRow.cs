@@ -1,6 +1,4 @@
-using Terminal.Gui;
-
-namespace Dotsy.Cli.Tui;
+namespace Dotsy.Cli.Tui.FileList;
 
 internal sealed record FileRow(string Path, int Added, int Deleted, FileChangeType ChangeType, List<List<Cell>> Diff)
 {

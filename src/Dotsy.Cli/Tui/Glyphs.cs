@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using TextRune = System.Text.Rune;
 
@@ -55,5 +56,32 @@ internal static class Glyphs
         foreach (var r in text.EnumerateRunes())
             sb.Append(Safe(r).ToString());
         return sb.ToString();
+    }
+
+    public static int GetColumns(Rune rune)
+    {
+        var category = CharUnicodeInfo.GetUnicodeCategory(rune.ToString(), 0);
+        if (category is UnicodeCategory.Format
+            or UnicodeCategory.NonSpacingMark
+            or UnicodeCategory.EnclosingMark)
+            return 0;
+
+        var value = rune.Value;
+        if (value is '\r' or '\n')
+            return 0;
+
+        if ((value >= 0x1100 && value <= 0x115f)
+            || (value >= 0x2329 && value <= 0x232a)
+            || (value >= 0x2e80 && value <= 0xa4cf)
+            || (value >= 0xac00 && value <= 0xd7a3)
+            || (value >= 0xf900 && value <= 0xfaff)
+            || (value >= 0xfe10 && value <= 0xfe19)
+            || (value >= 0xfe30 && value <= 0xfe6f)
+            || (value >= 0xff00 && value <= 0xff60)
+            || (value >= 0xffe0 && value <= 0xffe6)
+            || (value >= 0x1f300 && value <= 0x1faff))
+            return 2;
+
+        return 1;
     }
 }

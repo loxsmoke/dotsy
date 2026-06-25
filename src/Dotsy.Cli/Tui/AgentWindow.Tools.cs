@@ -1,7 +1,9 @@
+using Dotsy.Cli.Tui.Approval;
+using Dotsy.Cli.Tui.Colors;
+using Dotsy.Cli.Tui.ToolList;
 using Dotsy.Core.Tools;
+using Dotsy.Core.Tools.Interfaces;
 using Dotsy.Core.Utils;
-using Terminal.Gui;
-using TGAttribute = Terminal.Gui.Attribute;
 
 namespace Dotsy.Cli.Tui;
 
@@ -11,24 +13,15 @@ public partial class AgentWindow
         new([WriteTool.ToolName, EditTool.ToolName, MultiEditTool.ToolName], StringComparer.OrdinalIgnoreCase);
 
     #region Approval overlay
-    public async Task<ApprovalChoice> ShowApproval(string toolName, string displayArg)
+    public Task<ApprovalChoice> ShowApproval(ITool tool, string displayArg)
     {
-        approvalTcs = new TaskCompletionSource<ApprovalChoice>();
-        Application.Invoke(() =>
-        {
-            approvalMsg.Text = $"  {toolName}  {displayArg}";
-            if (btnProject is not null)
-                btnProject.Visible = WriteToolNames.Contains(toolName);
-            approvalFrame.Visible = true;
-            FocusFirstApprovalButton();
-        });
-        return await approvalTcs.Task;
+        return approvalView.ShowAsync(tool.Name, displayArg, tool.IsWriteTool);
     }
-    private static string FormatRunApproval(string toolName, string rawArgs, string cwd)
+    private static string FormatRunApproval(ITool tool, string rawArgs, string cwd)
     {
         try
         {
-            if (TuiSessionContext.Registry?.TryGetTool(toolName, out var tool) != true || tool is null)
+            if (tool is null)
                 return rawArgs;
 
             using var doc = System.Text.Json.JsonDocument.Parse(rawArgs);
@@ -40,36 +33,6 @@ public partial class AgentWindow
         }
     }
 
-    private void AcceptApproval(ApprovalChoice choice)
-    {
-        Application.Invoke(() =>
-        {
-            approvalFrame.Visible = false;
-            promptInput.SetFocus();
-        });
-        approvalTcs?.TrySetResult(choice);
-    }
-
-    // Visible buttons of the approval overlay, in display order.
-    private List<FlatButton> ApprovalButtons() =>
-        approvalFrame.Subviews.OfType<FlatButton>().Where(b => b.Visible).ToList();
-
-    private void FocusFirstApprovalButton()
-    {
-        var first = ApprovalButtons().FirstOrDefault();
-        if (first is not null) first.SetFocus();
-        else approvalFrame.SetFocus();
-    }
-
-    private void CycleApprovalFocus(bool back)
-    {
-        var buttons = ApprovalButtons();
-        if (buttons.Count == 0) { approvalFrame.SetFocus(); return; }
-        var focused = Application.Navigation?.GetFocused();
-        int idx = buttons.FindIndex(b => b == focused);
-        int next = idx < 0 ? 0 : ((idx + (back ? -1 : 1)) % buttons.Count + buttons.Count) % buttons.Count;
-        buttons[next].SetFocus();
-    }
     #endregion
 
     #region Tool call list handlers
@@ -79,7 +42,7 @@ public partial class AgentWindow
         var row = toolCallRows[e.Row];
         var selected = toolCallList.HasFocus && toolCallList.SelectedItem == e.Row;
         e.RowAttribute = selected
-            ? new TGAttribute(ColorName16.White, ColorName16.DarkGray)
+            ? Palette.SelRow
             : row.Status switch
             {
                 "OK" => Palette.Success,
@@ -92,23 +55,23 @@ public partial class AgentWindow
 
     private void OnToolSelected(object? sender, ListViewItemEventArgs e)
     {
+        if (IsOverlayVisible()) return;
         if (e.Value is ToolRow row && row.Name.Length > 0)
             ShowInspect(row);
     }
     #endregion
 
-
     #region Tool call panel functions
     // ══ Public thread-safe tool API ═══════════════════════════════════════════
 
-    public int AddTool(string name, string arg, string cwd = "", int group = 0, string? parameters = null)
+    public int AddTool(string name, string arg, string cwd = "", int group = 0, string? parameters = null, int? turnNumber = null)
     {
         var idx = Interlocked.Increment(ref toolCallCount) - 1;
-        Application.Invoke(() =>
+        TuiSessionContext.App.Invoke(() =>
         {
             while (toolCallRows.Count <= idx)
                 toolCallRows.Add(new ToolRow("", "", "PENDING", 0, DateTimeOffset.Now));
-            toolCallRows[idx] = new ToolRow(name, arg, "RUNNING", 0, DateTimeOffset.Now, cwd, Group: group, Parameters: parameters);
+            toolCallRows[idx] = new ToolRow(name, arg, "RUNNING", 0, DateTimeOffset.Now, cwd, Group: group, Parameters: parameters, TurnNumber: turnNumber);
             ScrollToolListToEnd();
         });
         return idx;
@@ -119,13 +82,13 @@ public partial class AgentWindow
     private void ScrollToolListToEnd()
     {
         int vh = Math.Max(1, toolCallList.Viewport.Height);
-        toolCallList.TopItem = Math.Max(0, toolCallRows.Count - vh);
+        toolCallList.TopItemCompat = Math.Max(0, toolCallRows.Count - vh);
         toolCallList.SetNeedsDraw();
     }
 
     public void UpdateTool(int idx, string status, int elapsedSec)
     {
-        Application.Invoke(() =>
+        TuiSessionContext.App.Invoke(() =>
         {
             if (idx < toolCallRows.Count)
                 toolCallRows[idx] = toolCallRows[idx] with { Status = status, Elapsed = elapsedSec };
@@ -134,7 +97,7 @@ public partial class AgentWindow
 
     public void UpdateToolArg(int idx, string arg)
     {
-        Application.Invoke(() =>
+        TuiSessionContext.App.Invoke(() =>
         {
             if (idx < toolCallRows.Count)
                 toolCallRows[idx] = toolCallRows[idx] with { Arg = arg };
@@ -151,7 +114,7 @@ public partial class AgentWindow
 
     public void SetToolOutput(int idx, List<List<Cell>> output)
     {
-        Application.Invoke(() =>
+        TuiSessionContext.App.Invoke(() =>
         {
             if (idx < toolCallRows.Count)
                 toolCallRows[idx] = toolCallRows[idx] with { Output = output };
@@ -191,6 +154,11 @@ public partial class AgentWindow
 
     private void ShowInspect(ToolRow row)
     {
+        inspectReturnFocus = toolCallList;
+        inspectFrame.Title = row.TurnNumber is { } turnNumber
+            ? $" Inspection. Turn {turnNumber}  [ Esc close ] "
+            : " Inspection  [ Esc close ] ";
+
         var lines = new List<List<Cell>>();
         void AddLine(string text, TGAttribute attr) => lines.Add(TextToCells(text, attr));
 
@@ -236,15 +204,14 @@ public partial class AgentWindow
             AddLine("  (no output recorded)", Palette.Dim);
         }
 
-        inspectText.Load(lines);
+        inspectText.LoadText(lines);
         ShowInspectFrame();
     }
 
     private void ShowInspectFrame()
     {
         promptInput.Visible = false;
-        inspectText.ScrollTo(0);
-        inspectText.ScrollTo(0, false);
+        inspectText.ScrollTo(new System.Drawing.Point(0, 0));
         inspectFrame.Visible = true;
         inspectText.SetFocus();
     }
@@ -252,9 +219,16 @@ public partial class AgentWindow
     private void HideInspect()
     {
         inspectFrame.Visible = false;
-        promptLabel.Visible = true;
-        promptInput.Visible = true;
-        toolCallList.SetFocus();
+        if (approvalView.Visible)
+        {
+            approvalView.FocusFirstButton();
+        }
+        else
+        {
+            promptLabel.Visible = true;
+            promptInput.Visible = true;
+            (inspectReturnFocus ?? toolCallList).SetFocus();
+        }
     }
 
     // Builds a colored inspect view for Edit / MultiEdit showing output then input parameters.

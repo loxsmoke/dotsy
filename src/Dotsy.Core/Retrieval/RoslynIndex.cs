@@ -16,9 +16,9 @@ public sealed class FileOutline
 
 public sealed class RoslynIndex : IDisposable
 {
-    private readonly string _cachePath;
-    private Dictionary<string, CacheEntry>? _cache;
-    private bool _dirty;
+    private readonly string cachePath;
+    private Dictionary<string, CacheEntry>? cache;
+    private bool dirty;
 
     private sealed class CacheEntry
     {
@@ -29,22 +29,22 @@ public sealed class RoslynIndex : IDisposable
 
     public RoslynIndex(string cacheDir)
     {
-        _cachePath = Path.Combine(cacheDir, "roslyn-index.json");
+        cachePath = Path.Combine(cacheDir, "roslyn-index.json");
         Directory.CreateDirectory(cacheDir);
     }
 
     public void Open()
     {
-        if (File.Exists(_cachePath))
+        if (File.Exists(cachePath))
         {
             try
             {
-                var json = File.ReadAllText(_cachePath);
-                _cache = JsonSerializer.Deserialize<Dictionary<string, CacheEntry>>(json);
+                var json = File.ReadAllText(cachePath);
+                cache = JsonSerializer.Deserialize<Dictionary<string, CacheEntry>>(json);
             }
-            catch { _cache = null; }
+            catch { cache = null; }
         }
-        _cache ??= new Dictionary<string, CacheEntry>();
+        cache ??= new Dictionary<string, CacheEntry>();
     }
 
     public IReadOnlyList<FileOutline> ScanDirectory(string root, int maxFiles = 200)
@@ -68,8 +68,8 @@ public sealed class RoslynIndex : IDisposable
     {
         var lastWrite = File.GetLastWriteTimeUtc(filePath).ToString("O");
 
-        if (_cache is not null
-            && _cache.TryGetValue(filePath, out var entry)
+        if (cache is not null
+            && cache.TryGetValue(filePath, out var entry)
             && entry.LastWrite == lastWrite)
         {
             return new FileOutline
@@ -96,15 +96,15 @@ public sealed class RoslynIndex : IDisposable
         var outline = BuildOutline(root, filePath);
         var refs = ExtractTypeReferences(root);
 
-        if (_cache is not null)
+        if (cache is not null)
         {
-            _cache[filePath] = new CacheEntry
+            cache[filePath] = new CacheEntry
             {
                 LastWrite = lastWrite,
                 Outline = outline,
                 Refs = refs
             };
-            _dirty = true;
+            dirty = true;
         }
 
         return new FileOutline
@@ -163,13 +163,13 @@ public sealed class RoslynIndex : IDisposable
 
     public void Dispose()
     {
-        if (!_dirty || _cache is null)
+        if (!dirty || cache is null)
             return;
 
         try
         {
-            var json = JsonSerializer.Serialize(_cache);
-            File.WriteAllText(_cachePath, json);
+            var json = JsonSerializer.Serialize(cache);
+            File.WriteAllText(cachePath, json);
         }
         catch { }
     }

@@ -10,45 +10,44 @@ namespace Dotsy.Mcp;
 
 public sealed class McpClient : IDisposable
 {
-    private readonly McpServerConfig _config;
-    private readonly HttpClient? _http;
-    private Process? _process;
-    private StreamWriter? _stdin;
-    private StreamReader? _stdout;
-    private int _requestId;
-    private readonly object _lock = new();
+    private readonly McpServerConfig serverConfig;
+    private readonly HttpClient? httpClient;
+    private Process? process;
+    private StreamWriter? stdin;
+    private StreamReader? stdout;
+    private int requestId;
 
-    public string ServerName => _config.Name;
+    public string ServerName => serverConfig.Name;
     public bool IsConnected { get; private set; }
 
     public McpClient(McpServerConfig config, HttpClient? http = null)
     {
-        _config = config;
-        _http = http ?? new HttpClient();
+        serverConfig = config;
+        httpClient = http ?? new HttpClient();
     }
 
     public async Task ConnectAsync(CancellationToken ct)
     {
-        if (_config.Transport == McpTransport.Stdio)
+        if (serverConfig.Transport == McpTransport.Stdio)
         {
-            if (string.IsNullOrEmpty(_config.Command))
+            if (string.IsNullOrEmpty(serverConfig.Command))
                 throw new InvalidOperationException("stdio transport requires a command");
 
-            _process = new Process
+            process = new Process
             {
                 StartInfo = new ProcessStartInfo
                 {
-                    FileName = _config.Command,
-                    Arguments = string.Join(" ", _config.Args),
+                    FileName = serverConfig.Command,
+                    Arguments = string.Join(" ", serverConfig.Args),
                     RedirectStandardInput = true,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false
                 }
             };
-            _process.Start();
-            _stdin = _process.StandardInput;
-            _stdout = _process.StandardOutput;
+            process.Start();
+            stdin = process.StandardInput;
+            stdout = process.StandardOutput;
 
             // Send initialize
             await SendRequestAsync("initialize", new JsonObject
@@ -77,7 +76,7 @@ public sealed class McpClient : IDisposable
                     ? s.Clone()
                     : JsonDocument.Parse("{}").RootElement;
 
-                tools.Add(new McpToolDefinition(name, desc, schema, _config.Name));
+                tools.Add(new McpToolDefinition(name, desc, schema, serverConfig.Name));
             }
         }
 
@@ -117,8 +116,7 @@ public sealed class McpClient : IDisposable
 
     private async Task<JsonElement?> SendRequestAsync(string method, JsonNode? params_, CancellationToken ct)
     {
-        int id;
-        lock (_lock) { id = ++_requestId; }
+        int id = Interlocked.Increment(ref requestId);
 
         var request = new JsonObject
         {
@@ -130,10 +128,10 @@ public sealed class McpClient : IDisposable
 
         var json = request.ToJsonString();
 
-        if (_config.Transport == McpTransport.Http)
+        if (serverConfig.Transport == McpTransport.Http)
         {
-            var resp = await _http!.PostAsync(
-                _config.Url,
+            var resp = await httpClient!.PostAsync(
+                serverConfig.Url,
                 new StringContent(json, Encoding.UTF8, "application/json"),
                 ct);
             var body = await resp.Content.ReadAsStringAsync(ct);
@@ -141,13 +139,13 @@ public sealed class McpClient : IDisposable
         }
         else
         {
-            if (_stdin is null || _stdout is null)
+            if (stdin is null || stdout is null)
                 throw new InvalidOperationException("Not connected");
 
-            await _stdin.WriteLineAsync(json);
-            await _stdin.FlushAsync(ct);
+            await stdin.WriteLineAsync(json);
+            await stdin.FlushAsync(ct);
 
-            var response = await _stdout.ReadLineAsync(ct);
+            var response = await stdout.ReadLineAsync(ct);
             return response is null ? null : ParseResponse(response);
         }
     }
@@ -177,10 +175,10 @@ public sealed class McpClient : IDisposable
 
     public void Dispose()
     {
-        _stdin?.Dispose();
-        _stdout?.Dispose();
-        try { _process?.Kill(); } catch { }
-        _process?.Dispose();
+        stdin?.Dispose();
+        stdout?.Dispose();
+        try { process?.Kill(); } catch { }
+        process?.Dispose();
         IsConnected = false;
     }
 }

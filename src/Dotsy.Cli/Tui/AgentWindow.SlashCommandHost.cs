@@ -1,6 +1,6 @@
 using Dotsy.Cli.SlashCommands.Interfaces;
-using Terminal.Gui;
-using TGAttribute = Terminal.Gui.Attribute;
+using Dotsy.Cli.Tui.Colors;
+using Dotsy.Core.Session.Data;
 
 namespace Dotsy.Cli.Tui;
 
@@ -15,11 +15,14 @@ public partial class AgentWindow : ISlashCommandHost
 
     void ISlashCommandHost.WriteError(string message) => AppendConvoError(message);
 
-    void ISlashCommandHost.WriteDescription(int nameWidth, string name, string description, TGAttribute? nameColor)
+    void ISlashCommandHost.WriteDescription(int nameWidth, string name, string description, TGAttribute? nameColor) =>
+        WriteDescription(nameWidth, name, description, nameColor);
+
+    private void WriteDescription(int nameWidth, string name, string description, TGAttribute? nameColor = null)
     {
         const int indent = 2;
         var nameCol = indent + nameWidth;
-        var descWidth = Math.Max(20, convo.Frame.Width - nameCol - 1);
+        var descWidth = Math.Max(20, convo.Frame.Width - nameCol);
         var contIndent = new string(' ', nameCol);
         var lines = WordWrap(description, descWidth);
 
@@ -33,9 +36,9 @@ public partial class AgentWindow : ISlashCommandHost
 
     void ISlashCommandHost.SetState(string state) => SetStatus(state);
 
-    void ISlashCommandHost.SetModel(string id) => Application.Invoke(() => statusBar.SetModel(id));
+    void ISlashCommandHost.SetModel(string id) => TuiSessionContext.App.Invoke(() => statusBar.SetModel(id));
 
-    void ISlashCommandHost.SetSession(string id) => Application.Invoke(() => statusBar.SetSession(id));
+    void ISlashCommandHost.SetSession(string id) => TuiSessionContext.App.Invoke(() => statusBar.SetSession(id));
 
     void ISlashCommandHost.UpdateStatusBarFromCtx() => UpdateStatusBarFromCtx();
 
@@ -45,6 +48,8 @@ public partial class AgentWindow : ISlashCommandHost
 
     void ISlashCommandHost.RefreshChangedFiles() => RefreshChangedFiles();
 
+    void ISlashCommandHost.RenderLoadedSession(LoadedSession loaded) => RenderLoadedSession(loaded);
+
     IReadOnlyList<SlashCommandUsage> ISlashCommandHost.CommandUsages => SlashCommands.Usages;
 
     (string Resolved, bool FellBack) ISlashCommandHost.ApplyTheme(string value)
@@ -52,7 +57,7 @@ public partial class AgentWindow : ISlashCommandHost
         var previousTheme = Palette.ActiveTheme;
         var (resolved, fellBack) = Palette.Apply(value);
         var recolor = Palette.BuildRecolorMap(previousTheme);
-        Application.Invoke(() => ReapplyTheme(recolor));
+        TuiSessionContext.App.Invoke(() => ReapplyTheme(recolor));
         return (resolved, fellBack);
     }
 
@@ -73,9 +78,9 @@ public partial class AgentWindow : ISlashCommandHost
         scenarioCts = null;
     }
 
-    void ISlashCommandHost.RequestStop() => Application.RequestStop();
+    void ISlashCommandHost.RequestStop() => TuiSessionContext.App.RequestStop();
 
-    void ISlashCommandHost.Invoke(Action action) => Application.Invoke(action);
+    void ISlashCommandHost.Invoke(Action action) => TuiSessionContext.App.Invoke(action);
 
     /// <summary>
     /// Clears the conversation buffer, tool log and changed-files panel, returning the left pane to

@@ -7,22 +7,22 @@ namespace Dotsy.Core.Session;
 
 public sealed class TrajectoryRecorder
 {
-    private readonly DotsyConfig _config;
-    private readonly string _cwd;
-    private readonly DateTimeOffset _startedAt = DateTimeOffset.UtcNow;
-    private ChatRequest? _initialRequest;
+    private readonly DotsyConfig config;
+    private readonly string cwd;
+    private readonly DateTimeOffset startedAt = DateTimeOffset.UtcNow;
+    private ChatRequest? initialRequest;
 
     public TrajectoryTokenUsage TokenUsage { get; } = new();
 
     public TrajectoryRecorder(DotsyConfig config, string cwd)
     {
-        _config = config;
-        _cwd = cwd;
+        this.config = config;
+        this.cwd = cwd;
     }
 
     public void CaptureInitialRequest(ChatRequest request)
     {
-        _initialRequest ??= request;
+        initialRequest ??= request;
     }
 
     public void RecordUsage(int inputTokens, int outputTokens, int cacheReadTokens, int cacheWriteTokens)
@@ -35,38 +35,38 @@ public sealed class TrajectoryRecorder
 
     public void Export(LoopContext ctx, EndReason reason, string? error = null)
     {
-        if (!_config.Trajectory.Enabled || _initialRequest is null)
+        if (!config.Trajectory.Enabled || initialRequest is null)
             return;
 
         var endedAt = DateTimeOffset.UtcNow;
         var doc = new TrajectoryDocument
         {
             Question = FirstUserQuestion(ctx),
-            AgentPrompt = _initialRequest.SystemPrompt,
-            EnabledTools = [.. _initialRequest.Tools.Select(t => t.Name)],
-            SkillsPath = string.Join(Path.PathSeparator, _config.Skills.Paths),
+            AgentPrompt = initialRequest.SystemPrompt,
+            EnabledTools = [.. initialRequest.Tools.Select(t => t.Name)],
+            SkillsPath = string.Join(Path.PathSeparator, config.Skills.Paths),
             Uuid = ctx.SessionId,
-            Messages = TrajectoryConverter.ToOpenAiMessages(_initialRequest.SystemPrompt, ctx),
-            Tools = TrajectoryConverter.ToToolRows(_initialRequest.Tools),
+            Messages = TrajectoryConverter.ToOpenAiMessages(initialRequest.SystemPrompt, ctx),
+            Tools = TrajectoryConverter.ToToolRows(initialRequest.Tools),
             Metadata = new TrajectoryMetadata
             {
                 Uuid = ctx.SessionId,
-                Cwd = _cwd,
-                GitBranch = TryGetGitBranch(_cwd),
-                GitCommit = TryGetGitCommit(_cwd),
-                Model = _config.Model.ActiveModelId,
-                Provider = _config.Model.Provider,
-                StartedAt = _startedAt,
+                Cwd = cwd,
+                GitBranch = TryGetGitBranch(cwd),
+                GitCommit = TryGetGitCommit(cwd),
+                Model = config.Model.ActiveModelId,
+                Provider = config.Model.Provider,
+                StartedAt = startedAt,
                 EndedAt = endedAt,
-                DurationMs = (long)(endedAt - _startedAt).TotalMilliseconds,
+                DurationMs = (long)(endedAt - startedAt).TotalMilliseconds,
                 TokenUsage = TokenUsage,
                 Outcome = Outcome(reason),
                 Error = error
             }
         };
 
-        var redacted = TrajectoryRedactor.Redact(doc, _config);
-        var dir = ResolveDir(_config.Trajectory.Dir, _cwd);
+        var redacted = TrajectoryRedactor.Redact(doc, config);
+        var dir = ResolveDir(config.Trajectory.Dir, cwd);
         Directory.CreateDirectory(dir);
         var path = Path.Combine(dir, $"{ctx.SessionId}.json");
         File.WriteAllText(path, redacted, System.Text.Encoding.UTF8);

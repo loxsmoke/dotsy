@@ -1,6 +1,6 @@
-using TGAttribute = Terminal.Gui.Attribute;
-
 namespace Dotsy.Cli.SlashCommands.Interfaces;
+
+using Dotsy.Core.Session.Data;
 
 /// <summary>
 /// The capability surface a slash command needs from its UI host. <see cref="AgentWindow"/>
@@ -53,6 +53,9 @@ internal interface ISlashCommandHost
 
     /// <summary>Re-read the working tree and repopulate the changed-files panel.</summary>
     void RefreshChangedFiles();
+
+    /// <summary>Render a loaded session's saved chat and tool history into the host view.</summary>
+    void RenderLoadedSession(LoadedSession loaded);
 
     /// <summary>
     /// Applies a colour theme by name, recolouring already-rendered content. Returns the resolved

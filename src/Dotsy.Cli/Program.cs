@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Dotsy.Cli.Tui;
+using Dotsy.Cli.Tui.Colors;
 using Dotsy.Core.Config;
 using Dotsy.Core.Loop;
 using Dotsy.Core.Loop.Data;
@@ -13,62 +14,65 @@ using Dotsy.Core.Skills;
 using Dotsy.Core.Tools;
 using Dotsy.Mcp;
 using Dotsy.Providers;
-using Terminal.Gui;
-using CliCommand = System.CommandLine.Command;
 
 // Version information
 const string Version = "1.0.0";
 var currentDirectory = Environment.CurrentDirectory;
 var config = ConfigLoader.Load(currentDirectory);
 
-// ── root command ──────────────────────────────────────────────────────────
 // Note: RootCommand's invocation pipeline registers a built-in `--version`
 // option, so we don't add our own (doing so collides on the `--version` key).
-var rootCommand = new RootCommand($"Dotsy — AI coding agent v{Version}");
+var rootCommand = new RootCommand($"Dotsy - AI coding agent v{Version}");
 
-var modelOption = new Option<string?>("--model", "Model ID override");
-var providerOption = new Option<string?>("--provider", "Provider name override");
-var maxTurnsOption = new Option<int?>("--max-turns", "Max turns override");
+var modelOption = new Option<string?>("--model") { Description = "Model ID override" };
+var providerOption = new Option<string?>("--provider") { Description = "Provider name override" };
+var maxTurnsOption = new Option<int?>("--max-turns") { Description = "Max turns override" };
 
-rootCommand.AddGlobalOption(modelOption);
-rootCommand.AddGlobalOption(providerOption);
-rootCommand.AddGlobalOption(maxTurnsOption);
+rootCommand.Options.Add(modelOption);
+rootCommand.Options.Add(providerOption);
+rootCommand.Options.Add(maxTurnsOption);
 
-// ── dotsy run ─────────────────────────────────────────────────────────────
-var runCommand = new CliCommand("run", "Start an agent session");
+// ---- dotsy run ----------------------------------------------------------------------------------------------------------------
+var runCommand = new System.CommandLine.Command("run", "Start an agent session");
 
-var resumeOption = new Option<string?>("--resume", "Session ID to resume; omit value to resume most recent");
+var resumeOption = new Option<string?>("--resume") { Description = "Session ID to resume; omit value to resume most recent" };
 resumeOption.Arity = ArgumentArity.ZeroOrOne;
-var bareOption = new Option<bool>("--bare", "Skip project config and hooks");
-var noHistoryOption = new Option<bool>("--no-history", "Disable session history");
-var yoloOption = new Option<bool>("--yolo", "Skip all permission prompts");
-var promptOption = new Option<string?>(["-p", "--prompt"], "Single-shot prompt (headless)");
-var fileOption = new Option<string?>(["-f", "--file"], "Read prompt from file (headless)");
-var outputFormatOption = new Option<string>("--output-format", () => "text", "Output format: text|json|stream-json");
-
-runCommand.AddOption(resumeOption);
-runCommand.AddOption(bareOption);
-runCommand.AddOption(noHistoryOption);
-runCommand.AddOption(yoloOption);
-runCommand.AddOption(promptOption);
-runCommand.AddOption(fileOption);
-runCommand.AddOption(outputFormatOption);
-
-runCommand.SetHandler(async (ctx) =>
+var bareOption = new Option<bool>("--bare") { Description = "Skip project config and hooks" };
+var noHistoryOption = new Option<bool>("--no-history") { Description = "Disable session history" };
+var yoloOption = new Option<bool>("--yolo") { Description = "Skip all permission prompts" };
+var promptOption = new Option<string?>("--prompt") { Description = "Single-shot prompt (headless)" };
+promptOption.Aliases.Add("-p");
+var fileOption = new Option<string?>("--file") { Description = "Read prompt from file (headless)" };
+fileOption.Aliases.Add("-f");
+var outputFormatOption = new Option<string>("--output-format")
 {
-    var modelOverride = ctx.ParseResult.GetValueForOption(modelOption);
-    var providerOverride = ctx.ParseResult.GetValueForOption(providerOption);
-    var maxTurnsOverride = ctx.ParseResult.GetValueForOption(maxTurnsOption);
-    var resumeId = ctx.ParseResult.GetValueForOption(resumeOption);
-    // --resume with no value → "" sentinel means "load most recent"
-    if (ctx.ParseResult.FindResultFor(resumeOption) is not null && resumeId is null)
+    Description = "Output format: text|json|stream-json",
+    DefaultValueFactory = _ => "text"
+};
+
+runCommand.Options.Add(resumeOption);
+runCommand.Options.Add(bareOption);
+runCommand.Options.Add(noHistoryOption);
+runCommand.Options.Add(yoloOption);
+runCommand.Options.Add(promptOption);
+runCommand.Options.Add(fileOption);
+runCommand.Options.Add(outputFormatOption);
+
+runCommand.SetAction(async (parseResult, cancellationToken) =>
+{
+    var modelOverride = parseResult.GetValue(modelOption);
+    var providerOverride = parseResult.GetValue(providerOption);
+    var maxTurnsOverride = parseResult.GetValue(maxTurnsOption);
+    var resumeId = parseResult.GetValue(resumeOption);
+    // --resume with no value â†’ "" sentinel means "load most recent"
+    if (parseResult.GetResult(resumeOption) is not null && resumeId is null)
         resumeId = "";
-    var bare = ctx.ParseResult.GetValueForOption(bareOption);
-    var noHistory = ctx.ParseResult.GetValueForOption(noHistoryOption);
-    var yolo = ctx.ParseResult.GetValueForOption(yoloOption);
-    var prompt = ctx.ParseResult.GetValueForOption(promptOption);
-    var file = ctx.ParseResult.GetValueForOption(fileOption);
-    var outputFormat = ctx.ParseResult.GetValueForOption(outputFormatOption);
+    var bare = parseResult.GetValue(bareOption);
+    var noHistory = parseResult.GetValue(noHistoryOption);
+    var yolo = parseResult.GetValue(yoloOption);
+    var prompt = parseResult.GetValue(promptOption);
+    var file = parseResult.GetValue(fileOption);
+    var outputFormat = parseResult.GetValue(outputFormatOption);
 
     // Apply CLI overrides. Provider first so the model override lands in the right section.
     if (providerOverride is not null) config.Model.Provider = providerOverride;
@@ -77,7 +81,7 @@ runCommand.SetHandler(async (ctx) =>
 
     // Read prompt from file if -f given
     if (file is not null && prompt is null)
-        prompt = await File.ReadAllTextAsync(file, ctx.GetCancellationToken());
+        prompt = await File.ReadAllTextAsync(file, cancellationToken);
 
     // Auto-cleanup old sessions
     if (config.Session.CleanupDays > 0 && config.Session.LogEnabled)
@@ -94,36 +98,38 @@ runCommand.SetHandler(async (ctx) =>
     {
         var exitCode = await RunHeadless(
             config, currentDirectory, prompt ?? "", resumeId, noHistory, yolo, outputFormat ?? "text",
-            ctx.GetCancellationToken());
-        ctx.ExitCode = exitCode;
+            cancellationToken);
+        return exitCode;
     }
     else
     {
-        await RunTui(config, currentDirectory, resumeId, noHistory, yolo, ctx.GetCancellationToken());
+        await RunTui(config, currentDirectory, resumeId, noHistory, yolo, cancellationToken);
+        return 0;
     }
 });
 
-rootCommand.AddCommand(runCommand);
-// No subcommand → default to `run`.
-rootCommand.SetHandler(() => runCommand.Invoke([]));
-var skillsCommand = new CliCommand("skills", "Skills management");
-var skillsListCommand = new CliCommand("list", "List discovered skills");
-skillsListCommand.SetHandler(() =>
+rootCommand.Subcommands.Add(runCommand);
+// No subcommand. default to `run`.
+rootCommand.SetAction(_ => runCommand.Parse([]).Invoke()); 
+
+var skillsCommand = new System.CommandLine.Command("skills", "Skills management");
+var skillsListCommand = new System.CommandLine.Command("list", "List discovered skills");
+skillsListCommand.SetAction(async (_, ct) =>
 {
     var discovery = new SkillDiscovery(config.Skills, currentDirectory);
     var skills = discovery.FindAll();
     foreach (var s in skills)
         Console.WriteLine($"  {s.Name,-20}  {s.FilePath}");
     if (skills.Count == 0) Console.WriteLine("No skills found.");
+    return 0;
 });
-skillsCommand.AddCommand(skillsListCommand);
-rootCommand.AddCommand(skillsCommand);
+skillsCommand.Subcommands.Add(skillsListCommand);
+rootCommand.Subcommands.Add(skillsCommand);
 
-// ── run ─────────────────────────────────────────────────────────────────────
-return await rootCommand.InvokeAsync(args);
+// ---- run ----------------------------------------------------------------------------------------------------------------
+return await rootCommand.Parse(args).InvokeAsync();
 
-// ─────────────────────────────────────────────────────────────────────────────
-
+// --------------------------------------------------------------------------------------------------------------------------
 static async Task RunTui(
     DotsyConfig config, string currentDirectory, string? resumeId, bool noHistory, bool yolo,
     CancellationToken ct)
@@ -142,7 +148,7 @@ static async Task RunTui(
     var provider = new RetryingProvider(baseProvider, onRetry: (rs, _) =>
     {
         TuiSessionContext.StatusUpdate?.Invoke(
-            $"⏳ retrying in {rs.DelaySeconds}s · attempt {rs.AttemptNumber}/{rs.MaxAttempts}");
+            $"retrying in {rs.DelaySeconds}s - attempt {rs.AttemptNumber}/{rs.MaxAttempts}");
         return Task.CompletedTask;
     });
 
@@ -159,15 +165,22 @@ static async Task RunTui(
     string sessionId;
     LoopContext loopCtx;
 
+    // Tokens already in context for a resumed session; 0 for a fresh one. Seeds the budget below so
+    // launching straight into a resumed session shows the real usage rather than 0%.
+    int restoredUsedTokens = 0;
+    LoadedSession? loadedSession = null;
+
     if (resumeId is not null)
     {
         var loaded = SessionLoader.Load(resumeId, sessionDir) ?? SessionLoader.LoadMostRecent(sessionDir, currentDirectory);
         if (loaded is not null)
         {
+            loadedSession = loaded;
             sessionId = loaded.SessionId;
             loopCtx = new LoopContext(sessionId);
             loopCtx.Messages.AddRange(loaded.Messages);
             loopCtx.CompactionSummary = loaded.CompactionSummary;
+            restoredUsedTokens = loaded.UsedTokens;
         }
         else
         {
@@ -191,7 +204,7 @@ static async Task RunTui(
         modelInfo.ContextWindow,
         config.Compaction.ReserveTokens,
         config.Compaction.KeepRecentTokens,
-        0);
+        restoredUsedTokens);
 
     // End agent turn after one text-only response so the user can reply
     config.Agent.NudgeLimit = 1;
@@ -208,6 +221,7 @@ static async Task RunTui(
     TuiSessionContext.Session     = sessionStore;
     TuiSessionContext.Trajectory  = trajectory;
     TuiSessionContext.McpManager  = mcpManager;
+    TuiSessionContext.StartupLoadedSession = loadedSession;
 
     // Delegate that rebuilds the provider+loop from the live config object.
     // Called by AgentWindow when model.* config keys are changed at runtime.
@@ -217,7 +231,7 @@ static async Task RunTui(
         var newProvider = new RetryingProvider(newBase, onRetry: (rs, _) =>
         {
             TuiSessionContext.StatusUpdate?.Invoke(
-                $"⏳ retrying in {rs.DelaySeconds}s · attempt {rs.AttemptNumber}/{rs.MaxAttempts}");
+                $"retrying in {rs.DelaySeconds}s - attempt {rs.AttemptNumber}/{rs.MaxAttempts}");
             return Task.CompletedTask;
         });
         return new AgentLoop(newProvider, TuiSessionContext.Registry!, permissions, TuiSessionContext.Config, sessionStore: TuiSessionContext.Session, trajectory: TuiSessionContext.Trajectory);
@@ -235,7 +249,7 @@ static async Task RunTui(
         if (e.SpecialKey == ConsoleSpecialKey.ControlBreak)
         {
             e.Cancel = true;
-            Application.Invoke(() => Application.RequestStop());
+            TuiSessionContext.App.Invoke(() => TuiSessionContext.App.RequestStop());
         }
     };
 
@@ -244,25 +258,23 @@ static async Task RunTui(
     var (resolvedTheme, themeFellBack) = Palette.Apply(config.Tui.Theme);
     if (themeFellBack)
         Console.Error.WriteLine(
-            $"warning: unknown tui.theme '{config.Tui.Theme}'; using 'dark'. " +
+            $"warning: unknown tui.theme '{config.Tui.Theme}'; using '{resolvedTheme}'. " +
             $"Valid: {string.Join(", ", Themes.Names)}");
 
-    Application.Init();
+    var app = Application.Create();
+    TuiSessionContext.App = app;
+    app.Init();
     try
     {
-        var scheme = Palette.Scheme();
-        Colors.ColorSchemes["Base"]   = scheme;
-        Colors.ColorSchemes["Menu"]   = scheme;
-        Colors.ColorSchemes["Dialog"] = scheme;
-        Colors.ColorSchemes["Error"]  = scheme;
-        Application.Run<AgentWindow>();
+        app.Run<AgentWindow>();
     }
     finally
     {
-        Application.Shutdown();
+        app.Dispose();
         mcpManager.Dispose();
         TuiSessionContext.McpManager = null;
         TuiSessionContext.Trajectory = null;
+        TuiSessionContext.StartupLoadedSession = null;
     }
 }
 
@@ -305,6 +317,10 @@ static async Task<int> RunHeadless(
     string sessionId;
     LoopContext loopCtx;
 
+    // Tokens already in context for a resumed session; 0 for a fresh one. Seeds the budget below so
+    // a resumed headless run continues from the real usage rather than restarting the gauge at 0.
+    int restoredUsedTokens = 0;
+
     if (resumeId is not null)
     {
         var loaded = SessionLoader.Load(resumeId, sessionDir) ?? SessionLoader.LoadMostRecent(sessionDir, workingDirectory);
@@ -314,6 +330,7 @@ static async Task<int> RunHeadless(
             loopCtx = new LoopContext(sessionId);
             loopCtx.Messages.AddRange(loaded.Messages);
             loopCtx.CompactionSummary = loaded.CompactionSummary;
+            restoredUsedTokens = loaded.UsedTokens;
         }
         else
         {
@@ -336,7 +353,7 @@ static async Task<int> RunHeadless(
         modelInfo.ContextWindow,
         config.Compaction.ReserveTokens,
         config.Compaction.KeepRecentTokens,
-        0);
+        restoredUsedTokens);
 
     var loop = new AgentLoop(provider, registry, permissions, config, sessionStore: sessionStore, trajectory: trajectory);
     if (prompt.Trim().Equals("/compact", StringComparison.OrdinalIgnoreCase))
@@ -429,7 +446,7 @@ static async Task<int> RunHeadless(
         }
     }
 
-    var indexTitle = prompt.Length > 50 ? prompt[..50] + "…" : prompt;
+    var indexTitle = prompt.Length > 50 ? prompt[..50] + "..." : prompt;
     sessionStore.UpdateIndex(indexTitle, workingDirectory, config.Model.ActiveModelId);
     TryExportTrajectory(trajectory, loopCtx, finalEnd ?? new LoopEnded(EndReason.Cancelled), msg =>
     {

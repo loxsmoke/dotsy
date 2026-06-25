@@ -1,4 +1,5 @@
 using Dotsy.Core.Tools;
+using Dotsy.Core.Tools.Interfaces;
 
 namespace Dotsy.Core.Loop.Data;
 
@@ -25,6 +26,7 @@ public record CompactionOccurred(int TokensBefore, int TokensAfter, string Summa
 public record LoopEnded(EndReason Reason, string? Message = null) : LoopEvent;
 
 public record PermissionRequired(
+    ITool Tool,
     string ToolName,
     string DisplayArgument,
     TaskCompletionSource<PermissionDecision> Decision) : LoopEvent;

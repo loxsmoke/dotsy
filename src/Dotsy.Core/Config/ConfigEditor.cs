@@ -217,34 +217,17 @@ public static class ConfigEditor
         return (true, targetFile);
     }
 
-    // Returns the project config path if the key is already defined there, otherwise global.
+    // Chooses which file a key is written to. A project config takes precedence when one exists, so
+    // settings land alongside the project rather than in the user-global file. Secrets are the
+    // exception: api keys always go to the global config because project configs are loaded without
+    // secrets (allowSecrets: false) and may be committed to source control.
     private static string ResolveTargetFile(string[] parts, string? projectConfigPath)
     {
-        if (projectConfigPath is null || !File.Exists(projectConfigPath))
-            return ConfigFilePath;
+        var isSecret = parts[^1].Equals("api_key", StringComparison.OrdinalIgnoreCase);
+        if (!isSecret && projectConfigPath is not null && File.Exists(projectConfigPath))
+            return projectConfigPath;
 
-        try
-        {
-            var text = File.ReadAllText(projectConfigPath);
-            if (!TomlSerializer.TryDeserialize(text, out TomlTable? table) || table is null)
-                return ConfigFilePath;
-
-            if (!table.TryGetValue(parts[0], out var s0) || s0 is not TomlTable section)
-                return ConfigFilePath;
-
-            if (parts.Length == 2)
-                return section.ContainsKey(parts[1]) ? projectConfigPath : ConfigFilePath;
-
-            // 3 parts: section.subsection.key
-            if (!section.TryGetValue(parts[1], out var s1) || s1 is not TomlTable sub)
-                return ConfigFilePath;
-
-            return sub.ContainsKey(parts[2]) ? projectConfigPath : ConfigFilePath;
-        }
-        catch
-        {
-            return ConfigFilePath;
-        }
+        return ConfigFilePath;
     }
 
     // ── In-memory update ──────────────────────────────────────────────────────
@@ -391,21 +374,56 @@ public static class ConfigEditor
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    private static bool TryParseHumanNumeric(string raw, out long result)
+    {
+        result = 0;
+        if (string.IsNullOrEmpty(raw)) return false;
+        char last = char.ToLowerInvariant(raw[^1]);
+
+        var multiplier = 1;
+        if (last == 'k')
+        {
+            raw = raw[..^1];
+            multiplier = 1024;
+        }
+        if (last == 'm')
+        {                   
+            raw = raw[..^1];
+            multiplier = 1024 * 1024;
+        }
+
+        if (long.TryParse(raw, out var val))
+        {
+            result = val * multiplier;
+            return true;
+        }
+        return false;
+    }
+
     private static object ToTomlScalar(string raw)
     {
-        if (raw == "true")  return true;
-        if (raw == "false") return false;
+        if (raw.Equals("true", StringComparison.OrdinalIgnoreCase))  return true;
+        if (raw.Equals("false", StringComparison.OrdinalIgnoreCase)) return false;
+        if (TryParseHumanNumeric(raw, out var hn)) return hn;
         if (long.TryParse(raw, out var l)) return l;
         if (double.TryParse(raw, System.Globalization.NumberStyles.Float,
                 System.Globalization.CultureInfo.InvariantCulture, out var d)) return d;
         return raw;
     }
 
+
     private static object? ConvertValue(string raw, Type t)
     {
         try
         {
             if (t == typeof(string)) return raw;
+
+            if (TryParseHumanNumeric(raw, out var hn))
+            {
+                if (t == typeof(int)) return (int)hn;
+                if (t == typeof(long)) return hn;
+            }
+
             if (t == typeof(int))    return int.Parse(raw);
             if (t == typeof(long))   return long.Parse(raw);
             if (t == typeof(float))  return float.Parse(raw, System.Globalization.CultureInfo.InvariantCulture);

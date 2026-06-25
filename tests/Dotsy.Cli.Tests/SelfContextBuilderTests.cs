@@ -4,7 +4,7 @@ using Dotsy.Core.Loop;
 using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Tools;
 
-namespace Dotsy.Core.Tests;
+namespace Dotsy.Cli.Tests;
 
 [TestClass]
 public sealed class SelfContextBuilderTests

@@ -1,9 +1,9 @@
 using System.Drawing;
 using System.Text;
-using Terminal.Gui;
-using TGAttribute = Terminal.Gui.Attribute;
+using Dotsy.Cli.Tui;
+using Dotsy.Cli.Tui.Colors;
 
-namespace Dotsy.Cli.Tui;
+namespace Dotsy.Cli.Tui.ToolList;
 
 // ListView that adds left/right horizontal scrolling via a per-panel offset.
 // Home/End scroll to start/end of selected line; Ctrl+Home/End jump to first/last item.
@@ -11,16 +11,25 @@ namespace Dotsy.Cli.Tui;
 internal sealed class ToolListView : ListView
 {
     private int horizontalScrollOffset;
+    private int topItem;
 
     // Lets the bracket renderer read each row's group so consecutive tool calls from the same
     // prompt can be drawn with a half-frame gutter. Set by AgentWindow.
     public Func<int, ToolRow?>? RowGetter { get; set; }
 
+    public int TopItemCompat
+    {
+        get => topItem;
+        set
+        {
+            topItem = Math.Max(0, value);
+            SetNeedsDraw();
+        }
+    }
+
     public ToolListView()
     {
-        KeyBindings.Add(Key.Home.WithCtrl, Command.Start);
-        KeyBindings.Add(Key.End.WithCtrl, Command.End);
-        SelectedItemChanged += (_, _) => horizontalScrollOffset = 0;
+        ValueChanged += (_, _) => horizontalScrollOffset = 0;
     }
 
     protected override bool OnKeyDown(Key key)
@@ -46,10 +55,11 @@ internal sealed class ToolListView : ListView
                 SetNeedsDraw();
                 return true;
             case KeyCode.End:
-                if (Source is not null && SelectedItem >= 0 && SelectedItem < Source.Count)
+                var selectedItem = SelectedItem.GetValueOrDefault(-1);
+                if (Source is not null && selectedItem >= 0 && selectedItem < Source.Count)
                 {
-                    var text = Source.ToList()[SelectedItem]?.ToString() ?? "";
-                    horizontalScrollOffset = Math.Max(0, text.Length - Viewport.Width);
+                    var text = Source.ToList()[selectedItem]?.ToString() ?? "";
+                    horizontalScrollOffset = ScrollMath.MaxOffset(text.Length, Viewport.Width);
                 }
                 SetNeedsDraw();
                 return true;
@@ -64,31 +74,31 @@ internal sealed class ToolListView : ListView
         return base.OnKeyDown(key);
     }
 
-    protected override bool OnDrawingContent()
+    protected override bool OnDrawingContent(DrawContext? context)
     {
         bool handled;
         if (horizontalScrollOffset == 0)
         {
-            handled = base.OnDrawingContent();
+            handled = base.OnDrawingContent(context);
         }
         else
         {
             Rectangle f = Viewport;
             int renderWidth = Math.Max(0, f.Width - 1);
-            int itemIdx = TopItem;
+            int itemIdx = topItem;
 
             for (int row = 0; row < f.Height; row++, itemIdx++)
             {
-                bool isSelected = itemIdx == SelectedItem;
+                bool isSelected = itemIdx == SelectedItem.GetValueOrDefault(-1);
                 var color = HasFocus
-                    ? isSelected ? ColorScheme!.Focus : GetNormalColor()
-                    : isSelected ? ColorScheme!.HotNormal : GetNormalColor();
+                    ? isSelected ? GetScheme().Focus : GetScheme().Normal
+                    : isSelected ? GetScheme().HotNormal : GetScheme().Normal;
                 SetAttribute(color);
                 Move(0, row);
 
                 if (Source is null || itemIdx >= Source.Count)
                 {
-                    for (int c = 0; c < f.Width; c++) Driver?.AddRune((Rune)' ');
+                    for (int c = 0; c < f.Width; c++) TuiSessionContext.App.Driver?.AddRune(new Rune(' '));
                     continue;
                 }
 
@@ -102,37 +112,42 @@ internal sealed class ToolListView : ListView
         }
 
         DrawGroupBrackets();
-        DrawVerticalScrollBar();
+
+        int count = Source?.Count ?? 0;
+        if (count > Viewport.Height)
+        {
+            ScrollBar.DrawVertical(this, Viewport.Width - 1, 0, Viewport.Height, count, Viewport.Height, topItem);
+        }
         return handled;
     }
 
     // Draws a dim half-frame gutter in column 0 (just left of the status icon) that visually
-    // brackets the consecutive tool calls belonging to one prompt: ┌ on the first, │ on the
-    // middle ones, └ on the last. A lone tool gets no bracket. Drawn a shade dimmer than the
+    // brackets the consecutive tool calls belonging to one prompt. A lone tool gets no bracket.
+    // Drawn a shade dimmer than the
     // panel border so it reads as a secondary, structural element.
     private void DrawGroupBrackets()
     {
-        if (RowGetter is null || Driver is null) return;
+        if (RowGetter is null || TuiSessionContext.App.Driver is null) return;
 
         int count = Source?.Count ?? 0;
         int height = Viewport.Height;
         for (int row = 0; row < height; row++)
         {
-            int idx = TopItem + row;
+            int idx = topItem + row;
             if (idx < 0 || idx >= count) continue;
 
             var glyph = GroupGlyph(idx, count);
             if (glyph == '\0') continue;
 
-            bool isSelected = idx == SelectedItem;
+            bool isSelected = idx == SelectedItem.GetValueOrDefault(-1);
             var rowColor = HasFocus
-                ? isSelected ? ColorScheme!.Focus : GetNormalColor()
-                : isSelected ? ColorScheme!.HotNormal : GetNormalColor();
+                ? isSelected ? GetScheme().Focus : GetScheme().Normal
+                : isSelected ? GetScheme().HotNormal : GetScheme().Normal;
 
-            var fgColor = (HasFocus && isSelected) ? ColorName16.Gray : ColorName16.DarkGray;
+            var fgColor = (HasFocus && isSelected) ? Palette.Normal.Foreground : Palette.Dim.Foreground;
             SetAttribute(new TGAttribute(fgColor, rowColor.Background));
             Move(0, row);
-            Driver.AddRune(new Rune(glyph));
+            TuiSessionContext.App.Driver.AddRune(new Rune(glyph));
         }
     }
 
@@ -146,50 +161,9 @@ internal sealed class ToolListView : ListView
         bool prevSame = idx > 0          && RowGetter(idx - 1)?.Group == g;
         bool nextSame = idx < count - 1  && RowGetter(idx + 1)?.Group == g;
 
-        if (!prevSame && !nextSame) return '\0'; // single tool — no half-frame
-        if (!prevSame)              return '┌';
-        if (!nextSame)              return '└';
-        return '│';
-    }
-
-    private void DrawVerticalScrollBar()
-    {
-        if (Application.Driver is null || Source is null) return;
-
-        int height = Viewport.Height;
-        int width = Viewport.Width;
-        int count = Source.Count;
-        if (height <= 0 || width <= 0 || count <= height) return;
-
-        Application.Driver.SetAttribute(GetNormalColor());
-        if (height == 1)
-        {
-            Move(width - 1, 0);
-            Application.Driver.AddRune(new Rune('░'));
-            return;
-        }
-
-        Move(width - 1, 0);
-        Application.Driver.AddRune(new Rune('▲'));
-        if (height == 2)
-        {
-            Move(width - 1, 1);
-            Application.Driver.AddRune(new Rune('▼'));
-            return;
-        }
-
-        int trackHeight = height - 2;
-        int thumbHeight = Math.Max(1, trackHeight * height / Math.Max(1, count));
-        int maxTop = Math.Max(1, count - height);
-        int thumbTop = 1 + Math.Min(trackHeight - thumbHeight, TopItem * (trackHeight - thumbHeight) / maxTop);
-
-        for (int y = 1; y < height - 1; y++)
-        {
-            Move(width - 1, y);
-            var ch = y >= thumbTop && y < thumbTop + thumbHeight ? '█' : '░';
-            Application.Driver.AddRune(new Rune(ch));
-        }
-        Move(width - 1, height - 1);
-        Application.Driver.AddRune(new Rune('▼'));
+        if (!prevSame && !nextSame) return '\0';
+        if (!prevSame)              return '\u250c';
+        if (!nextSame)              return '\u2514';
+        return '\u2502';
     }
 }

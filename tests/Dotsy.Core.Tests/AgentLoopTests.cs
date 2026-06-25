@@ -1,9 +1,11 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Dotsy.Core.Config;
 using Dotsy.Core.Git;
 using Dotsy.Core.Loop;
 using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Providers;
+using Dotsy.Core.Session;
 using Dotsy.Core.Tests.Helpers;
 using Dotsy.Core.Tools;
 
@@ -163,6 +165,83 @@ public sealed class AgentLoopTests
         public bool IsCompletionSignal => false;
         public Task<ToolResult> ExecuteAsync(System.Text.Json.JsonElement input, ToolContext ctx, CancellationToken ct)
             => Task.FromResult(ToolResult.Ok("ok"));
+    }
+
+    private sealed class SlowWriteTool : Dotsy.Core.Tools.Interfaces.ITool
+    {
+        public string Name => "SlowWrite";
+        public string Description => "slow write-like tool";
+        public System.Text.Json.JsonElement InputSchema =>
+            System.Text.Json.JsonSerializer.SerializeToElement(new { type = "object" });
+        public ToolSafety Safety => ToolSafety.Sequential;
+        public bool IsCompletionSignal => false;
+        public bool IsWriteTool => true;
+
+        public async Task<ToolResult> ExecuteAsync(System.Text.Json.JsonElement input, ToolContext ctx, CancellationToken ct)
+        {
+            await Task.Delay(30, ct);
+            return ToolResult.Ok("wrote slowly");
+        }
+    }
+
+    [TestMethod]
+    public async Task SessionLog_RecordsToolRunAndApprovalDurationsSeparately()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), $"dotsy_tool_timing_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            var config = MakeConfig(maxTurns: 1, nudgeLimit: 10);
+            var provider = new FakeProvider(
+                [
+                    new UsageUpdate(123, 45, 7, 9),
+                    new ToolCallDelta("call-1", "SlowWrite", "{}"),
+                    new StreamEnd(StopReason.ToolUse)
+                ]);
+            var registry = new ToolRegistry();
+            registry.Register(new SlowWriteTool());
+            var store = new SessionStore("timing-session", tmp);
+            var loop = new AgentLoop(
+                provider,
+                registry,
+                new PermissionStore(config.Permissions, tmp),
+                config,
+                sessionStore: store);
+            loop.PermissionPrompter = async (_, _, ct) =>
+            {
+                await Task.Delay(80, ct);
+                return PermissionDecision.AllowOnce;
+            };
+
+            await Collect(loop.RunAsync(EmptyCtx(), tmp, CancellationToken.None));
+
+            var records = File.ReadAllLines(Path.Combine(tmp, "timing-session.jsonl"))
+                .Select(line => JsonDocument.Parse(line).RootElement.Clone())
+                .ToList();
+            var assistantRecord = records.Single(r => r.GetProperty("type").GetString() == "assistant");
+            var usage = assistantRecord.GetProperty("usage");
+            Assert.AreEqual(123, usage.GetProperty("inputTokens").GetInt32());
+            Assert.AreEqual(45, usage.GetProperty("outputTokens").GetInt32());
+            Assert.AreEqual(7, usage.GetProperty("cacheReadTokens").GetInt32());
+            Assert.AreEqual(9, usage.GetProperty("cacheWriteTokens").GetInt32());
+            Assert.AreEqual(200_000, usage.GetProperty("contextWindowTokens").GetInt32());
+            Assert.AreEqual(1_024, usage.GetProperty("maxOutputTokens").GetInt32());
+            Assert.AreEqual(16_384, usage.GetProperty("reserveTokens").GetInt32());
+            Assert.AreEqual(168, usage.GetProperty("usedTokens").GetInt32());
+
+            var toolRecord = records.Single(r => r.GetProperty("type").GetString() == "tool_result");
+            var toolResult = toolRecord.GetProperty("message").GetProperty("content")[0];
+
+            var durationMs = toolResult.GetProperty("duration_ms").GetInt64();
+            var approvalWaitMs = toolResult.GetProperty("approval_wait_ms").GetInt64();
+            Assert.IsTrue(durationMs >= 20, $"Expected run duration to include tool work, got {durationMs}ms");
+            Assert.IsTrue(durationMs < 80, $"Expected run duration to exclude approval wait, got {durationMs}ms");
+            Assert.IsTrue(approvalWaitMs >= 60, $"Expected approval wait to be logged separately, got {approvalWaitMs}ms");
+        }
+        finally
+        {
+            DeleteDirectory(tmp);
+        }
     }
 
     [TestMethod]

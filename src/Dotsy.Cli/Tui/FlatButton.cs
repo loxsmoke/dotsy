@@ -1,4 +1,4 @@
-using Terminal.Gui;
+using Dotsy.Cli.Tui.Colors;
 
 namespace Dotsy.Cli.Tui;
 
@@ -15,12 +15,12 @@ internal sealed class FlatButton : View
 
     public FlatButton(string label)
     {
-        var t = $"  {label}  ";
+        var t = $" {label} ";
         Text = t;
         Width = t.Length;
         Height = 1;
         CanFocus = true;
-        ColorScheme = Palette.BtnScheme();
+        SetScheme(Palette.BtnScheme());
     }
 
     protected override bool OnKeyDown(Key key)

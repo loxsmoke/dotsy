@@ -1,25 +1,24 @@
-using System.Text;
 using LibGit2Sharp;
 
 namespace Dotsy.Core.Git;
 
 public sealed class GitIntegration
 {
-    private readonly string _cwd;
+    private readonly string directory;
 
     public GitIntegration(string cwd)
     {
-        _cwd = cwd;
+        directory = cwd;
     }
 
-    public bool IsRepo => Repository.IsValid(Repository.Discover(_cwd) ?? "");
+    public bool IsRepo => Repository.IsValid(Repository.Discover(directory) ?? "");
 
     /// <summary>Auto-stage files that were written/edited, then commit.</summary>
     public bool AutoCommit(string sessionId, int turn, string firstLine, IEnumerable<string>? affectedPaths = null)
     {
         try
         {
-            using var repo = new Repository(Repository.Discover(_cwd));
+            using var repo = new Repository(Repository.Discover(directory));
 
             var paths = affectedPaths?.Where(p => !string.IsNullOrWhiteSpace(p)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
             if (paths is { Count: > 0 })
@@ -51,7 +50,7 @@ public sealed class GitIntegration
     {
         try
         {
-            using var repo = new Repository(Repository.Discover(_cwd));
+            using var repo = new Repository(Repository.Discover(directory));
             if (repo.Head.Tip is null) return false;
 
             var refName = $"refs/agent/checkpoints/{sessionId}/{turn}";
@@ -69,7 +68,7 @@ public sealed class GitIntegration
     {
         try
         {
-            using var repo = new Repository(Repository.Discover(_cwd));
+            using var repo = new Repository(Repository.Discover(directory));
 
             for (int t = currentTurn - 1; t >= 0; t--)
             {

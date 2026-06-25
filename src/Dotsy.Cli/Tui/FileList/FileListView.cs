@@ -1,14 +1,29 @@
 using System.Drawing;
-using System.Text;
-using Terminal.Gui;
-using TGAttribute = Terminal.Gui.Attribute;
+using Dotsy.Cli.Tui.Colors;
 
-namespace Dotsy.Cli.Tui;
+namespace Dotsy.Cli.Tui.FileList;
 
 // ListView that draws file-change rows with per-segment colours and path truncation.
 internal sealed class FileListView : ListView
 {
+    private int topItem;
+
     public Func<int, FileRow?>? RowGetter { get; set; }
+
+    public FileListView()
+    {
+        ValueChanged += (_, _) => EnsureSelectedItemVisibleCompat();
+    }
+
+    public int TopItemCompat
+    {
+        get => topItem;
+        set
+        {
+            topItem = Math.Max(0, value);
+            SetNeedsDraw();
+        }
+    }
 
     protected override bool OnKeyDown(Key key)
     {
@@ -19,46 +34,64 @@ internal sealed class FileListView : ListView
         return base.OnKeyDown(key);
     }
 
-    protected override bool OnDrawingContent()
+    protected override bool OnDrawingContent(DrawContext? context)
     {
-        if (RowGetter is null) return base.OnDrawingContent();
+        if (RowGetter is null) return base.OnDrawingContent(context);
+        EnsureSelectedItemVisibleCompat();
         Rectangle viewport = Viewport;
         int count = Source?.Count ?? 0;
         for (int row = 0; row < viewport.Height; row++)
         {
-            int idx = TopItem + row;
             Move(0, row);
-            bool sel = HasFocus && idx == SelectedItem;
-            DrawFileRow(idx < count ? RowGetter(idx) : null, sel, viewport.Width);
+            int idx = topItem + row;
+            bool isSelected = HasFocus && idx == SelectedItem;
+            DrawFileRow(idx < count ? RowGetter(idx) : null, isSelected, viewport.Width);
         }
-        DrawVerticalScrollBar();
+
+        if (Source is not null)
+        {
+            ScrollBar.DrawVertical(this, Viewport.Width - 1, 0, Viewport.Height, Source.Count, Viewport.Height, topItem);
+        }
         return true;
     }
 
-    private static void DrawFileRow(FileRow? item, bool sel, int width)
+    private void EnsureSelectedItemVisibleCompat()
     {
-        var bg     = sel ? ColorName16.DarkGray : ColorName16.Black;
-        var normAt = new TGAttribute(sel ? ColorName16.White : ColorName16.Gray,        bg);
-        var pathAt = new TGAttribute(ColorName16.White,                                  bg);
-        var addAt  = new TGAttribute(sel ? ColorName16.White : ColorName16.BrightGreen,  bg);
-        var delAt  = new TGAttribute(sel ? ColorName16.White : ColorName16.BrightRed,    bg);
+        if (SelectedItem is not { } selected)
+            return;
+
+        topItem = ScrollMath.EnsureVisibleTop(topItem, selected, Viewport.Height, Source?.Count ?? 0);
+    }
+
+    private static void DrawFileRow(FileRow? item, bool isSelected, int width)
+    {
+        // A selected row draws entirely in the selection highlight; otherwise each segment keeps
+        // its semantic theme colour (normal text, bright path, green additions, red deletions).
+        var normAt = isSelected ? Palette.SelRow : Palette.Normal;
+        var pathAt = isSelected ? Palette.SelRow : Palette.Bright;
+        var addAt  = isSelected ? Palette.SelRow : Palette.Success;
+        var delAt  = isSelected ? Palette.SelRow : Palette.Err;
         int col = 0;
 
         void Str(string s, TGAttribute a)
         {
-            Application.Driver!.SetAttribute(a);
+            TuiSessionContext.App.Driver!.SetAttribute(a);
             // Iterate runes, not chars: new Rune(char) throws on a surrogate half (astral emoji
             // in a filename). EnumerateRunes pairs surrogates / substitutes U+FFFD.
             foreach (var rune in s.EnumerateRunes())
             {
-                if (rune.GetColumns() <= 0) continue;       // skip zero-width (desyncs columns)
+                if (Glyphs.GetColumns(rune) <= 0) continue;       // skip zero-width (desyncs columns)
                 if (col >= width) return;
-                Application.Driver.AddRune(Glyphs.Safe(rune)); // replace emoji (2-col vs 1-col mismatch)
+                TuiSessionContext.App.Driver.AddRune(Glyphs.Safe(rune)); // replace emoji (2-col vs 1-col mismatch)
                 col++;
             }
         }
 
-        if (item is null) { Str(new string(' ', width), normAt); return; }
+        if (item is null) 
+        { 
+            Str(new string(' ', width), normAt); 
+            return;
+        }
 
         const int PrefixLen = 4; // "  X " prefix
 
@@ -82,15 +115,15 @@ internal sealed class FileListView : ListView
                 var statsStr = $"   +{item.Added}  -{item.Deleted}";
                 int availForPath = width - PrefixLen - statsStr.Length;
                 var path = availForPath > 0 ? TruncatePath(item.Path, availForPath) : "";
-                Str("  ↳ ", normAt); Str(path, pathAt);
+                Str("  \u21b3 ", normAt); Str(path, pathAt);
                 Str("   ",  normAt); Str($"+{item.Added}", addAt);
                 Str("  ",   normAt); Str($"-{item.Deleted}", delAt);
                 break;
             }
         }
 
-        Application.Driver!.SetAttribute(normAt);
-        while (col < width) { Application.Driver.AddRune(new System.Text.Rune(' ')); col++; }
+        TuiSessionContext.App.Driver!.SetAttribute(normAt);
+        while (col < width) { TuiSessionContext.App.Driver.AddRune(new System.Text.Rune(' ')); col++; }
     }
 
     // Shorten path by replacing middle directory segments with "...".
@@ -112,50 +145,9 @@ internal sealed class FileListView : ListView
             if (candidate.Length <= maxWidth) return candidate;
         }
 
-        // Even "first/.../filename" doesn't fit — show as much of the filename as possible
+        // Even "first/.../filename" doesn't fit: show as much of the filename as possible
         var minimal = ".../" + parts[^1];
         return minimal.Length <= maxWidth ? minimal : Clip(minimal, maxWidth);
-    }
-
-    private void DrawVerticalScrollBar()
-    {
-        if (Application.Driver is null || Source is null) return;
-
-        int height = Viewport.Height;
-        int width = Viewport.Width;
-        int count = Source.Count;
-        if (height <= 0 || width <= 0 || count <= height) return;
-
-        Application.Driver.SetAttribute(new TGAttribute(ColorName16.Gray, ColorName16.Black));
-        if (height == 1)
-        {
-            Move(width - 1, 0);
-            Application.Driver.AddRune(new Rune('░'));
-            return;
-        }
-
-        Move(width - 1, 0);
-        Application.Driver.AddRune(new Rune('▲'));
-        if (height == 2)
-        {
-            Move(width - 1, 1);
-            Application.Driver.AddRune(new Rune('▼'));
-            return;
-        }
-
-        int trackHeight = height - 2;
-        int thumbHeight = Math.Max(1, trackHeight * height / Math.Max(1, count));
-        int maxTop = Math.Max(1, count - height);
-        int thumbTop = 1 + Math.Min(trackHeight - thumbHeight, TopItem * (trackHeight - thumbHeight) / maxTop);
-
-        for (int y = 1; y < height - 1; y++)
-        {
-            Move(width - 1, y);
-            var ch = y >= thumbTop && y < thumbTop + thumbHeight ? '█' : '░';
-            Application.Driver.AddRune(new Rune(ch));
-        }
-        Move(width - 1, height - 1);
-        Application.Driver.AddRune(new Rune('▼'));
     }
 
     // Clip string to maxWidth, adding trailing "..." to make truncation visible.

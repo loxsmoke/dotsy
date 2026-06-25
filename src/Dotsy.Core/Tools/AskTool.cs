@@ -26,7 +26,7 @@ public sealed class AskTool : ITool
             return ToolResult.Err("Ask is not available in this context");
 
         var tcs = new TaskCompletionSource<PermissionDecision>();
-        var ev = new PermissionRequired(Name, question, tcs);
+        var ev = new PermissionRequired(this, Name, question, tcs);
         await ctx.EmitEvent(ev);
 
         // Wait for user decision — we reuse PermissionDecision as the pause mechanism

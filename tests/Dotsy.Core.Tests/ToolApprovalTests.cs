@@ -94,7 +94,7 @@ public sealed class ToolApprovalTests
 
     // ── No prompter blocks all tools that require confirmation ────────────────
 
-    [DataTestMethod]
+    [TestMethod]
     [DataRow(EditTool.ToolName)]
     [DataRow(MultiEditTool.ToolName)]
     [DataRow(ShellTool.ToolName)]
@@ -118,7 +118,7 @@ public sealed class ToolApprovalTests
 
     // ── Deny decision blocks execution ────────────────────────────────────────
 
-    [DataTestMethod]
+    [TestMethod]
     [DataRow(EditTool.ToolName)]
     [DataRow(MultiEditTool.ToolName)]
     [DataRow(ShellTool.ToolName)]

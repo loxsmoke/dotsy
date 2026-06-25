@@ -7,30 +7,30 @@ namespace Dotsy.Mcp;
 
 public sealed class McpTool : ITool
 {
-    private readonly McpClient _client;
-    private readonly string _toolName;
-    private readonly string _description;
-    private readonly JsonElement _inputSchema;
+    private readonly McpClient mcpClient;
+    private readonly string toolName;
+    private readonly string description;
+    private readonly JsonElement inputSchema;
 
-    public string Name => $"[mcp:{_client.ServerName}]{_toolName}";
-    public string Description => $"[{_client.ServerName}] {_description}";
-    public JsonElement InputSchema => _inputSchema;
+    public string Name => $"[mcp:{mcpClient.ServerName}]{toolName}";
+    public string Description => $"[{mcpClient.ServerName}] {description}";
+    public JsonElement InputSchema => inputSchema;
     public ToolSafety Safety => ToolSafety.Sequential;
     public bool IsCompletionSignal => false;
 
     public McpTool(McpClient client, McpToolDefinition def)
     {
-        _client = client;
-        _toolName = def.Name;
-        _description = def.Description;
-        _inputSchema = def.InputSchema;
+        mcpClient = client;
+        toolName = def.Name;
+        description = def.Description;
+        inputSchema = def.InputSchema;
     }
 
     public async Task<ToolResult> ExecuteAsync(JsonElement input, ToolContext ctx, CancellationToken ct)
     {
-        if (!_client.IsConnected)
-            return ToolResult.Err($"MCP server '{_client.ServerName}' is disconnected");
+        if (!mcpClient.IsConnected)
+            return ToolResult.Err($"MCP server '{mcpClient.ServerName}' is disconnected");
 
-        return await _client.CallToolAsync(_toolName, input, ct);
+        return await mcpClient.CallToolAsync(toolName, input, ct);
     }
 }

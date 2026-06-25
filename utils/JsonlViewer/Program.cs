@@ -1,8 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Drawing;
-using Terminal.Gui;
-using TGAttribute = Terminal.Gui.Attribute;
+using TGAttribute = Terminal.Gui.Drawing.Attribute;
 
 if (args.Length != 1 || args[0] is "-h" or "--help" or "/?")
 {
@@ -28,9 +27,7 @@ catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
     return 1;
 }
 
-Application.Init();
-Application.Driver?.SetCursorVisibility(CursorVisibility.Default);
-try
+using var app = Application.Create().Init();
 {
     var window = new Window
     {
@@ -50,7 +47,7 @@ try
         Height = 1
     };
 
-    var viewer = new JsonlView(lines, status)
+    var viewer = new JsonlView(lines, status, app)
     {
         X = 0,
         Y = 0,
@@ -60,11 +57,7 @@ try
 
     window.Add(viewer, status);
     viewer.SetFocus();
-    Application.Run(window);
-}
-finally
-{
-    Application.Shutdown();
+    app.Run(window);
 }
 
 return 0;
@@ -197,6 +190,7 @@ internal sealed class JsonlView : View
 {
     private readonly IReadOnlyList<SourceLine> _sourceLines;
     private readonly Label _status;
+    private readonly IApplication _app;
     private readonly List<DisplayLine> _displayLines = [];
     private int _cursorRow;
     private int _cursorColumn;
@@ -204,12 +198,13 @@ internal sealed class JsonlView : View
     private Position? _selectionAnchor;
     private string? _statusOverride;
 
-    public JsonlView(IReadOnlyList<SourceLine> sourceLines, Label status)
+    public JsonlView(IReadOnlyList<SourceLine> sourceLines, Label status, IApplication app)
     {
         _sourceLines = sourceLines;
         _status = status;
+        _app = app;
         CanFocus = true;
-        ColorScheme = new ColorScheme { Normal = Palette.Normal, Focus = Palette.Normal, HotNormal = Palette.Key, HotFocus = Palette.Key };
+        SetScheme(new Scheme { Normal = Palette.Normal, Focus = Palette.Normal, HotNormal = Palette.Key, HotFocus = Palette.Key });
     }
 
     protected override bool OnDrawingContent(DrawContext? context)
@@ -229,7 +224,7 @@ internal sealed class JsonlView : View
         return true;
     }
 
-    public override Point? PositionCursor()
+    public Point? PositionCursor()
     {
         Reflow();
         EnsureCursorVisible();
@@ -245,7 +240,7 @@ internal sealed class JsonlView : View
 
         if (key == Key.Esc || key == Key.Q || key == Key.Q.WithCtrl)
         {
-            Application.RequestStop();
+            _app.RequestStop();
             return true;
         }
 
@@ -492,7 +487,7 @@ internal sealed class JsonlView : View
             return;
         }
 
-        _status.Text = Clipboard.TrySetClipboardData(text)
+        _status.Text = _app.Clipboard?.TrySetClipboardData(text) == true
             ? $"Copied {text.Length:n0} characters"
             : "Clipboard is not available in this terminal";
         _statusOverride = _status.Text?.ToString();

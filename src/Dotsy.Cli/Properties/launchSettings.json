@@ -3,7 +3,7 @@
     "Dotsy Help apphost": {
       "commandName": "Executable",
       "executablePath": "$(ProjectDir)bin\\$(Configuration)\\net10.0\\dotsy.exe",
-      "workingDirectory": "C:\\dev\\ai\\experiment"
+      "workingDirectory": "C:\\dev\\ai\\dotsy-development"
     },
     "Dotsy Help via dotnet": {
       "commandName": "Executable",

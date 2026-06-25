@@ -1,4 +1,4 @@
-﻿namespace Dotsy.Cli.Tui;
+namespace Dotsy.Cli.Tui;
 
 /// <summary>
 /// Manages an animated progress spinner with rotating frames.
@@ -7,19 +7,19 @@ internal sealed class ProgressSpinner : IDisposable
 {
     private static readonly string[] Frames = ["◐", "◓", "◑", "◒"];
 
-    private volatile int _spinIdx;
-    private volatile bool _spinning;
-    private readonly Timer _spinnerTimer;
-    private readonly Action<string> _onFrameUpdate;
+    private volatile bool isSpinning;
+    private volatile int spinIndex;
+    private readonly Timer spinnerTimer;
+    private readonly Action<string> onSpinnerUpdate;
 
     /// <summary>
     /// Creates a new progress spinner.
     /// </summary>
-    /// <param name="onFrameUpdate">Callback invoked with each frame update (receives the current frame character).</param>
-    public ProgressSpinner(Action<string> onFrameUpdate)
+    /// <param name="onUpdate">Callback invoked with each frame update (receives the current frame character).</param>
+    public ProgressSpinner(Action<string> onUpdate)
     {
-        _onFrameUpdate = onFrameUpdate ?? throw new ArgumentNullException(nameof(onFrameUpdate));
-        _spinnerTimer = new Timer(SpinTick, null, System.Threading.Timeout.Infinite, 150);
+        onSpinnerUpdate = onUpdate ?? throw new ArgumentNullException(nameof(onUpdate));
+        spinnerTimer = new Timer(SpinTick, null, System.Threading.Timeout.Infinite, 150);
     }
 
     /// <summary>
@@ -27,12 +27,12 @@ internal sealed class ProgressSpinner : IDisposable
     /// </summary>
     public void Start()
     {
-        if (_spinning) return;
+        if (isSpinning) return;
 
-        _spinning = true;
-        _spinIdx = 0;
-        _onFrameUpdate(Frames[0]);
-        _spinnerTimer.Change(150, 150);
+        isSpinning = true;
+        spinIndex = 0;
+        onSpinnerUpdate(Frames[0]);
+        spinnerTimer.Change(150, 150);
     }
 
     /// <summary>
@@ -40,29 +40,33 @@ internal sealed class ProgressSpinner : IDisposable
     /// </summary>
     public void Stop()
     {
-        if (!_spinning) return;
+        if (!isSpinning) return;
 
-        _spinning = false;
-        _spinnerTimer.Change(System.Threading.Timeout.Infinite, 0);
+        isSpinning = false;
+        spinnerTimer.Change(System.Threading.Timeout.Infinite, 0);
     }
 
     /// <summary>
     /// Gets whether the spinner is currently running.
     /// </summary>
-    public bool IsSpinning => _spinning;
+    public bool IsSpinning => isSpinning;
 
+    /// <summary>
+    /// This method is called by timer.
+    /// </summary>
+    /// <param name="_"></param>
     private void SpinTick(object? _)
     {
-        if (!_spinning) return;
+        if (!isSpinning) return;
 
-        _spinIdx = (_spinIdx + 1) % Frames.Length;
-        var frame = Frames[_spinIdx];
-        _onFrameUpdate(frame);
+        spinIndex = (spinIndex + 1) % Frames.Length;
+        var frame = Frames[spinIndex];
+        onSpinnerUpdate(frame);
     }
 
     public void Dispose()
     {
         Stop();
-        _spinnerTimer.Dispose();
+        spinnerTimer.Dispose();
     }
 }

@@ -1,6 +1,4 @@
-using Terminal.Gui;
-
-namespace Dotsy.Cli.Tui;
+namespace Dotsy.Cli.Tui.ToolList;
 
 internal sealed record ToolRow(
     string Name,
@@ -11,7 +9,8 @@ internal sealed record ToolRow(
     string Cwd = "",
     List<List<Cell>>? Output = null,
     int Group = 0,
-    string? Parameters = null)
+    string? Parameters = null,
+    int? TurnNumber = null)
 {
     public override string ToString()
     {

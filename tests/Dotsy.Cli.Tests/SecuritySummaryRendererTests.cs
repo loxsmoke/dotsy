@@ -7,7 +7,7 @@ using Dotsy.Core.Skills;
 using Dotsy.Core.Tools;
 using Dotsy.Core.Tools.Interfaces;
 
-namespace Dotsy.Core.Tests;
+namespace Dotsy.Cli.Tests;
 
 [TestClass]
 public sealed class SecuritySummaryRendererTests

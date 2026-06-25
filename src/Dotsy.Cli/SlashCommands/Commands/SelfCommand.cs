@@ -1,5 +1,6 @@
 using Dotsy.Cli.SlashCommands.Interfaces;
 using Dotsy.Cli.Tui;
+using Dotsy.Cli.Tui.Colors;
 using Dotsy.Core.Config;
 using Dotsy.Core.Git;
 using Dotsy.Core.Loop;
@@ -54,7 +55,7 @@ internal sealed class SelfCommand : ISlashCommand
                         TuiSessionContext.Registry,
                         commandUsages,
                         Mode: "tui",
-                        ResolvedTheme: Palette.ActiveName),
+                        ResolvedTheme: Palette.ActiveTheme.Name),
                     args);
 
                 host.Invoke(() =>

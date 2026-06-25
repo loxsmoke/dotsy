@@ -5,8 +5,8 @@ namespace Dotsy.Mcp;
 
 public sealed class McpManager : IDisposable
 {
-    private readonly List<McpClient> _clients = [];
-    private readonly Dictionary<string, List<string>> _serverTools = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<McpClient> mcpClients = [];
+    private readonly Dictionary<string, List<string>> serverTools = new(StringComparer.OrdinalIgnoreCase);
 
     public async Task ConnectAllAsync(
         IEnumerable<McpServerConfig> servers,
@@ -26,16 +26,16 @@ public sealed class McpManager : IDisposable
                 {
                     var tool = new McpTool(client, def);
                     registry.RegisterMcpTool(tool);
-                    if (!_serverTools.TryGetValue(serverConfig.Name, out var names))
+                    if (!serverTools.TryGetValue(serverConfig.Name, out var names))
                     {
                         names = [];
-                        _serverTools[serverConfig.Name] = names;
+                        serverTools[serverConfig.Name] = names;
                     }
                     names.Add(tool.Name);
                     log?.Invoke($"Registered MCP tool: {tool.Name}");
                 }
 
-                _clients.Add(client);
+                mcpClients.Add(client);
             }
             catch (Exception ex)
             {
@@ -47,24 +47,24 @@ public sealed class McpManager : IDisposable
 
     public void DisconnectServer(string serverName, ToolRegistry registry)
     {
-        var client = _clients.FirstOrDefault(c => c.ServerName == serverName);
+        var client = mcpClients.FirstOrDefault(c => c.ServerName == serverName);
         if (client is null) return;
 
-        if (_serverTools.Remove(serverName, out var toolNames))
+        if (serverTools.Remove(serverName, out var toolNames))
         {
             foreach (var toolName in toolNames)
                 registry.Unregister(toolName);
         }
 
-        _clients.Remove(client);
+        mcpClients.Remove(client);
         client.Dispose();
     }
 
     public void Dispose()
     {
-        foreach (var c in _clients)
+        foreach (var c in mcpClients)
             c.Dispose();
-        _clients.Clear();
-        _serverTools.Clear();
+        mcpClients.Clear();
+        serverTools.Clear();
     }
 }

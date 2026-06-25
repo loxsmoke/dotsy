@@ -25,7 +25,6 @@ public sealed class RequestBuilderTests
     // ── ContextTooSmall ───────────────────────────────────────────────────────
 
     [TestMethod]
-    [ExpectedException(typeof(ContextTooSmallException))]
     public void NonNegotiableBlock_TooLarge_ThrowsContextTooSmallException()
     {
         // usable = 1000 - 100 = 900; system prompt alone is 4000 chars ≈ 1000 tokens > 900
@@ -37,7 +36,8 @@ public sealed class RequestBuilderTests
 
         var systemPrompt = new string('x', 4_000); // ~1000 tokens (4 chars/token)
 
-        RequestBuilder.Build(config, systemPrompt, ctx, []);
+        Assert.ThrowsExactly<ContextTooSmallException>(() =>
+            RequestBuilder.Build(config, systemPrompt, ctx, []));
     }
 
     // ── Pruning oldest messages ───────────────────────────────────────────────

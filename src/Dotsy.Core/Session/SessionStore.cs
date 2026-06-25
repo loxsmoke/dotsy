@@ -13,25 +13,25 @@ public sealed class SessionStore
         WriteIndented = false
     };
 
-    private readonly string _sessionId;
-    private readonly string _jsonlPath;
-    private readonly string _indexPath;
-    private readonly bool _disabled;
-    private string? _lastParentUuid;
-    private int _messageCount;
+    private readonly string sessionId;
+    private readonly string jsonlPath;
+    private readonly string indexPath;
+    private readonly bool disabled;
+    private string? lastParentUuid;
+    private int messageCount;
 
-    public string SessionId => _sessionId;
+    public string SessionId => sessionId;
 
     public SessionStore(string sessionId, string sessionDir, bool disabled = false)
     {
-        _sessionId = sessionId;
-        _disabled = disabled || Environment.GetEnvironmentVariable("DOTSY_NO_HISTORY") == "1";
+        this.sessionId = sessionId;
+        this.disabled = disabled || Environment.GetEnvironmentVariable("DOTSY_NO_HISTORY") == "1";
 
-        if (_disabled) { _jsonlPath = ""; _indexPath = ""; return; }
+        if (this.disabled) { jsonlPath = ""; indexPath = ""; return; }
 
         Directory.CreateDirectory(sessionDir);
-        _jsonlPath = Path.Combine(sessionDir, $"{sessionId}.jsonl");
-        _indexPath = Path.Combine(Path.GetDirectoryName(sessionDir)!, "sessions.json");
+        jsonlPath = Path.Combine(sessionDir, $"{sessionId}.jsonl");
+        indexPath = Path.Combine(Path.GetDirectoryName(sessionDir)!, "sessions.json");
     }
 
     /// <summary>
@@ -60,30 +60,30 @@ public sealed class SessionStore
 
     public void Append(SessionRecord record)
     {
-        if (_disabled) return;
-        record.SessionId = _sessionId;
-        if (_lastParentUuid is not null)
-            record.ParentUuid = _lastParentUuid;
+        if (disabled) return;
+        record.SessionId = sessionId;
+        if (lastParentUuid is not null)
+            record.ParentUuid = lastParentUuid;
 
-        _lastParentUuid = record.Uuid;
-        _messageCount++;
+        lastParentUuid = record.Uuid;
+        messageCount++;
 
         var line = JsonSerializer.Serialize(record, JsonOpts);
-        File.AppendAllText(_jsonlPath, line + "\n");
+        File.AppendAllText(jsonlPath, line + "\n");
     }
 
     public void UpdateIndex(string title, string cwd, string model)
     {
-        if (_disabled) return;
+        if (disabled) return;
         try
         {
-            var entries = LoadIndex(_indexPath);
-            var existing = entries.FirstOrDefault(e => e.SessionId == _sessionId);
+            var entries = LoadIndex(indexPath);
+            var existing = entries.FirstOrDefault(e => e.SessionId == sessionId);
             if (existing is null)
             {
                 existing = new SessionIndexEntry
                 {
-                    SessionId = _sessionId,
+                    SessionId = sessionId,
                     Title = title,
                     Cwd = cwd,
                     Model = model,
@@ -92,10 +92,10 @@ public sealed class SessionStore
                 entries.Add(existing);
             }
             existing.UpdatedAt = DateTimeOffset.UtcNow;
-            existing.MessageCount = _messageCount;
+            existing.MessageCount = messageCount;
             if (!string.IsNullOrEmpty(title)) existing.Title = title;
 
-            SaveIndex(_indexPath, entries);
+            SaveIndex(indexPath, entries);
         }
         catch { }
     }

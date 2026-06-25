@@ -1,8 +1,7 @@
+using Dotsy.Cli.Tui.Colors;
 using System.Text;
-using Terminal.Gui;
-using TGAttribute = Terminal.Gui.Attribute;
 
-namespace Dotsy.Cli.Tui;
+namespace Dotsy.Cli.Tui.Renderers;
 
 /// <summary>
 /// Streaming markdown renderer for the conversation view.
@@ -11,17 +10,17 @@ namespace Dotsy.Cli.Tui;
 /// </summary>
 internal sealed class MarkdownRenderer
 {
-    private readonly Action<string, TGAttribute> _append;
-    private readonly StringBuilder _line = new();
-    private readonly int _wrapWidth;
-    private bool _inCodeBlock;
-    private string _codeLang = "";
-    private bool _inBlockComment;
+    private readonly Action<string, TGAttribute> append;
+    private readonly StringBuilder line = new();
+    private readonly int wrapWidth;
+    private bool inCodeBlock;
+    private string codeLang = "";
+    private bool inBlockComment;
 
     public MarkdownRenderer(int wrapWidth, Action<string, TGAttribute> append)
     {
-        _append = append;
-        _wrapWidth = wrapWidth > 0 ? wrapWidth : 48;
+        this.append = append;
+        this.wrapWidth = wrapWidth > 0 ? wrapWidth : 48;
     }
 
     public void Write(string chunk)
@@ -29,13 +28,13 @@ internal sealed class MarkdownRenderer
         foreach (var ch in chunk)
         {
             if (ch == '\n') CommitLine(addNewline: true);
-            else _line.Append(ch);
+            else line.Append(ch);
         }
     }
 
     public void Flush()
     {
-        if (_line.Length > 0)
+        if (line.Length > 0)
             CommitLine(addNewline: false);
     }
 
@@ -43,38 +42,38 @@ internal sealed class MarkdownRenderer
 
     private void CommitLine(bool addNewline)
     {
-        RenderLine(_line.ToString(), addNewline);
-        _line.Clear();
+        RenderLine(line.ToString(), addNewline);
+        line.Clear();
     }
 
     private void RenderLine(string raw, bool addNewline)
     {
-        void End() { if (addNewline) _append("\n", Palette.Normal); }
+        void End() { if (addNewline) append("\n", Palette.Normal); }
 
         var trimmed = raw.TrimStart();
 
         // Code fence toggle
         if (trimmed.StartsWith("```") || trimmed.StartsWith("~~~"))
         {
-            if (!_inCodeBlock)
+            if (!inCodeBlock)
             {
-                _codeLang = trimmed[3..].Trim().ToLowerInvariant();
-                _inBlockComment = false;
+                codeLang = trimmed[3..].Trim().ToLowerInvariant();
+                inBlockComment = false;
             }
             else
             {
-                _codeLang = "";
-                _inBlockComment = false;
+                codeLang = "";
+                inBlockComment = false;
             }
-            _inCodeBlock = !_inCodeBlock;
+            inCodeBlock = !inCodeBlock;
             End();
             return;
         }
 
-        if (_inCodeBlock)
+        if (inCodeBlock)
         {
-            _append("  ", Palette.Normal);
-            _inBlockComment = SyntaxHighlighter.Highlight(_codeLang, raw, _inBlockComment, _append);
+            append("  ", Palette.Normal);
+            inBlockComment = SyntaxHighlighter.Highlight(codeLang, raw, inBlockComment, append);
             End();
             return;
         }
@@ -97,7 +96,7 @@ internal sealed class MarkdownRenderer
         // Horizontal rule
         if (trimmed is "---" or "***" or "___" or "===")
         {
-            _append(new string('─', _wrapWidth), Palette.Dim);
+            append(new string('─', wrapWidth), Palette.Dim);
             End();
             return;
         }
@@ -105,7 +104,7 @@ internal sealed class MarkdownRenderer
         // Blockquote
         if (trimmed.StartsWith("> "))
         {
-            _append("│ ", Palette.Dim);
+            append("│ ", Palette.Dim);
             RenderInline(trimmed[2..], Palette.Dim);
             End();
             return;
@@ -114,7 +113,7 @@ internal sealed class MarkdownRenderer
         // Indented code block (4 spaces or tab)
         if (raw.StartsWith("    ") || raw.StartsWith("\t"))
         {
-            _append("  " + trimmed, Palette.Code);
+            append("  " + trimmed, Palette.Code);
             End();
             return;
         }
@@ -123,7 +122,7 @@ internal sealed class MarkdownRenderer
         if (trimmed.Length > 2 &&
             (trimmed.StartsWith("- ") || trimmed.StartsWith("* ") || trimmed.StartsWith("+ ")))
         {
-            _append("  • ", Palette.Bullet);
+            append("  • ", Palette.Bullet);
             RenderInline(trimmed[2..], Palette.Normal);
             End();
             return;
@@ -134,7 +133,7 @@ internal sealed class MarkdownRenderer
             int dot = trimmed.IndexOf(". ");
             if (dot is > 0 and <= 3 && trimmed[..dot].All(char.IsAsciiDigit))
             {
-                _append("  " + trimmed[..(dot + 2)], Palette.Bullet);
+                append("  " + trimmed[..(dot + 2)], Palette.Bullet);
                 RenderInline(trimmed[(dot + 2)..], Palette.Normal);
                 End();
                 return;
@@ -153,7 +152,7 @@ internal sealed class MarkdownRenderer
         void Flush()
         {
             if (buf.Length == 0) return;
-            _append(buf.ToString(), baseAttr);
+            append(buf.ToString(), baseAttr);
             buf.Clear();
         }
 
@@ -171,7 +170,7 @@ internal sealed class MarkdownRenderer
                     if (cp > 0)
                     {
                         Flush();
-                        _append(text[(i + 1)..cb], Palette.Cmd);
+                        append(text[(i + 1)..cb], Palette.Cmd);
                         i = cp + 1;
                         continue;
                     }
@@ -185,7 +184,7 @@ internal sealed class MarkdownRenderer
                 if (end > i)
                 {
                     Flush();
-                    _append(text[(i + 1)..end], Palette.Code);
+                    append(text[(i + 1)..end], Palette.Code);
                     i = end + 1;
                     continue;
                 }
@@ -198,7 +197,7 @@ internal sealed class MarkdownRenderer
                 if (end >= 0)
                 {
                     Flush();
-                    _append(text[(i + 2)..end], Palette.Dim);
+                    append(text[(i + 2)..end], Palette.Dim);
                     i = end + 2;
                     continue;
                 }
@@ -212,7 +211,7 @@ internal sealed class MarkdownRenderer
                 if (end >= 0)
                 {
                     Flush();
-                    _append(text[(i + 2)..end], Palette.Bright);
+                    append(text[(i + 2)..end], Palette.Bright);
                     i = end + 2;
                     continue;
                 }
@@ -225,7 +224,7 @@ internal sealed class MarkdownRenderer
                 if (end > i + 1)
                 {
                     Flush();
-                    _append(text[(i + 1)..end], Palette.Bright);
+                    append(text[(i + 1)..end], Palette.Bright);
                     i = end + 1;
                     continue;
                 }

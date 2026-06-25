@@ -16,30 +16,30 @@ public sealed class PermissionStore
         "Shell(del /f /s /q *)"
     ];
 
-    private readonly HashSet<string> _sessionAllow = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> _sessionDeny = new(StringComparer.OrdinalIgnoreCase);
-    private readonly List<string> _configAllow;
-    private readonly List<string> _configDeny;
-    private readonly string _projectPermissionsPath;
-    private readonly string _globalPermissionsPath;
-    private readonly string _cwd;
-    private readonly List<PermissionDecisionRecord> _recentDecisions = [];
-    private bool _allowWriteForProject;
+    private readonly HashSet<string> sessionAllow = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> sessionDeny = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<string> configAllow;
+    private readonly List<string> configDeny;
+    private readonly string projectPermissionsPath;
+    private readonly string globalPermissionsPath;
+    private readonly string cwd;
+    private readonly List<PermissionDecisionRecord> recentDecisions = [];
+    private bool allowWriteForProject;
 
     public bool Yolo { get; set; }
 
     public PermissionStore(PermissionsConfig config, string cwd)
     {
-        _cwd = cwd;
-        _configAllow = [.. config.AlwaysAllow];
-        _configDeny = [.. config.NeverAllow];
-        _projectPermissionsPath = Path.Combine(cwd, ".dotsy", "permissions.json");
-        _globalPermissionsPath = Path.Combine(
+        this.cwd = cwd;
+        configAllow = [.. config.AlwaysAllow];
+        configDeny = [.. config.NeverAllow];
+        projectPermissionsPath = Path.Combine(cwd, ".dotsy", "permissions.json");
+        globalPermissionsPath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".config", "dotsy", "permissions.json");
 
-        LoadPersistedPermissions(_globalPermissionsPath);
-        LoadPersistedPermissions(_projectPermissionsPath);
+        LoadPersistedPermissions(globalPermissionsPath);
+        LoadPersistedPermissions(projectPermissionsPath);
     }
 
     public PermissionVerdict Evaluate(string toolName, string argument)
@@ -58,15 +58,15 @@ public sealed class PermissionStore
             return PermissionVerdict.Deny;
 
         // Config deny list
-        if (MatchesAny(key, _configDeny) || MatchesAny(key, _sessionDeny))
+        if (MatchesAny(key, configDeny) || MatchesAny(key, sessionDeny))
             return PermissionVerdict.Deny;
 
         // Config and session allow lists
-        if (MatchesAny(key, _configAllow) || MatchesAny(key, _sessionAllow))
+        if (MatchesAny(key, configAllow) || MatchesAny(key, sessionAllow))
             return PermissionVerdict.Allow;
 
         // Project-scoped write allowance (excludes .dotsy)
-        if (_allowWriteForProject && IsWriteInProjectNotDotsy(toolName, argument))
+        if (allowWriteForProject && IsWriteInProjectNotDotsy(toolName, argument))
             return PermissionVerdict.Allow;
 
         // ReadOnly tools are always allowed
@@ -76,45 +76,45 @@ public sealed class PermissionStore
     public void AllowForSession(string toolName, string argument)
     {
         var key = FormatKey(toolName, argument);
-        _sessionAllow.Add(key);
+        sessionAllow.Add(key);
         TrackDecision("allow once", key);
     }
 
     public void AlwaysAllow(string toolName, string argument)
     {
         var key = FormatKey(toolName, argument);
-        _sessionAllow.Add(key);
+        sessionAllow.Add(key);
         TrackDecision("always allow", key);
-        PersistAllow(_projectPermissionsPath, key);
+        PersistAllow(projectPermissionsPath, key);
     }
 
     // Grants automatic approval for Write/Edit/MultiEdit anywhere inside the project
     // folder, except .dotsy (which always prompts).
     public void AllowWriteForProject()
     {
-        _allowWriteForProject = true;
+        allowWriteForProject = true;
         TrackDecision("allow for project", "Write, Edit, and MultiEdit inside the project except .dotsy");
     }
 
     public void DenyForSession(string toolName, string argument)
     {
         var key = FormatKey(toolName, argument);
-        _sessionDeny.Add(key);
+        sessionDeny.Add(key);
         TrackDecision("deny", key);
     }
 
     public PermissionStoreSnapshot Snapshot() => new(
         Yolo,
-        _allowWriteForProject,
-        _cwd,
-        _globalPermissionsPath,
-        _projectPermissionsPath,
-        [.. _configAllow],
-        [.. _configDeny],
-        [.. _sessionAllow],
-        [.. _sessionDeny],
+        allowWriteForProject,
+        cwd,
+        globalPermissionsPath,
+        projectPermissionsPath,
+        [.. configAllow],
+        [.. configDeny],
+        [.. sessionAllow],
+        [.. sessionDeny],
         [.. HardDenials],
-        [.. _recentDecisions.DistinctBy(d => (d.Kind, d.Rule))]);
+        [.. recentDecisions.DistinctBy(d => (d.Kind, d.Rule))]);
 
     private void LoadPersistedPermissions(string path)
     {
@@ -127,11 +127,11 @@ public sealed class PermissionStore
             if (doc.TryGetProperty("always_allow", out var aa))
                 foreach (var item in aa.EnumerateArray())
                     if (item.GetString() is { } s)
-                        _sessionAllow.Add(s);
+                        sessionAllow.Add(s);
             if (doc.TryGetProperty("never_allow", out var na))
                 foreach (var item in na.EnumerateArray())
                     if (item.GetString() is { } s)
-                        _sessionDeny.Add(s);
+                        sessionDeny.Add(s);
         }
         catch { }
     }
@@ -170,9 +170,9 @@ public sealed class PermissionStore
     private void TrackDecision(string kind, string rule)
     {
         var record = new PermissionDecisionRecord(kind, rule, DateTimeOffset.Now);
-        if (!_recentDecisions.Any(d => d.Kind.Equals(kind, StringComparison.OrdinalIgnoreCase)
+        if (!recentDecisions.Any(d => d.Kind.Equals(kind, StringComparison.OrdinalIgnoreCase)
                 && d.Rule.Equals(rule, StringComparison.OrdinalIgnoreCase)))
-            _recentDecisions.Add(record);
+            recentDecisions.Add(record);
     }
 
     private static bool MatchesAny(string key, IEnumerable<string> patterns)
@@ -227,9 +227,9 @@ public sealed class PermissionStore
         var path = ExtractPathArgument(argument);
         var absPath = Path.IsPathRooted(path)
             ? path
-            : Path.GetFullPath(Path.Combine(_cwd, path));
+            : Path.GetFullPath(Path.Combine(cwd, path));
 
-        var cwdFull = Path.GetFullPath(_cwd) + Path.DirectorySeparatorChar;
+        var cwdFull = Path.GetFullPath(cwd) + Path.DirectorySeparatorChar;
         return !absPath.StartsWith(cwdFull, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -246,11 +246,11 @@ public sealed class PermissionStore
             var path = ExtractPathArgument(argument);
             absPath = Path.IsPathRooted(path)
                 ? path
-                : Path.GetFullPath(Path.Combine(_cwd, path));
+                : Path.GetFullPath(Path.Combine(cwd, path));
         }
         catch { return false; }
 
-        var cwdFull = Path.GetFullPath(_cwd);
+        var cwdFull = Path.GetFullPath(cwd);
         var cwdSlash = cwdFull + Path.DirectorySeparatorChar;
         if (!absPath.StartsWith(cwdSlash, StringComparison.OrdinalIgnoreCase))
             return false;

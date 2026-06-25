@@ -19,7 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="Dotsy.Core.Tests" />
+    <InternalsVisibleTo Include="Dotsy.Cli.Tests" />
   </ItemGroup>
 
   <ItemGroup Condition="'$(UseTerminalGuiSource)' == 'true'">
@@ -27,23 +27,27 @@
   </ItemGroup>
 
   <ItemGroup Condition="'$(UseTerminalGuiSource)' != 'true'">
-    <PackageReference Include="Terminal.Gui" Version="2.0.0" />
+    <PackageReference Include="Terminal.Gui" Version="2.4.10" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="LibGit2Sharp" Version="0.31.0" />
-    <PackageReference Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
+    <PackageReference Include="System.CommandLine" Version="2.0.9" />
   </ItemGroup>
 
   <!-- Pin Roslyn packages to a consistent version; Terminal.Gui 2.0.0 brings
        CSharp.Workspaces/VisualBasic/Workspaces.Common at 4.10.0 while the SDK
        resolves Common and CSharp at 4.13.0, producing NU1608 warnings. -->
   <ItemGroup>
-    <PackageReference Include="Microsoft.CodeAnalysis" Version="4.13.0" />
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.13.0" />
-    <PackageReference Include="Microsoft.CodeAnalysis.VisualBasic" Version="4.13.0" />
-    <PackageReference Include="Microsoft.CodeAnalysis.VisualBasic.Workspaces" Version="4.13.0" />
-    <PackageReference Include="Microsoft.CodeAnalysis.Workspaces.Common" Version="4.13.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis" Version="5.3.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.3.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.VisualBasic" Version="5.3.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.VisualBasic.Workspaces" Version="5.3.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Workspaces.Common" Version="5.3.0" />
+    <PackageReference Include="Terminal.Gui.Editor" Version="2.5.4" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="Controls\" />
   </ItemGroup>
 
 </Project>

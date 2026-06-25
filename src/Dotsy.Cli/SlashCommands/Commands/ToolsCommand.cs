@@ -1,5 +1,6 @@
 using Dotsy.Cli.SlashCommands.Interfaces;
 using Dotsy.Cli.Tui;
+using Dotsy.Cli.Tui.Colors;
 
 namespace Dotsy.Cli.SlashCommands;
 
@@ -25,10 +26,11 @@ internal sealed class ToolsCommand : ISlashCommand
         }
 
         var defs = registry.GetToolDefinitions();
+        var maxColWidth = (defs.Any() ? defs.Max(t => t.Name.Length) : 0) + 1;
         host.Write($"  {defs.Count} tools registered\n\n", Palette.Dim);
 
         foreach (var t in defs.OrderBy(t => t.Name))
-            host.WriteDescription(20, t.Name, t.Description);
+            host.WriteDescription(maxColWidth, t.Name, t.Description);
         host.Write("\n", Palette.Normal);
     }
 }

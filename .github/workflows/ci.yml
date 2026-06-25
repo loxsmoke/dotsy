@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: ["**"]
 
+permissions:
+  contents: write
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -16,7 +19,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: "9.0.x"
+          dotnet-version: "10.0.x"
 
       - name: Restore
         run: dotnet restore
@@ -25,11 +28,90 @@ jobs:
         run: dotnet build --no-restore --configuration Release
 
       - name: Test
-        run: dotnet test --no-build --configuration Release --logger "trx;LogFileName=results.trx" --results-directory ./test-results
+        run: dotnet test --no-build --configuration Release --logger trx --results-directory ./test-results --collect "XPlat Code Coverage"
+
+      - name: Summarize code coverage
+        if: always()
+        shell: pwsh
+        run: |
+          $reports = Get-ChildItem ./test-results -Recurse -Filter coverage.cobertura.xml |
+            Group-Object { (Get-FileHash $_.FullName -Algorithm SHA256).Hash } |
+            ForEach-Object { $_.Group[0] }
+
+          if (-not $reports) {
+            "## Code coverage" >> $env:GITHUB_STEP_SUMMARY
+            "" >> $env:GITHUB_STEP_SUMMARY
+            "No coverage reports were produced." >> $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
+
+          $totalLinesCovered = 0
+          $totalLinesValid = 0
+          $totalBranchesCovered = 0
+          $totalBranchesValid = 0
+
+          "## Code coverage" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "| Report | Lines | Branches |" >> $env:GITHUB_STEP_SUMMARY
+          "| --- | ---: | ---: |" >> $env:GITHUB_STEP_SUMMARY
+
+          foreach ($report in $reports) {
+            [xml]$coverage = Get-Content $report.FullName -Raw
+            $root = $coverage.coverage
+            $lineRate = [double]$root.GetAttribute("line-rate") * 100
+            $branchRate = [double]$root.GetAttribute("branch-rate") * 100
+            $linesCovered = [int]$root.GetAttribute("lines-covered")
+            $linesValid = [int]$root.GetAttribute("lines-valid")
+            $branchesCovered = [int]$root.GetAttribute("branches-covered")
+            $branchesValid = [int]$root.GetAttribute("branches-valid")
+
+            $totalLinesCovered += $linesCovered
+            $totalLinesValid += $linesValid
+            $totalBranchesCovered += $branchesCovered
+            $totalBranchesValid += $branchesValid
+
+            $packageNames = @($root.packages.package | ForEach-Object { $_.name }) | Where-Object { $_ }
+            $name = if ($packageNames) { $packageNames -join ", " } else { $report.Directory.Name }
+            "| $name | $($lineRate.ToString('0.00'))% | $($branchRate.ToString('0.00'))% |" >> $env:GITHUB_STEP_SUMMARY
+          }
+
+          $totalLineRate = if ($totalLinesValid -gt 0) { $totalLinesCovered / $totalLinesValid * 100 } else { 0 }
+          $totalBranchRate = if ($totalBranchesValid -gt 0) { $totalBranchesCovered / $totalBranchesValid * 100 } else { 0 }
+
+          "| **Total** | **$($totalLineRate.ToString('0.00'))%** | **$($totalBranchRate.ToString('0.00'))%** |" >> $env:GITHUB_STEP_SUMMARY
+
+          $color = if ($totalLineRate -ge 80) { "brightgreen" } elseif ($totalLineRate -ge 60) { "yellowgreen" } elseif ($totalLineRate -ge 40) { "yellow" } elseif ($totalLineRate -ge 20) { "orange" } else { "red" }
+          $coverageBadgeUrl = "https://img.shields.io/badge/coverage-$($totalLineRate.ToString('0.00'))%25-$color"
+          $readme = Get-Content ./README.md -Raw
+          $readme = $readme -replace 'https://img\.shields\.io/badge/coverage-[^)]+', $coverageBadgeUrl
+          Set-Content ./README.md -Value $readme -NoNewline
+
+      - name: Update coverage badge
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        run: |
+          if (-not (Test-Path ./README.md)) {
+            Write-Host "README.md was not found."
+            exit 0
+          }
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "Update coverage badge"
+            git push
+          } else {
+            Write-Host "Coverage badge is already current."
+          }
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v6
         with:
           name: test-results
-          path: ./test-results/*.trx
+          path: |
+            ./test-results/**/*.trx
+            ./test-results/**/coverage.cobertura.xml

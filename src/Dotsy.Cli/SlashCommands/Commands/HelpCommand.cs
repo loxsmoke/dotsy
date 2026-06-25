@@ -1,5 +1,5 @@
 using Dotsy.Cli.SlashCommands.Interfaces;
-using Dotsy.Cli.Tui;
+using Dotsy.Cli.Tui.Colors;
 
 namespace Dotsy.Cli.SlashCommands;
 

@@ -1,9 +1,10 @@
+using Dotsy.Cli.Tui.Approval;
+using Dotsy.Cli.Tui.Colors;
+using Dotsy.Cli.Tui.Renderers;
 using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Providers;
-using Dotsy.Core.Session;
 using Dotsy.Core.Session.Data;
 using Dotsy.Core.Tools;
-using Terminal.Gui;
 
 namespace Dotsy.Cli.Tui;
 
@@ -45,20 +46,20 @@ public partial class AgentWindow
             Message = new { content = promptText }
         });
 
-        loop.PermissionPrompter = async (toolName, rawArgs, token) =>
+        loop.PermissionPrompter = async (tool, rawArgs, token) =>
         {
-            var displayArg = FormatRunApproval(toolName, rawArgs, cwd);
-            var choice = await ShowApproval(toolName, displayArg);
+            var displayArg = FormatRunApproval(tool, rawArgs, cwd);
+            var choice = await ShowApproval(tool, displayArg);
             switch (choice)
             {
                 case ApprovalChoice.AlwaysAllow:
-                    TuiSessionContext.Permissions?.AlwaysAllow(toolName, rawArgs);
+                    TuiSessionContext.Permissions?.AlwaysAllow(tool.Name, rawArgs);
                     break;
                 case ApprovalChoice.AllowForProject:
                     TuiSessionContext.Permissions?.AllowWriteForProject();
                     break;
                 case ApprovalChoice.AllowOnce:
-                    TuiSessionContext.Permissions?.AllowForSession(toolName, rawArgs);
+                    TuiSessionContext.Permissions?.AllowForSession(tool.Name, rawArgs);
                     break;
             }
             return choice switch
@@ -75,6 +76,7 @@ public partial class AgentWindow
         var toolTimers = new Dictionary<int, long>();
         var toolArgs = new Dictionary<int, (string Name, string ArgsJson)>();
         var toolRowIndex = new Dictionary<int, int>(); // per-turn loop index -> absolute row index
+        var currentTurn = loopCtx.TurnCount;
 
         Task.Run(async () =>
         {
@@ -94,8 +96,8 @@ public partial class AgentWindow
                             {
                                 assistantWritten = true;
                                 mdRenderer = new MarkdownRenderer(convoWrapWidth, (text, attr) =>
-                                    Application.Invoke(() => AppendConvo(text, attr)));
-                                Application.Invoke(() => AppendConvo("\nAgent › ", Palette.Bullet));
+                                    TuiSessionContext.App.Invoke(() => AppendConvo(text, attr)));
+                                TuiSessionContext.App.Invoke(() => AppendConvo("\nAgent › ", Palette.Bullet));
                                 StartStreamCursor();
                             }
                             HideStreamCursor();
@@ -107,9 +109,9 @@ public partial class AgentWindow
                             if (!thinkingWritten)
                             {
                                 thinkingWritten = true;
-                                Application.Invoke(() => AppendConvo("\nthink › ", Palette.Dim));
+                                TuiSessionContext.App.Invoke(() => AppendConvo("\nthink › ", Palette.Dim));
                             }
-                            Application.Invoke(() => AppendConvo(thk.Text, Palette.Dim));
+                            TuiSessionContext.App.Invoke(() => AppendConvo(thk.Text, Palette.Dim));
                             break;
 
                         case ToolStarted ts:
@@ -158,15 +160,15 @@ public partial class AgentWindow
 
                                 // Rows accumulate across prompts, so the loop's per-turn index is
                                 // remapped to the absolute row index AddTool assigns.
-                                var rowIdx = AddTool(ts.Name, displayArg, cwd, toolGroup, parameters.Length > 0 ? parameters : null);
+                                var rowIdx = AddTool(ts.Name, displayArg, cwd, toolGroup, parameters.Length > 0 ? parameters : null, currentTurn);
                                 toolRowIndex[ts.Index] = rowIdx;
                                 // For Write, pre-populate inspect with the content being written
                                 if (ts.Name == WriteTool.ToolName
                                     && ToolPanelFormatter.GetWriteContent(ts.Arg) is { } wc)
                                     SetToolOutput(rowIdx, FormatToolOutput(wc));
-                                Application.Invoke(() => statusBar.SetState($"running  {ts.Name}"));
+                                TuiSessionContext.App.Invoke(() => statusBar.SetState($"running  {ts.Name}"));
                                 if (TuiSessionContext.Config.Tui.Verbose)
-                                    Application.Invoke(() =>
+                                    TuiSessionContext.App.Invoke(() =>
                                         AppendConvo($"\n▶ {ts.Name} · {displayArg}\n", Palette.Dim));
                                 break;
                             }
@@ -193,17 +195,17 @@ public partial class AgentWindow
                                 if (tf.Name != WriteTool.ToolName || tf.Result.IsError)
                                     SetToolOutput(rowIdx, editCells ?? FormatToolOutput(tf.Result.Content));
                                 if (tf.Result.IsError)
-                                    Application.Invoke(() => AppendConvo(
+                                    TuiSessionContext.App.Invoke(() => AppendConvo(
                                         $"  [✗ {tf.Name}] {tf.Result.Content}\n", Palette.Err));
                                 else if (tf.Name.Equals(DoneTool.ToolName, StringComparison.OrdinalIgnoreCase) &&
                                          !string.IsNullOrWhiteSpace(tf.Result.Content))
                                 {
                                     if (!assistantWritten)
-                                        Application.Invoke(() => AppendConvo("\nAgent › ", Palette.Bullet));
+                                        TuiSessionContext.App.Invoke(() => AppendConvo("\nAgent › ", Palette.Bullet));
                                     else
                                         mdRenderer?.Flush();
 
-                                    Application.Invoke(() => AppendConvo(tf.Result.Content.TrimEnd() + "\n", Palette.Normal));
+                                    TuiSessionContext.App.Invoke(() => AppendConvo(tf.Result.Content.TrimEnd() + "\n", Palette.Normal));
                                     assistantWritten = true;
                                 }
                                 else if (TuiSessionContext.Config.Tui.Verbose)
@@ -219,7 +221,7 @@ public partial class AgentWindow
                                     var suffix = resultLines.Length > maxLines
                                         ? $"\n  … ({resultLines.Length - maxLines} more lines)"
                                         : "";
-                                    Application.Invoke(() =>
+                                    TuiSessionContext.App.Invoke(() =>
                                         AppendConvo(preview + suffix + "\n", Palette.Dim));
                                 }
                                 break;
@@ -228,7 +230,7 @@ public partial class AgentWindow
                         case PermissionRequired pr:
                             {
                                 StopStreamCursor();
-                                var choice = await ShowApproval(pr.ToolName, pr.DisplayArgument);
+                                var choice = await ShowApproval(pr.Tool, pr.DisplayArgument);
                                 if (choice == ApprovalChoice.AllowForProject)
                                     TuiSessionContext.Permissions?.AllowWriteForProject();
                                 pr.Decision.TrySetResult(choice switch
@@ -243,7 +245,7 @@ public partial class AgentWindow
 
                         case CompactionOccurred co:
                             StopStreamCursor();
-                            Application.Invoke(() => AppendConvo(
+                            TuiSessionContext.App.Invoke(() => AppendConvo(
                                 $"\n─── compacted ({co.TokensBefore:N0}→{co.TokensAfter:N0} tokens) ───\n\n",
                                 Palette.Dim));
                             break;
@@ -254,16 +256,17 @@ public partial class AgentWindow
                             {
                                 mdRenderer?.Flush();
                                 mdRenderer = null;
-                                Application.Invoke(() => AppendConvo("\n\n", Palette.Normal));
+                                TuiSessionContext.App.Invoke(() => AppendConvo("\n\n", Palette.Normal));
                                 assistantWritten = false;
                             }
                             if (thinkingWritten)
                             {
-                                Application.Invoke(() => AppendConvo("\n", Palette.Normal));
+                                TuiSessionContext.App.Invoke(() => AppendConvo("\n", Palette.Normal));
                                 thinkingWritten = false;
                             }
                             UpdateStatusBarFromCtx();
                             if (tc2.AnyWriteTools) RefreshChangedFiles();
+                            currentTurn++;
                             {
                                 var firstUserText = loopCtx.Messages
                                     .OfType<UserMessage>()
@@ -279,13 +282,13 @@ public partial class AgentWindow
 
                         case RetryScheduled rs:
                             StopStreamCursor();
-                            Application.Invoke(() => statusBar.SetState(
+                            TuiSessionContext.App.Invoke(() => statusBar.SetState(
                                 $"⏳ retrying in {rs.DelaySeconds}s · attempt {rs.AttemptNumber}/{rs.MaxAttempts}"));
                             break;
 
                         case ReflectionOccurred ro:
                             StopStreamCursor();
-                            Application.Invoke(() =>
+                            TuiSessionContext.App.Invoke(() =>
                                 AppendConvo($"\n[reflection: {ro.Error}]\n\n", Palette.Warn));
                             break;
 
@@ -296,15 +299,31 @@ public partial class AgentWindow
                                 {
                                     mdRenderer?.Flush();
                                     mdRenderer = null;
-                                    Application.Invoke(() => AppendConvo("\n\n", Palette.Normal));
+                                    TuiSessionContext.App.Invoke(() => AppendConvo("\n\n", Palette.Normal));
                                 }
                                 if (thinkingWritten)
                                 {
-                                    Application.Invoke(() => AppendConvo("\n", Palette.Normal));
+                                    TuiSessionContext.App.Invoke(() => AppendConvo("\n", Palette.Normal));
                                     thinkingWritten = false;
                                 }
                                 if (le.Reason == EndReason.Error && !string.IsNullOrEmpty(le.Message))
-                                    Application.Invoke(() => AppendConvoError(le.Message));
+                                    TuiSessionContext.App.Invoke(() => AppendConvoError(le.Message));
+
+                                // Surface why the loop stopped unless it was the normal end of the
+                                // LLM's turn (TaskComplete = Done tool; NudgeLimitReached = agent
+                                // handed control back to the user with a text-only reply).
+                                var endReason = le.Reason switch
+                                {
+                                    EndReason.TurnLimitReached => "turn limit reached",
+                                    EndReason.ContextTooSmall  => "context window full",
+                                    EndReason.Cancelled        => "cancelled",
+                                    EndReason.Error            => "error",
+                                    _                          => null
+                                };
+                                if (endReason is not null)
+                                    TuiSessionContext.App.Invoke(() => AppendConvo(
+                                        $"\nLoop ended. Reason: {endReason}\n\n", Palette.Warn));
+
                                 TryExportTrajectory(loopCtx, le);
                                 var msg = le.Reason switch
                                 {
@@ -325,13 +344,13 @@ public partial class AgentWindow
             catch (OperationCanceledException)
             {
                 StopSpinner("idle  [cancelled]");
-                Application.Invoke(() => AppendConvo("\n[cancelled]\n\n", Palette.Warn));
+                TuiSessionContext.App.Invoke(() => AppendConvo("\n[cancelled]\n\n", Palette.Warn));
                 TryExportTrajectory(loopCtx, new LoopEnded(EndReason.Cancelled));
             }
             catch (Exception ex)
             {
                 StopSpinner("idle  [error]");
-                Application.Invoke(() => AppendConvoError(
+                TuiSessionContext.App.Invoke(() => AppendConvoError(
                     ex.InnerException is { } inner
                         ? $"{ex.GetType().Name}: {ex.Message}\n{inner.GetType().Name}: {inner.Message}"
                         : $"{ex.GetType().Name}: {ex.Message}"));
@@ -339,7 +358,7 @@ public partial class AgentWindow
             finally
             {
                 scenarioCts = null;
-                Application.Invoke(() => promptInput.SetFocus());
+                TuiSessionContext.App.Invoke(() => promptInput.SetFocus());
             }
         }, ct);
     }

@@ -136,6 +136,7 @@ public sealed class GrepTool : ITool
 
         var tcs = new TaskCompletionSource<PermissionDecision>();
         await ctx.EmitEvent(new PermissionRequired(
+            this,
             Name,
             "ripgrep (rg) is not installed. Download it (~5 MB) from github.com/BurntSushi/ripgrep so Grep can run?",
             tcs));

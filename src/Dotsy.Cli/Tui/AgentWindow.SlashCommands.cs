@@ -1,6 +1,7 @@
 using Dotsy.Cli.SlashCommands;
-using Terminal.Gui;
-using TGAttribute = Terminal.Gui.Attribute;
+using Dotsy.Cli.Tui.Approval;
+using Dotsy.Cli.Tui.Colors;
+using Dotsy.Cli.Tui.ToolList;
 
 namespace Dotsy.Cli.Tui;
 
@@ -73,7 +74,7 @@ public partial class AgentWindow
         completionFrame.Y = Pos.AnchorEnd(inputHeight + height);
         completionFrame.Visible = true;
 
-        if (completionList.SelectedItem < 0 || completionList.SelectedItem >= completionItems.Count)
+        if (completionList.SelectedItem is null || completionList.SelectedItem < 0 || completionList.SelectedItem >= completionItems.Count)
             completionList.SelectedItem = 0;
         completionList.EnsureSelectedItemVisible();
         completionFrame.SetNeedsDraw();
@@ -104,7 +105,8 @@ public partial class AgentWindow
     private void MoveCompletionSelection(int delta)
     {
         if (completionItems.Count == 0) return;
-        var next = Math.Clamp(completionList.SelectedItem + delta, 0, completionItems.Count - 1);
+        var current = completionList.SelectedItem.GetValueOrDefault();
+        var next = Math.Clamp(current + delta, 0, completionItems.Count - 1);
         completionList.SelectedItem = next;
         completionList.EnsureSelectedItemVisible();
         completionList.SetNeedsDraw();
@@ -115,7 +117,7 @@ public partial class AgentWindow
         if (!completionFrame.Visible || completionItems.Count == 0)
             return;
 
-        var idx = Math.Clamp(completionList.SelectedItem, 0, completionItems.Count - 1);
+        var idx = Math.Clamp(completionList.SelectedItem.GetValueOrDefault(), 0, completionItems.Count - 1);
         var item = completionItems[idx];
         HideCompletionPopup();
         promptInput.SetTextAndMoveEnd(item.Replacement);
@@ -133,7 +135,7 @@ public partial class AgentWindow
 
     #region Theme re-application
     // Re-applies the active theme to the whole view tree without a restart. Color attributes used
-    // when drawing (Palette.*) resolve live, but ColorSchemes are captured per view, so reassign
+    // when drawing (Palette.*) resolve live, but Schemes are captured per view, so reassign
     // them here. When a recolor map is supplied, already-rendered cells (conversation scrollback,
     // tool output, file diffs) are remapped from the previous theme's attributes to the new ones.
     private void ReapplyTheme(Func<TGAttribute, TGAttribute>? recolor = null)
@@ -147,12 +149,9 @@ public partial class AgentWindow
                 RecolorCellLines(row.Diff, recolor);
         }
 
-        ColorScheme = Palette.Scheme();
-        Colors.ColorSchemes["Base"] = Palette.Scheme();
-        Colors.ColorSchemes["Menu"] = Palette.Scheme();
-        Colors.ColorSchemes["Dialog"] = Palette.Scheme();
-        Colors.ColorSchemes["Error"] = Palette.Scheme();
+        SetScheme(Palette.Scheme());
         RethemeRecursive(this);
+        HighlightFrameBorders(); // RethemeRecursive reset every frame to the base scheme; restore focus highlight
         ReloadConvo();
         SetNeedsDraw();
     }
@@ -170,15 +169,17 @@ public partial class AgentWindow
 
     private static void RethemeRecursive(View view)
     {
-        foreach (var sv in view.Subviews)
+        foreach (var sv in view.SubViews)
         {
             switch (sv)
             {
                 case StatusBar sb: sb.ApplyTheme(); break;
-                case FlatButton btn: btn.ColorScheme = Palette.BtnScheme(); break;
-                case MultilineInput mi: mi.ColorScheme = Palette.InputScheme(); break;
-                case ScrollableText st: st.ColorScheme = Palette.ReadOnlyTextScheme(); break;
-                default: sv.ColorScheme = Palette.Scheme(); break;
+                case ApprovalView approval: approval.SetScheme(Palette.FocusedPanelScheme()); break;
+                case FlatButton btn: btn.SetScheme(Palette.BtnScheme()); break;
+                case InspectionFrameView inspect: inspect.SetScheme(Palette.FocusedPanelScheme()); break;
+                case MultilineInput mi: mi.SetScheme(Palette.InputScheme()); break;
+                case ScrollableText st: st.SetScheme(Palette.ReadOnlyTextScheme()); break;
+                default: sv.SetScheme(Palette.Scheme()); break;
             }
             RethemeRecursive(sv);
         }

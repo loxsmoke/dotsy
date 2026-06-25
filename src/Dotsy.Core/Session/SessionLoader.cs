@@ -87,8 +87,27 @@ public static class SessionLoader
             SessionId = sessionId ?? "",
             Messages = messages,
             CompactionSummary = summaryContent,
-            Cwd = cwd
+            Cwd = cwd,
+            UsedTokens = ReadLastUsedTokens(records)
         };
+    }
+
+    // The live token budget tracks input + output of the most recent assistant turn (see AgentLoop's
+    // UsageUpdate handling). Scan from the end for the last record carrying a usage object and mirror
+    // that sum so a resumed session restores the same context-usage figure it last displayed.
+    private static int ReadLastUsedTokens(List<JsonElement> records)
+    {
+        for (int i = records.Count - 1; i >= 0; i--)
+        {
+            if (!records[i].TryGetProperty("usage", out var usage) || usage.ValueKind != JsonValueKind.Object)
+                continue;
+
+            int input = usage.TryGetProperty("inputTokens", out var it) && it.TryGetInt32(out var iv) ? iv : 0;
+            int output = usage.TryGetProperty("outputTokens", out var ot) && ot.TryGetInt32(out var ov) ? ov : 0;
+            return input + output;
+        }
+
+        return 0;
     }
 
     private static List<ContentBlock> ParseContentBlocks(JsonElement content)

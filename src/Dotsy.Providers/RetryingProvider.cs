@@ -12,27 +12,27 @@ namespace Dotsy.Providers;
 /// </summary>
 public sealed class RetryingProvider : IProvider
 {
-    private readonly IProvider _inner;
-    private readonly RetryPolicy _policy;
-    private readonly Func<RetryScheduled, CancellationToken, Task>? _onRetry;
+    private readonly IProvider provider;
+    private readonly RetryPolicy retryPolicy;
+    private readonly Func<RetryScheduled, CancellationToken, Task>? onRetry;
 
-    public string Name => _inner.Name;
+    public string Name => provider.Name;
 
     public RetryingProvider(
         IProvider inner,
         RetryPolicy? policy = null,
         Func<RetryScheduled, CancellationToken, Task>? onRetry = null)
     {
-        _inner = inner;
-        _policy = policy ?? new RetryPolicy();
-        _onRetry = onRetry;
+        provider = inner;
+        retryPolicy = policy ?? new RetryPolicy();
+        this.onRetry = onRetry;
     }
 
     public Task<ModelInfo> GetModelInfoAsync(string modelId, CancellationToken ct) =>
-        _inner.GetModelInfoAsync(modelId, ct);
+        provider.GetModelInfoAsync(modelId, ct);
 
     public Task<IReadOnlyList<ModelInfo>> GetModelsAsync(CancellationToken ct) =>
-        _inner.GetModelsAsync(ct);
+        provider.GetModelsAsync(ct);
 
     public async IAsyncEnumerable<ProviderEvent> StreamAsync(
         ChatRequest request,
@@ -45,7 +45,7 @@ public sealed class RetryingProvider : IProvider
             ProviderError? retryableError = null;
             TimeSpan? serverHint = null;
 
-            await foreach (var ev in _inner.StreamAsync(request, ct))
+            await foreach (var ev in provider.StreamAsync(request, ct))
             {
                 if (ev is StreamError se && se.Ex is ProviderException pe && RetryPolicy.ShouldRetry(pe.Error))
                 {
@@ -67,20 +67,20 @@ public sealed class RetryingProvider : IProvider
                 yield break;
             }
 
-            if (attempt >= _policy.MaxRetries)
+            if (attempt >= retryPolicy.MaxRetries)
             {
                 yield return new StreamError(new ProviderException(retryableError));
                 yield break;
             }
 
-            var delay = _policy.NextDelay(attempt, serverHint);
+            var delay = retryPolicy.NextDelay(attempt, serverHint);
             int delaySecs = Math.Max(1, (int)delay.TotalSeconds);
             attempt++;
 
-            if (_onRetry is not null)
+            if (onRetry is not null)
             {
-                var notification = new RetryScheduled(attempt, _policy.MaxRetries, delaySecs);
-                await _onRetry(notification, ct);
+                var notification = new RetryScheduled(attempt, retryPolicy.MaxRetries, delaySecs);
+                await onRetry(notification, ct);
             }
 
             await Task.Delay(delay, ct);

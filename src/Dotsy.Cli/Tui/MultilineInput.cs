@@ -1,7 +1,6 @@
-using System.Drawing;
+using Dotsy.Cli.Tui.Colors;
 using System.Text;
-using System.Threading;
-using Terminal.Gui;
+using Terminal.Gui.Editor;
 
 namespace Dotsy.Cli.Tui;
 
@@ -16,7 +15,7 @@ namespace Dotsy.Cli.Tui;
 //     KeyCode.Q | KeyCode.CtrlMask). Use Key == comparison, not key.IsCtrl && key.KeyCode == X.
 //   - CursorUp/Down use boundary detection: navigate history from the first/last line,
 //     fall through to normal cursor movement for interior lines.
-internal sealed class MultilineInput : TextView
+internal sealed class MultilineInput : Editor
 {
     public event EventHandler<string>? Submitted;
     public event EventHandler?         HistoryPrev;
@@ -24,60 +23,72 @@ internal sealed class MultilineInput : TextView
     public event EventHandler?         QuitRequested;    // Ctrl+Q
     public event EventHandler?         CancelRequested;  // Ctrl+C
 
-    private readonly StringBuilder _pasteBuffer = new();
-    private Timer? _flushTimer;
+    private readonly StringBuilder pasteBuffer = new();
+    private Timer? flushTimer;
     private const int PasteFlushMs = 5;
 
-    // Pre-built Key objects for modifier combos — avoids allocating on every keypress.
+    // Pre-built Key objects for modifier combos; avoids allocating on every keypress.
     private static readonly Key CtrlQ = new Key(KeyCode.Q).WithCtrl;
     private static readonly Key CtrlC = new Key(KeyCode.C).WithCtrl;
     private static readonly Key CtrlInsert = Key.InsertChar.WithCtrl;
+
+    // Fired when content or caret position changes (mirrors TextView.ContentsChanged behaviour).
+    public event EventHandler<EventArgs>? ContentsChanged;
 
     public MultilineInput()
     {
         CanFocus = true;
         WordWrap = true;
-        AllowsTab = false;
         TabStop = TabBehavior.TabStop;
-        ColorScheme = Palette.InputScheme();
-        CursorVisibility = CursorVisibility.Underline;
+        SetScheme(Palette.InputScheme());
+
+        // The Editor base binds Tab/Shift+Tab to insert-tab commands (there's no TabKeyAddsTab
+        // toggle like TextView had). Drop those bindings so Tab is left unhandled and bubbles to
+        // AgentWindow, which uses it to switch focus between panels instead of inserting a tab.
+        KeyBindings.Remove(Key.Tab);
+        KeyBindings.Remove(Key.Tab.WithShift);
 
         HasFocusChanged += OnHasFocusChanged;
+        ContentChanged  += (_, _) => ContentsChanged?.Invoke(this, EventArgs.Empty);
+        CaretChanged    += (_, _) => ContentsChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private void OnHasFocusChanged(object? sender, EventArgs e)
     {
         if (HasFocus)
         {
-            Application.Driver?.SetCursorVisibility(CursorVisibility.Underline);
-            PositionCursor();
+            SetNeedsDraw();
         }
     }
 
-    public override Point? PositionCursor()
-    {
-        var pt = base.PositionCursor();
-        if (pt is not null) return pt;
+    public void PositionCursor() => SetNeedsDraw();
 
-        // Base returned null — force cursor visible at the calculated position.
-        int col = Math.Max(0, Math.Min(CurrentColumn - LeftColumn, Viewport.Width - 1));
-        int row = Math.Max(0, Math.Min(CurrentRow - TopRow,    Viewport.Height - 1));
-        Move(col, row);
-        return new Point(col, row);
+    public void MoveEnd()
+    {
+        InvokeCommand(Command.End);
+        SetNeedsDraw();
+    }
+
+    public void InsertText(string text)
+    {
+        if (HasSelection)
+            ReplaceSelection(text);
+        else
+            Document?.Insert(CaretOffset, text);
     }
 
     public void SetTextAndMoveEnd(string text)
     {
         FlushPasteBuffer();
         Text = text;
-        MoveEnd();
-        PositionCursor();
+        InvokeCommand(Command.End);
+        SetNeedsDraw();
     }
 
     protected override bool OnKeyDown(Key key)
     {
         // Shift+navigation extends the selection. Invoke the matching TextView "extend" command
-        // directly instead of relying on the bound key being matched — selection then works even
+        // directly instead of relying on the bound key being matched; selection then works even
         // where the shift+arrow keybinding lookup misbehaves.
         foreach (var (selKey, command) in ShiftSelectionCommands)
         {
@@ -93,15 +104,15 @@ internal sealed class MultilineInput : TextView
         // Plain navigation collapses any active selection (from Shift, Ctrl+A, or the mouse).
         // TextView only auto-clears selections it started itself via Shift, so clear it here for
         // selections made by SelectAll or the mouse before letting the cursor move normally.
-        if (IsSelecting && IsPlainNavigationKey(key))
-            IsSelecting = false;
+        if (HasSelection && IsPlainNavigationKey(key))
+            ClearSelection();
 
         // Enter: submit, or buffer as a literal newline while mid-paste.
         if (key.KeyCode == KeyCode.Enter)
         {
-            if (_pasteBuffer.Length > 0)
+            if (pasteBuffer.Length > 0)
             {
-                _pasteBuffer.Append('\n');
+                pasteBuffer.Append('\n');
                 ResetFlushTimer();
             }
             else
@@ -117,14 +128,14 @@ internal sealed class MultilineInput : TextView
         // CursorUp: navigate history from the first line; otherwise move cursor normally.
         if (key.KeyCode == KeyCode.CursorUp)
         {
-            if (CurrentRow == 0)
+            if ((Document?.GetLineByOffset(CaretOffset)?.LineNumber ?? 1) - 1 == 0)
             {
                 FlushPasteBuffer();
                 HistoryPrev?.Invoke(this, EventArgs.Empty);
                 key.Handled = true;
                 return true;
             }
-            // Interior line — let InvokeCommands (Command.Up) move the cursor.
+            // Interior line; let InvokeCommands (Command.Up) move the cursor.
             FlushPasteBuffer();
             return base.OnKeyDown(key);
         }
@@ -134,7 +145,7 @@ internal sealed class MultilineInput : TextView
         {
             var rawText = Text?.ToString() ?? "";
             int lastRow = Math.Max(0, rawText.TrimEnd('\n', '\r').Count(c => c == '\n'));
-            if (CurrentRow >= lastRow)
+            if ((Document?.GetLineByOffset(CaretOffset)?.LineNumber ?? 1) - 1 >= lastRow)
             {
                 FlushPasteBuffer();
                 HistoryNext?.Invoke(this, EventArgs.Empty);
@@ -157,9 +168,9 @@ internal sealed class MultilineInput : TextView
         // Ctrl+C: cancel running agent.
         if (key == CtrlC)
         {
-            if (SelectedLength > 0)
+            if (HasSelection)
             {
-                Copy();
+                InvokeCommand(Command.Copy);
                 key.Handled = true;
                 return true;
             }
@@ -171,31 +182,32 @@ internal sealed class MultilineInput : TextView
 
         if (key == CtrlInsert)
         {
-            Copy();
+            InvokeCommand(Command.Copy);
             key.Handled = true;
             return true;
         }
 
-        // Tab and Esc: return false without calling base so they bubble to AgentWindow.
-        if (key.KeyCode == KeyCode.Tab || key.KeyCode == KeyCode.Esc)
+        // Tab/Shift+Tab and Esc: return false without calling base so they bubble to AgentWindow
+        // (panel navigation). The insert-tab key bindings are removed in the constructor.
+        if (key == Key.Tab || key == Key.Tab.WithShift || key.KeyCode == KeyCode.Esc)
             return false;
 
         // Printable chars: buffer for paste coalescing. Skip wide characters (emojis, etc).
         if (!key.IsCtrl && !key.IsAlt && key.AsRune.Value >= 32 && !IsWideCharacter(key.AsRune))
         {
-            _pasteBuffer.Append(key.AsRune.ToString());
+            pasteBuffer.Append(key.AsRune.ToString());
             ResetFlushTimer();
             key.Handled = true;
             return true;
         }
 
-        // Everything else (Backspace, Delete, Left, Right, Ctrl+Z, …): flush the buffer
+        // Everything else (Backspace, Delete, Left, Right, Ctrl+Z, etc.): flush the buffer
         // so the view's content is current, then let TextView handle the key normally.
         FlushPasteBuffer();
         return base.OnKeyDown(key);
     }
 
-    protected override bool OnMouseEvent(MouseEventArgs ev)
+    protected override bool OnMouseEvent(Mouse ev)
     {
         if (IsContextMenuMouseEvent(ev))
         {
@@ -208,31 +220,34 @@ internal sealed class MultilineInput : TextView
 
     private void ResetFlushTimer()
     {
-        _flushTimer?.Dispose();
-        _flushTimer = new Timer(
-            _ => Application.Invoke(FlushPasteBuffer),
+        flushTimer?.Dispose();
+        flushTimer = new Timer(
+            _ => TuiSessionContext.App.Invoke(FlushPasteBuffer),
             null, PasteFlushMs, System.Threading.Timeout.Infinite);
     }
 
     private void FlushPasteBuffer()
     {
-        _flushTimer?.Dispose();
-        _flushTimer = null;
-        if (_pasteBuffer.Length == 0) return;
+        flushTimer?.Dispose();
+        flushTimer = null;
+        if (pasteBuffer.Length == 0) return;
         // Replace emoji-presentation runes: the terminal renders them 2 columns while TextView's
         // cursor model counts 1, which desyncs editing (cursor jumps lines, text inserts off-place).
-        var text = Glyphs.Sanitize(_pasteBuffer.ToString());
-        _pasteBuffer.Clear();
-        InsertText(text);
+        var text = Glyphs.Sanitize(pasteBuffer.ToString());
+        pasteBuffer.Clear();
+        if (HasSelection)
+            ReplaceSelection(text);
+        else
+            Document?.Insert(CaretOffset, text);
     }
 
-    private bool IsContextMenuMouseEvent(MouseEventArgs ev) =>
+    private bool IsContextMenuMouseEvent(Mouse ev) =>
         ev.Flags == ContextMenu?.MouseFlags
-        || ev.Flags.HasFlag(MouseFlags.Button3Pressed)
-        || ev.Flags.HasFlag(MouseFlags.Button3Released)
-        || ev.Flags.HasFlag(MouseFlags.Button3Clicked)
-        || ev.Flags.HasFlag(MouseFlags.Button3DoubleClicked)
-        || ev.Flags.HasFlag(MouseFlags.Button3TripleClicked);
+        || ev.Flags.HasFlag(MouseFlags.RightButtonPressed)
+        || ev.Flags.HasFlag(MouseFlags.RightButtonReleased)
+        || ev.Flags.HasFlag(MouseFlags.RightButtonClicked)
+        || ev.Flags.HasFlag(MouseFlags.RightButtonDoubleClicked)
+        || ev.Flags.HasFlag(MouseFlags.RightButtonTripleClicked);
 
     // Shift+navigation keys mapped to the TextView command that extends the selection.
     private static readonly (Key Key, Command Command)[] ShiftSelectionCommands =
@@ -283,7 +298,7 @@ internal sealed class MultilineInput : TextView
         // Emoji ranges and common wide blocks
         if ((c >= 0x1F300 && c <= 0x1F9FF) ||  // Emoji (modern block)
             (c >= 0x1F000 && c <= 0x1F02F) ||  // Emoticons
-            (c >= 0x2600 && c <= 0x27BF) ||    // Misc symbols (includes ❌ U+274C)
+            (c >= 0x2600 && c <= 0x27BF) ||    // Misc symbols (includes U+274C)
             (c >= 0x2300 && c <= 0x23FF) ||    // Miscellaneous Technical
             (c >= 0x2B50 && c <= 0x2BFF) ||    // Miscellaneous Symbols and Pictographs
             (c >= 0x4E00 && c <= 0x9FFF) ||    // CJK unified ideographs
@@ -304,8 +319,8 @@ internal sealed class MultilineInput : TextView
     {
         if (disposing)
         {
-            _flushTimer?.Dispose();
-            _flushTimer = null;
+            flushTimer?.Dispose();
+            flushTimer = null;
         }
         base.Dispose(disposing);
     }

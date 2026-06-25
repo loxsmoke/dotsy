@@ -10,12 +10,12 @@ namespace Dotsy.Core.Loop;
 public sealed class AgentSubTaskManager
 {
     private static readonly TimeSpan CompletedRetention = TimeSpan.FromMinutes(15);
-    private readonly ConcurrentDictionary<string, SubTaskState> _tasks = new(StringComparer.Ordinal);
-    private readonly Func<IProvider> _providerFactory;
-    private readonly ToolRegistry _registry;
-    private readonly PermissionStore _permissions;
-    private readonly DotsyConfig _config;
-    private readonly string _cwd;
+    private readonly ConcurrentDictionary<string, SubTaskState> tasks = new(StringComparer.Ordinal);
+    private readonly Func<IProvider> providerFactory;
+    private readonly ToolRegistry toolRegistry;
+    private readonly PermissionStore permissions;
+    private readonly DotsyConfig config;
+    private readonly string cwd;
 
     public AgentSubTaskManager(
         Func<IProvider> providerFactory,
@@ -24,11 +24,11 @@ public sealed class AgentSubTaskManager
         DotsyConfig config,
         string cwd)
     {
-        _providerFactory = providerFactory;
-        _registry = registry;
-        _permissions = permissions;
-        _config = config;
-        _cwd = cwd;
+        this.providerFactory = providerFactory;
+        toolRegistry = registry;
+        this.permissions = permissions;
+        this.config = config;
+        this.cwd = cwd;
     }
 
     public Task<string> LaunchAsync(string description, string prompt, CancellationToken ct)
@@ -38,7 +38,7 @@ public sealed class AgentSubTaskManager
 
         var id = $"task-{Guid.NewGuid():N}"[..18];
         var state = new SubTaskState(id, description, prompt);
-        if (!_tasks.TryAdd(id, state))
+        if (!tasks.TryAdd(id, state))
             throw new InvalidOperationException($"Could not register sub-task {id}");
 
         state.RunningTask = Task.Run(() => RunSubTaskAsync(state), CancellationToken.None);
@@ -50,7 +50,7 @@ public sealed class AgentSubTaskManager
         ct.ThrowIfCancellationRequested();
         Cleanup();
 
-        if (!_tasks.TryGetValue(taskId, out var state))
+        if (!tasks.TryGetValue(taskId, out var state))
             return Task.FromResult($"task_id={taskId}\nstatus=not_found");
 
         var sb = new StringBuilder();
@@ -76,23 +76,23 @@ public sealed class AgentSubTaskManager
         try
         {
             state.Status = "running";
-            var provider = _providerFactory();
+            var provider = providerFactory();
             var ctx = new LoopContext();
-            var modelInfo = await provider.GetModelInfoAsync(_config.Model.ActiveModelId, CancellationToken.None);
+            var modelInfo = await provider.GetModelInfoAsync(config.Model.ActiveModelId, CancellationToken.None);
             ctx.TokenBudget = new TokenBudget(
                 modelInfo.ContextWindow,
-                _config.Compaction.ReserveTokens,
-                _config.Compaction.KeepRecentTokens,
+                config.Compaction.ReserveTokens,
+                config.Compaction.KeepRecentTokens,
                 0);
             ctx.Messages.Add(new UserMessage([new TextBlock(state.Prompt)]));
 
             const string SubTaskSystemPrompt =
                 "You are a background sub-agent. Work independently on the delegated prompt. "
                 + "Use tools when needed, then provide a concise final result.";
-            var loop = new AgentLoop(provider, _registry, _permissions, _config, SubTaskSystemPrompt);
+            var loop = new AgentLoop(provider, toolRegistry, permissions, config, SubTaskSystemPrompt);
             var result = new StringBuilder();
 
-            await foreach (var ev in loop.RunAsync(ctx, _cwd, CancellationToken.None))
+            await foreach (var ev in loop.RunAsync(ctx, cwd, CancellationToken.None))
             {
                 switch (ev)
                 {
@@ -124,10 +124,10 @@ public sealed class AgentSubTaskManager
     private void Cleanup()
     {
         var cutoff = DateTimeOffset.UtcNow - CompletedRetention;
-        foreach (var pair in _tasks)
+        foreach (var pair in tasks)
         {
             if (pair.Value.CompletedAt is { } completedAt && completedAt < cutoff)
-                _tasks.TryRemove(pair.Key, out _);
+                tasks.TryRemove(pair.Key, out _);
         }
     }
 

@@ -1,7 +1,5 @@
 using System.Text;
 using System.Text.Json;
-using static Dotsy.Core.Skills.SkillLoader;
-
 using Dotsy.Core.Tools.Interfaces;
 using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Skills;
@@ -16,7 +14,7 @@ public sealed class SkillTool : ITool
     public JsonElement InputSchema => ToolSchemas.SkillSchema;
     public ToolSafety Safety => ToolSafety.ReadOnly;
     public bool IsCompletionSignal => false;
-    private readonly SkillDiscovery _discovery;
+    private readonly SkillDiscovery skillDiscovery;
 
     public string FormatPanelArgument(JsonElement input)
     {
@@ -46,13 +44,13 @@ public sealed class SkillTool : ITool
 
     public SkillTool(SkillDiscovery discovery)
     {
-        _discovery = discovery;
+        skillDiscovery = discovery;
     }
 
     public async Task<ToolResult> ExecuteAsync(JsonElement input, ToolContext ctx, CancellationToken ct)
     {
         var name = input.GetProperty("name").GetString() ?? "";
-        var record = _discovery.Find(name);
+        var record = skillDiscovery.Find(name);
 
         if (record is null)
             return ToolResult.Err($"Skill not found: {name}");
@@ -70,7 +68,7 @@ public sealed class SkillTool : ITool
 
             var decision = new TaskCompletionSource<PermissionDecision>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
-            await ctx.EmitEvent(new PermissionRequired(ToolName, skillName, decision));
+            await ctx.EmitEvent(new PermissionRequired(this, ToolName, skillName, decision));
 
             if (await decision.Task.WaitAsync(ct) == PermissionDecision.Deny)
                 return ToolResult.Err($"Permission denied: Skill({skillName})");
@@ -83,8 +81,8 @@ public sealed class SkillTool : ITool
         if (skill.CompanionPaths.Count > 0)
         {
             sb.AppendLine("<companion_files>");
-            foreach (var p in skill.CompanionPaths)
-                sb.AppendLine($"  {p}");
+            foreach (var path in skill.CompanionPaths)
+                sb.AppendLine($"  {path}");
             sb.AppendLine("</companion_files>");
         }
 

@@ -1,8 +1,10 @@
 using Dotsy.Cli.SlashCommands.Interfaces;
 using Dotsy.Cli.Tui;
+using Dotsy.Cli.Tui.Colors;
 using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Providers;
 using Dotsy.Core.Session;
+using System.Text.Json;
 
 namespace Dotsy.Cli.SlashCommands;
 
@@ -11,6 +13,8 @@ namespace Dotsy.Cli.SlashCommands;
 /// </summary>
 internal sealed class ResumeCommand : ISlashCommand
 {
+    private const int ListLimit = 5;
+
     public string Name => "resume";
 
     public bool RequiresIdle => true;
@@ -19,6 +23,7 @@ internal sealed class ResumeCommand : ISlashCommand
     [
         new("/resume", "Resume the most recent saved session for the current working directory."),
         new("/resume <id>", "Resume a specific saved session ID."),
+        new("/resume list", "List the five most recent saved sessions for the current working directory."),
     ];
 
     public void Execute(ISlashCommandHost host, string args)
@@ -26,6 +31,12 @@ internal sealed class ResumeCommand : ISlashCommand
         var config = TuiSessionContext.Config;
         var cwd = TuiSessionContext.Cwd;
         var sessionDir = SessionStore.ResolveDir(config.Session.LogDir, cwd);
+        if (string.Equals(args.Trim(), "list", StringComparison.OrdinalIgnoreCase))
+        {
+            ListRecentSessions(host, sessionDir, cwd);
+            return;
+        }
+
         var loaded = string.IsNullOrWhiteSpace(args)
             ? SessionLoader.LoadMostRecent(sessionDir, cwd)
             : SessionLoader.Load(args.Trim(), sessionDir);
@@ -39,6 +50,15 @@ internal sealed class ResumeCommand : ISlashCommand
 
         var loopCtx = new LoopContext(loaded.SessionId);
         loopCtx.Messages.AddRange(loaded.Messages);
+
+        // Restore the token budget. UsedTokens comes back from the saved session immediately so the
+        // context gauge reflects the real figure (not 0%) right after resume; ContextWindow is sized
+        // to the active model below, asynchronously, since that needs a provider round-trip.
+        loopCtx.TokenBudget = new TokenBudget(
+            TokenBudget.Empty.ContextWindow,
+            config.Compaction.ReserveTokens,
+            config.Compaction.KeepRecentTokens,
+            loaded.UsedTokens);
 
         // Seed prompt history with the user messages from the loaded session.
         foreach (var message in loaded.Messages)
@@ -60,11 +80,126 @@ internal sealed class ResumeCommand : ISlashCommand
         if (TuiSessionContext.LoopFactory is { } factory)
             TuiSessionContext.Loop = factory();
 
-        host.ResetToolAndFilePanels();
         host.SetSession(loaded.SessionId);
         host.UpdateStatusBarFromCtx();
+        host.RenderLoadedSession(loaded);
 
-        host.Write($"resumed session: {loaded.SessionId}\n", Palette.Success);
-        host.Write($"messages loaded: {loaded.Messages.Count}\n\n", Palette.Dim);
+        // Size the context window to the active model. The lookup awaits an HTTP call (its
+        // continuation posts back to the UI loop), so blocking on it here would deadlock the UI
+        // thread — run it off-thread and fold the result into the restored budget when it resolves.
+        var lookup = TuiSessionContext.ModelInfoLookup;
+        var activeModelId = config.Model.ActiveModelId;
+        _ = Task.Run(async () =>
+        {
+            ModelInfo? info = null;
+            try
+            {
+                if (lookup is not null)
+                    info = await lookup(activeModelId).ConfigureAwait(false);
+            }
+            catch { /* leave the default window in place */ }
+
+            if (info is null) return;
+
+            host.Invoke(() =>
+            {
+                if (TuiSessionContext.LoopCtx is not { } ctx) return;
+                ctx.TokenBudget = ctx.TokenBudget with { ContextWindow = info.ContextWindow };
+                host.UpdateStatusBarFromCtx();
+            });
+        });
     }
+
+    public IReadOnlyList<CompletionItem> Complete(ISlashCommandHost host, string partial) =>
+        "list".StartsWith(partial.TrimStart(), StringComparison.OrdinalIgnoreCase)
+            ? [new CompletionItem("list", "list")]
+            : [];
+
+    private static void ListRecentSessions(ISlashCommandHost host, string sessionDir, string cwd)
+    {
+        var sessions = SessionStore.GetAllSessions(sessionDir, cwd);
+        var shown = sessions.Take(ListLimit).ToList();
+
+        host.Write($"Recent sessions: showing {shown.Count} of {sessions.Count}\n", Palette.Bright);
+        if (shown.Count == 0)
+        {
+            host.Write("no sessions found for current working directory\n\n", Palette.Warn);
+            return;
+        }
+
+        host.Write("ID          Ago       Steps Model              Title\n", Palette.Dim);
+        host.Write("----------  --------  ----- ------------------ ------------------------------\n", Palette.Dim);
+
+        var now = DateTimeOffset.UtcNow;
+        foreach (var session in shown)
+        {
+            var details = ReadSessionListDetails(sessionDir, session.SessionId);
+            var lastCommandAt = details.LastUserTimestamp ?? session.UpdatedAt;
+            var stepCount = details.StepCount ?? session.MessageCount;
+            var title = string.IsNullOrWhiteSpace(session.Title) ? "(untitled)" : session.Title;
+            var row =
+                $"{Truncate(session.SessionId, 10),-10}  " +
+                $"{FormatAgo(lastCommandAt, now),-8}  " +
+                $"{stepCount,5} " +
+                $"{Truncate(session.Model, 18),-18} " +
+                $"{Truncate(SingleLine(title), 30)}\n";
+            host.Write(row, Palette.Normal);
+        }
+
+        host.Write("\n", Palette.Normal);
+    }
+
+    private static SessionListDetails ReadSessionListDetails(string sessionDir, string sessionId)
+    {
+        var path = Path.Combine(sessionDir, $"{sessionId}.jsonl");
+        if (!File.Exists(path))
+            return new SessionListDetails(null, null);
+
+        var steps = 0;
+        DateTimeOffset? lastUserTimestamp = null;
+        foreach (var line in File.ReadLines(path))
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                var root = doc.RootElement;
+                if (!root.TryGetProperty("type", out var type) ||
+                    !string.Equals(type.GetString(), "user", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                steps++;
+                if (root.TryGetProperty("timestamp", out var timestamp) &&
+                    timestamp.ValueKind == JsonValueKind.String &&
+                    DateTimeOffset.TryParse(timestamp.GetString(), out var parsed))
+                    lastUserTimestamp = parsed;
+            }
+            catch
+            {
+                // Ignore partial/corrupt records; the index still provides enough list data.
+            }
+        }
+
+        return new SessionListDetails(steps, lastUserTimestamp);
+    }
+
+    private static string FormatAgo(DateTimeOffset timestamp, DateTimeOffset now)
+    {
+        var elapsed = now - timestamp.ToUniversalTime();
+        if (elapsed < TimeSpan.Zero)
+            elapsed = TimeSpan.Zero;
+
+        if (elapsed.TotalMinutes < 1) return "now";
+        if (elapsed.TotalHours < 1) return $"{(int)elapsed.TotalMinutes}m ago";
+        if (elapsed.TotalDays < 1) return $"{(int)elapsed.TotalHours}h ago";
+        return $"{(int)elapsed.TotalDays}d ago";
+    }
+
+    private static string SingleLine(string value) =>
+        value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+
+    private static string Truncate(string value, int maxLength) =>
+        value.Length <= maxLength ? value : value[..Math.Max(0, maxLength - 3)] + "...";
+
+    private sealed record SessionListDetails(int? StepCount, DateTimeOffset? LastUserTimestamp);
 }

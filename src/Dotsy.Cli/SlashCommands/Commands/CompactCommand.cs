@@ -1,5 +1,6 @@
 using Dotsy.Cli.SlashCommands.Interfaces;
 using Dotsy.Cli.Tui;
+using Dotsy.Cli.Tui.Colors;
 using Dotsy.Core.Loop.Data;
 
 namespace Dotsy.Cli.SlashCommands;

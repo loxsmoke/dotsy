@@ -38,9 +38,11 @@ public sealed class ShellTool : ITool
                 FileName = fileName,
                 Arguments = args,
                 WorkingDirectory = ctx.Cwd,
+                RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
-                UseShellExecute = false
+                UseShellExecute = false,
+                CreateNoWindow = true
             }
         };
 

@@ -3,6 +3,7 @@ using Dotsy.Core.Loop;
 using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Providers;
 using Dotsy.Core.Session;
+using Dotsy.Core.Session.Data;
 using Dotsy.Core.Tools;
 using Dotsy.Mcp;
 
@@ -14,6 +15,14 @@ namespace Dotsy.Cli.Tui;
 /// </summary>
 public static class TuiSessionContext
 {
+    /// <summary>
+    /// The Terminal.Gui application instance created in Program.cs via <c>Application.Create()</c>.
+    /// Replaces the obsolete static <c>Application</c> gateway: all UI-thread marshaling (Invoke),
+    /// driver access and navigation go through this instance. Set during bootstrap before any view
+    /// is run, so it is non-null for the lifetime of the TUI.
+    /// </summary>
+    public static IApplication App { get; set; } = null!;
+
     public static DotsyConfig Config { get; set; } = DefaultConfig.Create();
     public static string Cwd { get; set; } = Environment.CurrentDirectory;
     public static string? ProjectConfigPath { get; set; }
@@ -24,6 +33,7 @@ public static class TuiSessionContext
     public static SessionStore? Session { get; set; }
     public static TrajectoryRecorder? Trajectory { get; set; }
     public static McpManager? McpManager { get; set; }
+    public static LoadedSession? StartupLoadedSession { get; set; }
     public static List<string> StartupMessages { get; } = [];
     public static Action<string>? StatusUpdate { get; set; }
 

@@ -1,8 +1,7 @@
+using Dotsy.Cli.Tui.Colors;
 using System.Text;
-using Terminal.Gui;
-using TGAttribute = Terminal.Gui.Attribute;
 
-namespace Dotsy.Cli.Tui;
+namespace Dotsy.Cli.Tui.Renderers;
 
 /// <summary>
 /// Lightweight syntax highlighter for terminal display.
@@ -136,13 +135,12 @@ internal static class SyntaxHighlighter
     private static LangConfig GetConfig(string lang) => lang switch
     {
         "csharp" or "cs" or "c#" or "dotnet" => CSharp,
-        "c"                                   => C,
+        "c"                                  => C,
         "cpp" or "c++" or "cc" or "cxx"      => Cpp,
-        "python" or "py"                      => Python,
-        "bash" or "sh" or "shell" or "zsh" or "fish" => Shell,
+        "python" or "py"                     => Python,
+        "bash" or "sh" or "shell" or "zsh" or "fish"  => Shell,
         "powershell" or "ps" or "ps1" or "pwsh"       => Shell,
-        "javascript" or "js" or "typescript" or "ts"
-            or "jsx" or "tsx"                 => JavaScript,
+        "javascript" or "js" or "typescript" or "ts" or "jsx" or "tsx" => JavaScript,
         "sql" or "mysql" or "postgres" or "sqlite" => Sql,
         "json" or "jsonc"                     => null!,   // dedicated path
         _                                     => Generic

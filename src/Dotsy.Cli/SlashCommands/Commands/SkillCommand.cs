@@ -1,5 +1,6 @@
 using Dotsy.Cli.SlashCommands.Interfaces;
 using Dotsy.Cli.Tui;
+using Dotsy.Cli.Tui.Colors;
 using Dotsy.Core.Skills;
 
 namespace Dotsy.Cli.SlashCommands;
@@ -27,11 +28,11 @@ internal sealed class SkillCommand : ISlashCommand
             var skills = disc.FindAll();
             if (skills.Count == 0)
             {
-                host.Write("no skills found\n\n", Palette.Dim);
+                host.Write("No skills found\n\n", Palette.Dim);
             }
             else
             {
-                host.Write("skills:\n", Palette.Bright);
+                host.Write("Skills:\n", Palette.Bright);
                 foreach (var s in skills)
                     host.Write($"  {s.Name,-20}  {s.FilePath}\n", Palette.Normal);
                 host.Write("\n", Palette.Normal);
@@ -43,20 +44,20 @@ internal sealed class SkillCommand : ISlashCommand
         var ctx = TuiSessionContext.LoopCtx;
         if (record is null)
         {
-            host.Write($"skill not found: {args}\n\n", Palette.Warn);
+            host.Write($"Skill not found: {args}\n\n", Palette.Warn);
         }
         else if (ctx is null)
         {
-            host.WriteError("session context not initialized");
+            host.WriteError("Session context not initialized");
         }
         else
         {
             var skill = SkillLoader.Load(record);
             ctx.LoadedSkills[skill.Frontmatter.Name] = skill.Body;
-            host.Write($"loaded skill: {skill.Frontmatter.Name}\n", Palette.Success);
+            host.Write($"Loaded skill: {skill.Frontmatter.Name}\n", Palette.Success);
             if (skill.CompanionPaths.Count > 0)
             {
-                host.Write("companion files:\n", Palette.Dim);
+                host.Write("Companion files:\n", Palette.Dim);
                 foreach (var p in skill.CompanionPaths)
                     host.Write($"  {p}\n", Palette.Dim);
             }
