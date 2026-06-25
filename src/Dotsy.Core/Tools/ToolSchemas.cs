@@ -166,12 +166,12 @@ internal static class ToolSchemas
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list_sections", "list_tasks", "set_status"],
-              "description": "list_sections: sections with task counts. list_tasks: tasks filtered by section/status. set_status: mark a task done or not done."
+              "enum": ["list_sections", "list_tasks", "create_section", "edit_section", "delete_section", "create_item", "edit_item", "delete_item", "set_status"],
+              "description": "list_sections: sections with task counts. list_tasks: tasks filtered by section/status. create_section/edit_section/delete_section: maintain section headings. create_item/edit_item/delete_item: maintain checkbox tasks. set_status: mark a task done or not done."
             },
             "section": {
               "type": "string",
-              "description": "list_tasks only: limit to a section by its title or leading number (e.g. \"Bug fixes\" or \"2\"). Omit for all sections."
+              "description": "list_tasks/create_item/edit_section/delete_section: section title, leading number, or section index from list_sections."
             },
             "status": {
               "type": "string",
@@ -180,11 +180,27 @@ internal static class ToolSchemas
             },
             "task": {
               "type": "integer",
-              "description": "set_status only: the 1-based task index returned by list_tasks."
+              "description": "set_status/edit_item/delete_item: the 1-based task index returned by list_tasks."
             },
             "done": {
               "type": "boolean",
-              "description": "set_status only: true marks the task done ([x]), false reopens it ([ ])."
+              "description": "set_status/create_item: true uses [x], false uses [ ]. set_status defaults to true."
+            },
+            "title": {
+              "type": "string",
+              "description": "create_section/edit_section: section heading text without leading # characters."
+            },
+            "text": {
+              "type": "string",
+              "description": "create_item/edit_item: task text without the checkbox prefix."
+            },
+            "after_section": {
+              "type": "string",
+              "description": "create_section only: optional section title, leading number, or section index to insert after. Omit to append."
+            },
+            "level": {
+              "type": "integer",
+              "description": "create_section only: markdown heading level 1-6. Defaults to 2."
             }
           },
           "required": ["action"]

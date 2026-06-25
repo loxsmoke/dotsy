@@ -381,7 +381,7 @@ public sealed class ToolsTests
         await File.WriteAllTextAsync(Path.Combine(_tmpDir, TodoTool.FileName), SampleTodo);
 
         var result = await new TodoTool().ExecuteAsync(
-            Args("""{"action":"list_tasks","status":"todo"}"""),
+            Args("""{"action":"list_tasks","status":"TODO"}"""),
             Ctx(),
             CancellationToken.None);
 
@@ -389,6 +389,22 @@ public sealed class ToolsTests
         StringAssert.Contains(result.Content, "todo one");
         StringAssert.Contains(result.Content, "todo two");
         Assert.IsFalse(result.Content.Contains("done one"), result.Content);
+    }
+
+    [TestMethod]
+    public async Task TodoTool_ActionsAreCaseInsensitive()
+    {
+        var path = Path.Combine(_tmpDir, TodoTool.FileName);
+        await File.WriteAllTextAsync(path, SampleTodo);
+
+        var result = await new TodoTool().ExecuteAsync(
+            Args("""{"action":"CrEaTe_ItEm","section":"2","text":"case action task"}"""),
+            Ctx(),
+            CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        var updated = await File.ReadAllTextAsync(path);
+        StringAssert.Contains(updated, "- [ ] case action task");
     }
 
     [TestMethod]
@@ -435,8 +451,110 @@ public sealed class ToolsTests
             CancellationToken.None);
 
         Assert.IsFalse(result.IsError, result.Content);
-        StringAssert.Contains(result.Content, "1. Improvements (1 todo, 1 done)");
-        StringAssert.Contains(result.Content, "2. Bug fixes (1 todo, 0 done)");
+        StringAssert.Contains(result.Content, "[1] 1. Improvements (1 todo, 1 done)");
+        StringAssert.Contains(result.Content, "[2] 2. Bug fixes (1 todo, 0 done)");
+    }
+
+    [TestMethod]
+    public async Task TodoTool_CreateSection_AppendsHeading()
+    {
+        var path = Path.Combine(_tmpDir, TodoTool.FileName);
+        await File.WriteAllTextAsync(path, SampleTodo);
+
+        var result = await new TodoTool().ExecuteAsync(
+            Args("""{"action":"create_section","title":"3. Docs"}"""),
+            Ctx(),
+            CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        var updated = await File.ReadAllTextAsync(path);
+        StringAssert.Contains(updated, "## 3. Docs");
+    }
+
+    [TestMethod]
+    public async Task TodoTool_EditSection_RenamesHeading()
+    {
+        var path = Path.Combine(_tmpDir, TodoTool.FileName);
+        await File.WriteAllTextAsync(path, SampleTodo);
+
+        var result = await new TodoTool().ExecuteAsync(
+            Args("""{"action":"edit_section","section":"2","title":"2. Defects"}"""),
+            Ctx(),
+            CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        var updated = await File.ReadAllTextAsync(path);
+        StringAssert.Contains(updated, "## 2. Defects");
+        Assert.IsFalse(updated.Contains("## 2. Bug fixes", StringComparison.Ordinal), updated);
+    }
+
+    [TestMethod]
+    public async Task TodoTool_DeleteSection_RemovesHeadingAndTasks()
+    {
+        var path = Path.Combine(_tmpDir, TodoTool.FileName);
+        await File.WriteAllTextAsync(path, SampleTodo);
+
+        var result = await new TodoTool().ExecuteAsync(
+            Args("""{"action":"delete_section","section":"2"}"""),
+            Ctx(),
+            CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        var updated = await File.ReadAllTextAsync(path);
+        StringAssert.Contains(updated, "## 1. Improvements");
+        Assert.IsFalse(updated.Contains("## 2. Bug fixes", StringComparison.Ordinal), updated);
+        Assert.IsFalse(updated.Contains("todo two", StringComparison.Ordinal), updated);
+    }
+
+    [TestMethod]
+    public async Task TodoTool_CreateItem_AddsTaskToSection()
+    {
+        var path = Path.Combine(_tmpDir, TodoTool.FileName);
+        await File.WriteAllTextAsync(path, SampleTodo);
+
+        var result = await new TodoTool().ExecuteAsync(
+            Args("""{"action":"create_item","section":"2","text":"new bug task"}"""),
+            Ctx(),
+            CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        var updated = await File.ReadAllTextAsync(path);
+        StringAssert.Contains(updated, "- [ ] todo two\n- [ ] new bug task");
+    }
+
+    [TestMethod]
+    public async Task TodoTool_EditItem_PreservesCheckboxAndReplacesText()
+    {
+        var path = Path.Combine(_tmpDir, TodoTool.FileName);
+        await File.WriteAllTextAsync(path, SampleTodo);
+
+        var result = await new TodoTool().ExecuteAsync(
+            Args("""{"action":"edit_item","task":1,"text":"renamed done task"}"""),
+            Ctx(),
+            CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        var updated = await File.ReadAllTextAsync(path);
+        StringAssert.Contains(updated, "- [x] renamed done task");
+        Assert.IsFalse(updated.Contains("done one", StringComparison.Ordinal), updated);
+    }
+
+    [TestMethod]
+    public async Task TodoTool_DeleteItem_RemovesOnlySelectedTask()
+    {
+        var path = Path.Combine(_tmpDir, TodoTool.FileName);
+        await File.WriteAllTextAsync(path, SampleTodo);
+
+        var result = await new TodoTool().ExecuteAsync(
+            Args("""{"action":"delete_item","task":2}"""),
+            Ctx(),
+            CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        var updated = await File.ReadAllTextAsync(path);
+        Assert.IsFalse(updated.Contains("todo one", StringComparison.Ordinal), updated);
+        StringAssert.Contains(updated, "- [x] done one");
+        StringAssert.Contains(updated, "- [ ] todo two");
     }
 
     [TestMethod]
@@ -771,9 +889,17 @@ public sealed class ToolsTests
         var setStatus = new TodoTool().FormatPanelArgument(
             Args("""{"action":"set_status","task":2,"done":true}"""),
             _tmpDir);
+        var createItem = new TodoTool().FormatPanelArgument(
+            Args("""{"action":"Create_Item","section":"1","text":"new task"}"""),
+            _tmpDir);
+        var editItem = new TodoTool().FormatPanelArgument(
+            Args("""{"action":"edit_item","task":2,"text":"renamed task"}"""),
+            _tmpDir);
 
         Assert.AreEqual("List sections", sections);
         Assert.AreEqual("Set task 2 done", setStatus);
+        Assert.AreEqual("Create item in 1", createItem);
+        Assert.AreEqual("Edit task 2", editItem);
     }
 
     [TestMethod]

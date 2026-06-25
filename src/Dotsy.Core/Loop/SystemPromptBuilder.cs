@@ -156,6 +156,7 @@ public static class SystemPromptBuilder
             + "work with it instead of reading or editing the file directly:");
         sb.AppendLine("- Call list_tasks (status=todo) to find outstanding work before starting a task.");
         sb.AppendLine("- Call list_sections to see how tasks are grouped.");
+        sb.AppendLine("- Use create_section/edit_section/delete_section and create_item/edit_item/delete_item for todo.md maintenance.");
         sb.AppendLine(
             "- After you finish AND verify a task, call set_status with its index to mark it done. "
             + "Do not mark a task done until the work is complete.");
