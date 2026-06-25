@@ -42,6 +42,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/Dotsy.Cli.Tests/Dotsy.Cli.Tests.csproj" />
     <Project Path="tests/Dotsy.Core.Tests/Dotsy.Core.Tests.csproj" />
+    <Project Path="tests/Dotsy.Mcp.Tests/Dotsy.Mcp.Tests.csproj" />
     <Project Path="tests/Dotsy.Providers.Tests/Dotsy.Providers.Tests.csproj" />
   </Folder>
   <Folder Name="/utils/">

@@ -45,40 +45,87 @@ jobs:
             exit 0
           }
 
-          $totalLinesCovered = 0
-          $totalLinesValid = 0
-          $totalBranchesCovered = 0
-          $totalBranchesValid = 0
+          function Normalize-CoverageFile([string]$assembly, [string]$file) {
+            $normalized = $file.Replace("/", "\")
+            if ($assembly -ne "dotsy") {
+              $prefix = "$assembly\"
+              if ($normalized.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $normalized = $normalized.Substring($prefix.Length)
+              }
+            }
+            return $normalized.ToLowerInvariant()
+          }
 
-          "## Code coverage" >> $env:GITHUB_STEP_SUMMARY
-          "" >> $env:GITHUB_STEP_SUMMARY
-          "| Report | Lines | Branches |" >> $env:GITHUB_STEP_SUMMARY
-          "| --- | ---: | ---: |" >> $env:GITHUB_STEP_SUMMARY
+          $assemblyLines = @{}
 
           foreach ($report in $reports) {
             [xml]$coverage = Get-Content $report.FullName -Raw
-            $root = $coverage.coverage
-            $lineRate = [double]$root.GetAttribute("line-rate") * 100
-            $branchRate = [double]$root.GetAttribute("branch-rate") * 100
-            $linesCovered = [int]$root.GetAttribute("lines-covered")
-            $linesValid = [int]$root.GetAttribute("lines-valid")
-            $branchesCovered = [int]$root.GetAttribute("branches-covered")
-            $branchesValid = [int]$root.GetAttribute("branches-valid")
+
+            foreach ($package in $coverage.coverage.packages.package) {
+              $assembly = [string]$package.name
+              if ([string]::IsNullOrWhiteSpace($assembly) -or $assembly.EndsWith(".Tests", [System.StringComparison]::OrdinalIgnoreCase)) {
+                continue
+              }
+
+              if (-not $assemblyLines.ContainsKey($assembly)) {
+                $assemblyLines[$assembly] = @{}
+              }
+
+              foreach ($class in $package.classes.class) {
+                $file = [string]$class.filename
+                if ([string]::IsNullOrWhiteSpace($file)) {
+                  continue
+                }
+
+                $normalizedFile = Normalize-CoverageFile $assembly $file
+                if ($normalizedFile.StartsWith("tests\", [System.StringComparison]::OrdinalIgnoreCase)) {
+                  continue
+                }
+
+                foreach ($line in $class.lines.line) {
+                  $lineNumber = [string]$line.number
+                  if ([string]::IsNullOrWhiteSpace($lineNumber)) {
+                    continue
+                  }
+
+                  $lineKey = "$normalizedFile`:$lineNumber"
+                  if (-not $assemblyLines[$assembly].ContainsKey($lineKey)) {
+                    $assemblyLines[$assembly][$lineKey] = $false
+                  }
+
+                  if ([int]$line.hits -gt 0) {
+                    $assemblyLines[$assembly][$lineKey] = $true
+                  }
+                }
+              }
+            }
+          }
+
+          $totalLinesCovered = 0
+          $totalLinesValid = 0
+
+          "## Code coverage" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "Coverage is merged by production assembly, source file, and line number. Test assemblies are excluded." >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+          "| Assembly | Lines | Covered | Total |" >> $env:GITHUB_STEP_SUMMARY
+          "| --- | ---: | ---: | ---: |" >> $env:GITHUB_STEP_SUMMARY
+
+          foreach ($assembly in ($assemblyLines.Keys | Sort-Object)) {
+            $lines = $assemblyLines[$assembly]
+            $linesValid = $lines.Count
+            $linesCovered = @($lines.Values | Where-Object { $_ }).Count
+            $lineRate = if ($linesValid -gt 0) { $linesCovered / $linesValid * 100 } else { 0 }
 
             $totalLinesCovered += $linesCovered
             $totalLinesValid += $linesValid
-            $totalBranchesCovered += $branchesCovered
-            $totalBranchesValid += $branchesValid
 
-            $packageNames = @($root.packages.package | ForEach-Object { $_.name }) | Where-Object { $_ }
-            $name = if ($packageNames) { $packageNames -join ", " } else { $report.Directory.Name }
-            "| $name | $($lineRate.ToString('0.00'))% | $($branchRate.ToString('0.00'))% |" >> $env:GITHUB_STEP_SUMMARY
+            "| $assembly | $($lineRate.ToString('0.00'))% | $linesCovered | $linesValid |" >> $env:GITHUB_STEP_SUMMARY
           }
 
           $totalLineRate = if ($totalLinesValid -gt 0) { $totalLinesCovered / $totalLinesValid * 100 } else { 0 }
-          $totalBranchRate = if ($totalBranchesValid -gt 0) { $totalBranchesCovered / $totalBranchesValid * 100 } else { 0 }
 
-          "| **Total** | **$($totalLineRate.ToString('0.00'))%** | **$($totalBranchRate.ToString('0.00'))%** |" >> $env:GITHUB_STEP_SUMMARY
+          "| **Total** | **$($totalLineRate.ToString('0.00'))%** | **$totalLinesCovered** | **$totalLinesValid** |" >> $env:GITHUB_STEP_SUMMARY
 
           $color = if ($totalLineRate -ge 80) { "brightgreen" } elseif ($totalLineRate -ge 60) { "yellowgreen" } elseif ($totalLineRate -ge 40) { "yellow" } elseif ($totalLineRate -ge 20) { "orange" } else { "red" }
           $coverageBadgeUrl = "https://img.shields.io/badge/coverage-$($totalLineRate.ToString('0.00'))%25-$color"
