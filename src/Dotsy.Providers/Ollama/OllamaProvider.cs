@@ -216,8 +216,10 @@ public sealed class OllamaProvider : IProvider
                     detail = err.GetString() ?? detail;
             }
             catch { }
-            yield return new StreamError(new ProviderException(
-                new RequestError((int)resp.StatusCode, detail)));
+            ProviderError error = IsModelUnknownError(detail)
+                ? new ModelUnknownError(detail)
+                : new RequestError((int)resp.StatusCode, detail);
+            yield return new StreamError(new ProviderException(error));
             yield break;
         }
 
@@ -272,6 +274,13 @@ public sealed class OllamaProvider : IProvider
 
         return obj.ToJsonString();
     }
+
+    private static bool IsModelUnknownError(string value) =>
+        !string.IsNullOrEmpty(value)
+        && value.Contains("model", StringComparison.OrdinalIgnoreCase)
+        && (value.Contains("unknown", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("not found", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("invalid", StringComparison.OrdinalIgnoreCase));
 
     private static IEnumerable<JsonObject> ConvertMessage(Message msg)
     {

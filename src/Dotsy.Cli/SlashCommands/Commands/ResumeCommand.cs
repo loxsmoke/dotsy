@@ -126,7 +126,6 @@ internal sealed class ResumeCommand : ISlashCommand
             host.Write("no sessions found for current working directory\n\n", Palette.Warn);
             return;
         }
-
         host.Write("ID          Ago       Steps Model              Title\n", Palette.Dim);
         host.Write("----------  --------  ----- ------------------ ------------------------------\n", Palette.Dim);
 
@@ -138,7 +137,7 @@ internal sealed class ResumeCommand : ISlashCommand
             var stepCount = details.StepCount ?? session.MessageCount;
             var title = string.IsNullOrWhiteSpace(session.Title) ? "(untitled)" : session.Title;
             var row =
-                $"{Truncate(session.SessionId, 10),-10}  " +
+                $"{session.SessionId,-10}  " +
                 $"{FormatAgo(lastCommandAt, now),-8}  " +
                 $"{stepCount,5} " +
                 $"{Truncate(session.Model, 18),-18} " +

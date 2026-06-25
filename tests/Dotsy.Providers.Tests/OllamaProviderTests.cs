@@ -110,6 +110,37 @@ public sealed class OllamaProviderTests
     }
 
     [TestMethod]
+    public async Task StreamAsync_ModelNotFoundMapsToModelUnknown()
+    {
+        const string body = """{"error":"model 'missing' not found, try pulling it first"}""";
+        var provider = new OllamaProvider(
+            "http://localhost:11434",
+            new HttpClient(new FakeSseHandler(body, HttpStatusCode.NotFound)));
+
+        var events = await Collect(provider.StreamAsync(MinimalRequest(), CancellationToken.None));
+
+        var err = events.OfType<StreamError>().Single();
+        var pex = (ProviderException)err.Ex;
+        var modelError = (ModelUnknownError)pex.Error;
+        Assert.AreEqual("model 'missing' not found, try pulling it first", modelError.Message);
+    }
+
+    [TestMethod]
+    public async Task GetModelsAsync_LoadsInstalledModelsFromApiTags()
+    {
+        const string body = """
+            {"models":[{"name":"qwen3-coder:latest"},{"name":"llama3.2:latest"}]}
+            """;
+        var provider = Provider(body);
+
+        var models = await provider.GetModelsAsync(CancellationToken.None);
+
+        CollectionAssert.AreEqual(
+            new[] { "qwen3-coder:latest", "llama3.2:latest" },
+            models.Select(m => m.Id).ToArray());
+    }
+
+    [TestMethod]
     public async Task ParseNdjson_RawToolCallInContent_EmitsToolCallAndSuppressesMarkupText()
     {
         const string body = """

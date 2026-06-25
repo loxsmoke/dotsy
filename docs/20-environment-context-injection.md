@@ -8,7 +8,7 @@ The environment block is assembled by `EnvironmentBlock.Build(SessionContext)` a
 <env>
 OS: Windows 11 (10.0.26200)
 Shell: PowerShell 7.4
-.NET: 9.0.5
+.NET: 10.0.0
 Working directory: C:\dev\myapp
 Date: 2026-05-20
 Git branch: main

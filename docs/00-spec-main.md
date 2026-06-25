@@ -1,6 +1,6 @@
 # Dotsy — Agent Specification
 
-> A new AI coding agent built in C#, targeting .NET 9+. First release is a CLI application with an advanced terminal UI. This spec synthesises best practices observed across **opencode**, **cline**, **pi**, **goose**, **aider**, **OpenHands**, and **continue**.
+> A new AI coding agent built in C#, targeting .NET 10+. First release is a CLI application with an advanced terminal UI. This spec synthesises best practices observed across **opencode**, **cline**, **pi**, **goose**, **aider**, **OpenHands**, and **continue**.
 
 ---
 
@@ -27,4 +27,3 @@
 19. [Token Usage Tracking](19-token-usage-tracking.md)
 20. [Environment Context Injection](20-environment-context-injection.md)
 21. [Prompt Caching](21-prompt-caching.md)
-

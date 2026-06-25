@@ -407,6 +407,10 @@ public class OpenAiProvider : IProvider
             {
                 error = new ContextLengthError();
             }
+            else if (IsModelUnknownError(errMsg) || IsModelUnknownError(errType))
+            {
+                error = new ModelUnknownError(BuildDetail(errMsg, errType, body, reqId));
+            }
             else
             {
                 error = new RequestError(status, BuildDetail(errMsg, errType, body, reqId));
@@ -426,4 +430,11 @@ public class OpenAiProvider : IProvider
             detail += $" (request {requestId})";
         return detail;
     }
+
+    private static bool IsModelUnknownError(string value) =>
+        !string.IsNullOrEmpty(value)
+        && value.Contains("model", StringComparison.OrdinalIgnoreCase)
+        && (value.Contains("unknown", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("not found", StringComparison.OrdinalIgnoreCase)
+            || value.Contains("invalid", StringComparison.OrdinalIgnoreCase));
 }

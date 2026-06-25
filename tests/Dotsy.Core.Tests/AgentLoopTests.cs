@@ -70,6 +70,9 @@ public sealed class AgentLoopTests
     private static IReadOnlyList<ProviderEvent> TextTurn(string text = "hello") =>
         [new TextDelta(text), new StreamEnd(StopReason.EndTurn)];
 
+    private static IReadOnlyList<ProviderEvent> ModelUnknownTurn(string message = "invalid model ID") =>
+        [new StreamError(new ProviderException(new ModelUnknownError(message)))];
+
     private static async Task<List<LoopEvent>> Collect(IAsyncEnumerable<LoopEvent> src)
     {
         var list = new List<LoopEvent>();
@@ -79,6 +82,22 @@ public sealed class AgentLoopTests
     }
 
     // ── Nudge limit ───────────────────────────────────────────────────────────
+
+    [TestMethod]
+    public async Task ModelUnknownError_EndsWithAvailableModels()
+    {
+        var config = MakeConfig();
+        var provider = new FakeProvider(ModelUnknownTurn());
+        var loop = new AgentLoop(provider, new ToolRegistry(), YoloStore(), config);
+
+        var events = await Collect(loop.RunAsync(EmptyCtx(), Path.GetTempPath(), CancellationToken.None));
+
+        var ended = events.OfType<LoopEnded>().Single();
+        Assert.AreEqual(EndReason.Error, ended.Reason);
+        StringAssert.Contains(ended.Message, "Model unknown: invalid model ID");
+        StringAssert.Contains(ended.Message, "Available models for fake:");
+        StringAssert.Contains(ended.Message, "- fake");
+    }
 
     [TestMethod]
     public async Task NudgeTriggers_AfterConsecutiveNoToolTurns()

@@ -120,7 +120,7 @@ public sealed class OpenAiProviderTests
     // ── Error reporting ───────────────────────────────────────────────────────
 
     [TestMethod]
-    public async Task Stream_HttpError_SurfacesApiMessageAsDetail()
+    public async Task Stream_HttpError_InvalidModelMapsToModelUnknown()
     {
         const string errBody = """
             {"error":{"message":"invalid model ID","type":"invalid_request_error"}}
@@ -131,9 +131,8 @@ public sealed class OpenAiProviderTests
 
         var err = events.OfType<StreamError>().Single();
         var pex = (ProviderException)err.Ex;
-        var req = (RequestError)pex.Error;
-        Assert.AreEqual(400, req.StatusCode);
-        Assert.AreEqual("invalid model ID", req.Detail);
+        var req = (ModelUnknownError)pex.Error;
+        Assert.AreEqual("invalid model ID", req.Message);
         StringAssert.Contains(pex.Message, "invalid model ID");
     }
 

@@ -338,7 +338,12 @@ public partial class AgentWindow : Window, IDisposable
 
     private void PrintInitialMessage()
     {
-        AppendConvo("dotsy  -  ready\n\n", Palette.Dim);
+        AppendConvo(@"         _       _" + Environment.NewLine, Palette.Running);
+        AppendConvo(@"      __| | ___ | |_ ___ _  _" + Environment.NewLine, Palette.Running);
+        AppendConvo(@"     / _` |/ _ \| __/ __| || |" + Environment.NewLine, Palette.Running);
+        AppendConvo(@"  _ | (_| | (_) | |_\__ \ || |" + Environment.NewLine, Palette.Running);
+        AppendConvo(@" (_) \__,_|\___/ \__|___/\_, |" + Environment.NewLine, Palette.Running);
+        AppendConvo(@"                         |__/" + Environment.NewLine, Palette.Running);
         AppendConvo("Type a message to start, or /help for commands.\n\n", Palette.Dim);
         AppendConvo("Keyboard commands:\n", Palette.Dim);
 

@@ -154,7 +154,7 @@ Generated: 2026-06-07T18:42:10-07:00
 |-------|-------|
 | Platform | Windows |
 | Architecture | x64 |
-| .NET | 9.0.5 |
+| .NET | 10.0.0 |
 | Logical CPUs | 16 |
 | Available memory MB | 18432 |
 | Process memory MB | 412 |
