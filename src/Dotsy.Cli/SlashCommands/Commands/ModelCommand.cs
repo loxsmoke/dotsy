@@ -11,6 +11,9 @@ namespace Dotsy.Cli.SlashCommands;
 /// </summary>
 internal sealed class ModelCommand : ISlashCommand
 {
+    private static readonly object CacheLock = new();
+    private static readonly Dictionary<(string Provider, object Lookup), Task<IReadOnlyList<ModelInfo>>> ModelCache = [];
+
     public string Name => "model";
 
     public IReadOnlyList<SlashCommandUsage> Usages =>
@@ -24,16 +27,16 @@ internal sealed class ModelCommand : ISlashCommand
         // If a model id is specified, switch the active model.
         if (!string.IsNullOrEmpty(args))
         {
-            TuiSessionContext.Config.Model.ActiveModelId = args;
+            TuiSessionContext.Config.Model.ActiveModel.Id = args;
             host.SetModel(args);
             host.Write($"model → {args}\n\n", Palette.Success);
             return;
         }
 
         var cfg = TuiSessionContext.Config;
-        var provider = ConfigLoader.GetProviderDisplayName(cfg.Model.Provider);
+        var provider = ProviderConfig.GetProviderDisplayName(cfg.Model.Provider);
         var keySource = ConfigLoader.GetApiKeySource(cfg);
-        var activeId = cfg.Model.ActiveModelId;
+        var activeId = cfg.Model.ActiveModel.Id;
         host.Write("  Provider:  ", Palette.Dim); host.Write($"{provider}\n", Palette.Normal);
         host.Write("  Model:     ", Palette.Dim); host.Write($"{activeId}\n", Palette.Bright);
 
@@ -78,5 +81,68 @@ internal sealed class ModelCommand : ISlashCommand
                     host.Write($"specified via {keySource}\n\n", Palette.Bright);
             });
         });
+    }
+
+    public IReadOnlyList<CompletionItem> Complete(ISlashCommandHost host, string partial)
+    {
+        var cfg = TuiSessionContext.Config;
+        var provider = cfg.Model.Provider;
+        var prefix = partial.TrimStart();
+        var currentModel = cfg.Model.ActiveModel.Id;
+        var models = TryGetCachedModels(provider, host);
+
+        if (models is null)
+            return [new CompletionItem("loading...", "/model ")];
+
+        var ids = models
+            .Select(m => m.Id)
+            .Append(currentModel)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(id => id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
+            .Select(id => new CompletionItem(id, "/model " + id))
+            .ToList();
+
+        return ids;
+    }
+
+    private static IReadOnlyList<ModelInfo>? TryGetCachedModels(string provider, ISlashCommandHost host)
+    {
+        var lookup = TuiSessionContext.ModelListLookup;
+        if (lookup is null)
+            return [];
+
+        Task<IReadOnlyList<ModelInfo>> task;
+        var cacheKey = (provider.ToUpperInvariant(), (object)lookup);
+        lock (CacheLock)
+        {
+            if (!ModelCache.TryGetValue(cacheKey, out task!))
+            {
+                try
+                {
+                    task = lookup(CancellationToken.None);
+                }
+                catch
+                {
+                    return [];
+                }
+                ModelCache[cacheKey] = task;
+            }
+        }
+
+        if (!task.IsCompleted)
+        {
+            _ = task.ContinueWith(
+                _ => host.Invoke(host.RefreshCompletions),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return null;
+        }
+
+        return task.Status == TaskStatus.RanToCompletion
+            ? task.Result
+            : [];
     }
 }

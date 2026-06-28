@@ -330,7 +330,7 @@ public sealed class OllamaProviderTests
     private static DotsyConfig MakeConfig() =>
         new()
         {
-            Model = new ModelConfig { Provider = "ollama", Ollama = new() { Id = "qwen3-coder" }, MaxOutputTokensPerRequest = 1024 },
+            Model = new ModelConfig { Provider = ProviderConfig.Ollama, Ollama = new() { Id = "qwen3-coder" }, MaxOutputTokensPerRequest = 1024 },
             Agent = new AgentConfig
             {
                 MaxTurns = 10,

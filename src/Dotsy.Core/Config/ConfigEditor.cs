@@ -13,92 +13,210 @@ public static class ConfigEditor
 
     // ── Parameter catalogue ───────────────────────────────────────────────────
 
-    public record ParamDef(string Key, string Type, string Description);
-    public record ParamGroup(string Section, List<ParamDef> Params);
+    public record ParamDef(
+        string Key,
+        string Type,
+        string Description,
+        IReadOnlyList<string>? ValidValues = null,
+        string? Range = null);
+    public record ParamGroup
+    {
+        public string Section { get; init; }
+        public List<ParamDef> Params { get; init; }
+        public ParamGroup(string Section, List<ParamDef> Params)
+        {
+            this.Section = Section;
+            this.Params = [.. Params.Select(p => p with { Key = Section + "." + p.Key })];
+        }
+    }
 
-    public static readonly List<ParamGroup> ParamList =
+    private sealed record ConfigParam(
+        ParamDef Definition,
+        Func<DotsyConfig, object?> GetValue,
+        bool Secret = false,
+        Func<object?, bool>? IsEmpty = null,
+        Func<object?, string>? Format = null);
+
+    private sealed record ConfigParamGroup(string Section, List<ConfigParam> Params);
+
+    private static ConfigParam Param(
+        string key,
+        string type,
+        string description,
+        Func<DotsyConfig, object?> getValue,
+        IReadOnlyList<string>? validValues = null,
+        string? range = null,
+        bool secret = false,
+        Func<object?, bool>? isEmpty = null,
+        Func<object?, string>? format = null) =>
+        new(new ParamDef(key, type, description, validValues, range),
+            getValue, secret, isEmpty, format);
+
+    private static readonly List<ConfigParamGroup> Catalog =
     [
         new("model",
         [
-            new("model.provider",   "string", "active provider: anthropic | openai | ollama | azure_openai | compatible | gemini"),
-            new("model.max_output_tokens_per_request", "int", "max output tokens per request"),
+            Param("provider", "string", "active provider",
+                cfg => cfg.Model.Provider, ProviderConfig.SelectableProviders),
+            Param("max_output_tokens_per_request", "int", "max output tokens per request",
+                cfg => cfg.Model.MaxOutputTokensPerRequest),
         ]),
-        new("model.anthropic",
+        new("model." + ProviderConfig.Anthropic,
         [
-            new("model.anthropic.id",      "string", "Anthropic model ID, e.g. claude-sonnet-4-6"),
-            new("model.anthropic.api_key", "string", "Anthropic API key (overrides ANTHROPIC_API_KEY env var)"),
+            Param("id", "string", "Anthropic model ID, e.g. claude-sonnet-4-6",
+                cfg => cfg.Model.Anthropic.Id),
+            Param("api_key", "string", $"Anthropic API key (overrides {ProviderConfig.AnthropicEnvVar} env var)",
+                cfg => cfg.Model.Anthropic.ApiKey, secret: true),
         ]),
-        new("model.openai",
+        new("model." + ProviderConfig.OpenAi,
         [
-            new("model.openai.id",       "string", "OpenAI model ID, e.g. gpt-4o"),
-            new("model.openai.api_key",  "string", "OpenAI API key (overrides OPENAI_API_KEY env var)"),
-            new("model.openai.base_url", "string", "base URL, change for OpenAI-compatible providers"),
+            Param("id", "string", "OpenAI model ID, e.g. gpt-4o",
+                cfg => cfg.Model.OpenAi.Id),
+            Param("api_key", "string", $"OpenAI API key (overrides {ProviderConfig.OpenAiEnvVar} env var)",
+                cfg => cfg.Model.OpenAi.ApiKey, secret: true),
+            Param("base_url", "string", "base URL, change for OpenAI-compatible providers",
+                cfg => cfg.Model.OpenAi.BaseUrl, isEmpty: _ => false),
         ]),
-        new("model.ollama",
+        new("model." + ProviderConfig.Ollama,
         [
-            new("model.ollama.id",                 "string", "Ollama model ID, e.g. llama3"),
-            new("model.ollama.base_url",           "string", "Ollama server URL"),
-            new("model.ollama.max_context_tokens", "int",    "context window (num_ctx) requested when invoking Ollama"),
+            Param("id", "string", "Ollama model ID, e.g. llama3",
+                cfg => cfg.Model.Ollama.Id),
+            Param("base_url", "string", "Ollama server URL",
+                cfg => cfg.Model.Ollama.BaseUrl, isEmpty: _ => false),
+            Param("max_context_tokens", "int", "context window (num_ctx) requested when invoking Ollama",
+                cfg => cfg.Model.Ollama.MaxContextTokens),
         ]),
-        new("model.azure",
+        new("model." + ProviderConfig.Azure,
         [
-            new("model.azure.id",         "string", "Azure model ID"),
-            new("model.azure.api_key",    "string", "Azure OpenAI API key"),
-            new("model.azure.endpoint",   "string", "Azure endpoint URL"),
-            new("model.azure.deployment", "string", "Azure deployment name"),
-            new("model.azure.api_version","string", "Azure API version"),
+            Param("id", "string", "Azure model ID",
+                cfg => cfg.Model.Azure.Id),
+            Param("api_key", "string", "Azure OpenAI API key",
+                cfg => cfg.Model.Azure.ApiKey, secret: true),
+            Param("endpoint", "string", "Azure endpoint URL",
+                cfg => cfg.Model.Azure.Endpoint),
+            Param("deployment", "string", "Azure deployment name",
+                cfg => cfg.Model.Azure.Deployment),
+            Param("api_version", "string", "Azure API version",
+                cfg => cfg.Model.Azure.ApiVersion),
         ]),
-        new("model.compatible",
+        new("model." + ProviderConfig.Compatible,
         [
-            new("model.compatible.id",       "string", "model ID for compatible provider"),
-            new("model.compatible.api_key",  "string", "API key for compatible provider"),
-            new("model.compatible.base_url", "string", "base URL for compatible provider"),
+            Param("id", "string", "model ID for compatible provider",
+                cfg => cfg.Model.Compatible.Id),
+            Param("api_key", "string", "API key for compatible provider",
+                cfg => cfg.Model.Compatible.ApiKey, secret: true),
+            Param("base_url", "string", "base URL for compatible provider",
+                cfg => cfg.Model.Compatible.BaseUrl),
         ]),
-        new("model.gemini",
+        new("model." + ProviderConfig.Gemini,
         [
-            new("model.gemini.id",      "string", "Gemini model ID, e.g. gemini-2.5-flash-lite"),
-            new("model.gemini.api_key", "string", "Google Gemini API key (overrides GEMINI_API_KEY env var)"),
+            Param("id", "string", "Gemini model ID, e.g. gemini-2.5-flash-lite",
+                cfg => cfg.Model.Gemini.Id),
+            Param("api_key", "string", $"Google Gemini API key (overrides {ProviderConfig.GeminiEnvVar} env var)",
+                cfg => cfg.Model.Gemini.ApiKey, secret: true),
         ]),
         new("agent",
         [
-            new("agent.max_turns",       "int",   "turn limit per session (0 = unlimited)"),
-            new("agent.parallel_tools",  "bool",  "run read-only tools in parallel"),
-            new("agent.auto_lint",       "bool",  "run dotnet build after each write and feed errors back"),
-            new("agent.auto_test",       "bool",  "run dotnet test after each write and feed failures back"),
-            new("agent.nudge_limit",     "int",   "max consecutive text-only turns before stopping"),
-            new("agent.max_reflections", "int",   "max lint/test reflection cycles per turn"),
+            Param("max_turns", "int", "turn limit per session (0 = unlimited)",
+                cfg => cfg.Agent.MaxTurns),
+            Param("parallel_tools", "bool", "run read-only tools in parallel",
+                cfg => cfg.Agent.ParallelTools),
+            Param("auto_lint", "bool", "run dotnet build after each write and feed errors back",
+                cfg => cfg.Agent.AutoLint),
+            Param("auto_test", "bool", "run dotnet test after each write and feed failures back",
+                cfg => cfg.Agent.AutoTest),
+            Param("nudge_limit", "int", "max consecutive non-terminal text-only turns before stopping",
+                cfg => cfg.Agent.NudgeLimit),
+            Param("repeat_window_turns", "int", "turn window used to detect repeated tool calls",
+                cfg => cfg.Agent.RepeatWindowTurns),
+            Param("repeat_threshold", "int", "repeated tool calls allowed before the agent is nudged (0 = disabled)",
+                cfg => cfg.Agent.RepeatThreshold),
+            Param("max_reflections", "int", "max lint/test reflection cycles per turn",
+                cfg => cfg.Agent.MaxReflections),
         ]),
         new("compaction",
         [
-            new("compaction.enabled",             "bool",  "auto-summarise context when usage exceeds threshold"),
-            new("compaction.threshold_pct",       "float", "usage fraction that triggers compaction, e.g. 0.80"),
-            new("compaction.reserve_tokens",      "int",   "tokens reserved for the compaction summary request"),
-            new("compaction.keep_recent_tokens",  "int",   "recent tokens to retain verbatim after compaction"),
-            new("compaction.tool_pair_summarize", "bool",  "collapse old tool call/result pairs into one-line notes"),
+            Param("enabled", "bool", "auto-summarise context when usage exceeds threshold",
+                cfg => cfg.Compaction.Enabled),
+            Param("threshold_pct", "float", "usage fraction that triggers compaction, e.g. 0.80",
+                cfg => cfg.Compaction.ThresholdPct,
+                format: value => ((float)value!).ToString("F2", System.Globalization.CultureInfo.InvariantCulture)),
+            Param("reserve_tokens", "int", "tokens reserved for the compaction summary request",
+                cfg => cfg.Compaction.ReserveTokens),
+            Param("keep_recent_tokens", "int", "recent tokens to retain verbatim after compaction",
+                cfg => cfg.Compaction.KeepRecentTokens),
+            Param("tool_pair_summarize", "bool", "collapse old tool call/result pairs into one-line notes",
+                cfg => cfg.Compaction.ToolPairSummarize),
         ]),
         new("git",
         [
-            new("git.auto_stage",         "bool", "auto-stage modified files after agent writes"),
-            new("git.diff_context_lines", "int",  "context lines shown in diffs"),
+            Param("auto_stage", "bool", "auto-stage modified files after agent writes",
+                cfg => cfg.Git.AutoStage),
+            Param("diff_context_lines", "int", "context lines shown in diffs",
+                cfg => cfg.Git.DiffContextLines),
         ]),
         new("session",
         [
-            new("session.log_enabled",  "bool",   "enable session logging (default: true)"),
-            new("session.log_dir",      "string", "session log directory (relative to project or absolute)"),
-            new("session.cleanup_days", "int",    "auto-delete sessions older than N days (0 = never)"),
+            Param("log_enabled", "bool", "enable session logging (default: true)",
+                cfg => cfg.Session.LogEnabled),
+            Param("log_dir", "string", "session log directory (relative to project or absolute)",
+                cfg => cfg.Session.LogDir),
+            Param("cleanup_days", "int", "auto-delete sessions older than N days (0 = never)",
+                cfg => cfg.Session.CleanupDays),
         ]),
         new("trajectory",
         [
-            new("trajectory.enabled", "bool",   "write OpenCode-compatible trajectory JSON after each session"),
-            new("trajectory.dir",     "string", "trajectory export directory (relative to project or absolute)"),
+            Param("enabled", "bool", "write OpenCode-compatible trajectory JSON after each session",
+                cfg => cfg.Trajectory.Enabled),
+            Param("dir", "string", "trajectory export directory (relative to project or absolute)",
+                cfg => cfg.Trajectory.Dir),
         ]),
         new("tui",
         [
-            new("tui.left-panel-width-percentage", "int", "conversation panel width percentage"),
-            new("tui.verbose", "bool", "show tool calls and results inline in the conversation panel"),
-            new("tui.theme", "string", "color theme: dark | light | system | borland"),
+            Param("left_panel_width_percentage", "int", "conversation panel width percentage",
+                cfg => cfg.Tui.LeftPanelWidthPercentage),
+            Param("verbose", "bool", "show tool calls and results inline in the conversation panel",
+                cfg => cfg.Tui.Verbose),
+            Param("theme", "string", "color theme",
+                cfg => cfg.Tui.Theme, ["dark", "light", "system", "borland"]),
         ]),
     ];
+
+    public static readonly List<ParamGroup> ParamList =
+    [
+        .. Catalog.Select(group =>
+            new ParamGroup(group.Section, [.. group.Params.Select(param => param.Definition)]))
+    ];
+
+    public static ParamDef? FindParam(string key) =>
+        ParamList
+            .SelectMany(g => g.Params)
+            .FirstOrDefault(p => p.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+
+    public static IReadOnlyList<string> GetValidValues(ParamDef param)
+    {
+        if (param.ValidValues is { Count: > 0 })
+            return param.ValidValues;
+
+        if (param.Type.Equals("bool", StringComparison.OrdinalIgnoreCase))
+            return ["true", "false"];
+
+        return [];
+    }
+
+    public static string GetValueHint(ParamDef param)
+    {
+        var hint = param.Description;
+        var validValues = GetValidValues(param);
+
+        if (validValues.Count > 0)
+            hint += $" (valid: {string.Join(" | ", validValues)})";
+
+        if (!string.IsNullOrWhiteSpace(param.Range))
+            hint += $" (range: {param.Range})";
+
+        return hint;
+    }
 
     // ── Display ───────────────────────────────────────────────────────────────
 
@@ -107,88 +225,20 @@ public static class ConfigEditor
 
     public static List<Section> GetSections(DotsyConfig cfg) =>
     [
-        new("model",
-        [
-            new("provider",   cfg.Model.Provider,             string.IsNullOrEmpty(cfg.Model.Provider)),
-            new("max_output_tokens_per_request", cfg.Model.MaxOutputTokensPerRequest.ToString(), false),
-        ]),
-        new("model.anthropic",
-        [
-            new("id",        cfg.Model.Anthropic.Id,           string.IsNullOrEmpty(cfg.Model.Anthropic.Id)),
-            new("api_key",   Mask(cfg.Model.Anthropic.ApiKey), string.IsNullOrEmpty(cfg.Model.Anthropic.ApiKey)),
-        ]),
-        new("model.openai",
-        [
-            new("id",       cfg.Model.OpenAi.Id,            string.IsNullOrEmpty(cfg.Model.OpenAi.Id)),
-            new("api_key",  Mask(cfg.Model.OpenAi.ApiKey),  string.IsNullOrEmpty(cfg.Model.OpenAi.ApiKey)),
-            new("base_url", cfg.Model.OpenAi.BaseUrl,       false),
-        ]),
-        new("model.ollama",
-        [
-            new("id",                 cfg.Model.Ollama.Id,      string.IsNullOrEmpty(cfg.Model.Ollama.Id)),
-            new("base_url",           cfg.Model.Ollama.BaseUrl, false),
-            new("max_context_tokens", cfg.Model.Ollama.MaxContextTokens.ToString(), false),
-        ]),
-        new("model.azure",
-        [
-            new("id",         cfg.Model.Azure.Id,            string.IsNullOrEmpty(cfg.Model.Azure.Id)),
-            new("api_key",    Mask(cfg.Model.Azure.ApiKey),  string.IsNullOrEmpty(cfg.Model.Azure.ApiKey)),
-            new("endpoint",   cfg.Model.Azure.Endpoint,      string.IsNullOrEmpty(cfg.Model.Azure.Endpoint)),
-            new("deployment", cfg.Model.Azure.Deployment,    string.IsNullOrEmpty(cfg.Model.Azure.Deployment)),
-        ]),
-        new("model.compatible",
-        [
-            new("id",       cfg.Model.Compatible.Id,           string.IsNullOrEmpty(cfg.Model.Compatible.Id)),
-            new("api_key",  Mask(cfg.Model.Compatible.ApiKey),  string.IsNullOrEmpty(cfg.Model.Compatible.ApiKey)),
-            new("base_url", cfg.Model.Compatible.BaseUrl,       string.IsNullOrEmpty(cfg.Model.Compatible.BaseUrl)),
-        ]),
-        new("model.gemini",
-        [
-            new("id",      cfg.Model.Gemini.Id,           string.IsNullOrEmpty(cfg.Model.Gemini.Id)),
-            new("api_key", Mask(cfg.Model.Gemini.ApiKey),  string.IsNullOrEmpty(cfg.Model.Gemini.ApiKey)),
-        ]),
-        new("agent",
-        [
-            new("max_turns",       cfg.Agent.MaxTurns.ToString(),                   false),
-            new("parallel_tools",  cfg.Agent.ParallelTools.ToString().ToLower(),    false),
-            new("auto_lint",       cfg.Agent.AutoLint.ToString().ToLower(),         false),
-            new("auto_test",       cfg.Agent.AutoTest.ToString().ToLower(),         false),
-            new("nudge_limit",        cfg.Agent.NudgeLimit.ToString(),              false),
-            new("repeat_window_turns", cfg.Agent.RepeatWindowTurns.ToString(),      false),
-            new("repeat_threshold",   cfg.Agent.RepeatThreshold.ToString(),         false),
-            new("max_reflections",    cfg.Agent.MaxReflections.ToString(),          false),
-        ]),
-        new("compaction",
-        [
-            new("enabled",              cfg.Compaction.Enabled.ToString().ToLower(),           false),
-            new("threshold_pct",        cfg.Compaction.ThresholdPct.ToString("F2"),           false),
-            new("reserve_tokens",       cfg.Compaction.ReserveTokens.ToString(),              false),
-            new("keep_recent_tokens",   cfg.Compaction.KeepRecentTokens.ToString(),           false),
-            new("tool_pair_summarize",  cfg.Compaction.ToolPairSummarize.ToString().ToLower(), false),
-        ]),
-        new("git",
-        [
-            new("auto_stage",         cfg.Git.AutoStage.ToString().ToLower(),      false),
-            new("diff_context_lines", cfg.Git.DiffContextLines.ToString(),         false),
-        ]),
-        new("session",
-        [
-            new("log_enabled",  cfg.Session.LogEnabled.ToString().ToLower(), false),
-            new("log_dir",      cfg.Session.LogDir, string.IsNullOrEmpty(cfg.Session.LogDir)),
-            new("cleanup_days", cfg.Session.CleanupDays.ToString(), false),
-        ]),
-        new("trajectory",
-        [
-            new("enabled", cfg.Trajectory.Enabled.ToString().ToLower(), false),
-            new("dir",     cfg.Trajectory.Dir, string.IsNullOrEmpty(cfg.Trajectory.Dir)),
-        ]),
-        new("tui",
-        [
-            new("left-panel-width-percentage", cfg.Tui.LeftPanelWidthPercentage.ToString(), false),
-            new("verbose", cfg.Tui.Verbose.ToString().ToLower(), false),
-            new("theme", cfg.Tui.Theme, string.IsNullOrEmpty(cfg.Tui.Theme)),
-        ]),
+        .. Catalog.Select(group => new Section(
+            group.Section,
+            [.. group.Params.Select(param => ToKv(param, cfg))]))
     ];
+
+    private static Kv ToKv(ConfigParam param, DotsyConfig cfg)
+    {
+        var value = param.GetValue(cfg);
+        var empty = param.IsEmpty?.Invoke(value) ?? value is null or "";
+        var formatted = param.Secret
+            ? Mask(value as string ?? "")
+            : param.Format?.Invoke(value) ?? FormatValue(value);
+        return new Kv(param.Definition.Key, formatted, empty);
+    }
 
     // ── Edit ──────────────────────────────────────────────────────────────────
 
@@ -217,6 +267,29 @@ public static class ConfigEditor
         return (true, targetFile);
     }
 
+    public static (bool Ok, bool Unchanged, string CurrentValue, string? Message) CheckUnchanged(
+        DotsyConfig cfg,
+        string dotKey,
+        string rawValue)
+    {
+        var parts = dotKey.ToLowerInvariant().Split('.');
+        if (parts.Length < 2)
+            return (false, false, "", $"invalid key '{dotKey}' — use format section.key (e.g. model.provider)");
+        if (parts.Length > 3)
+            return (false, false, "", "key nesting too deep — maximum three levels (e.g. model.anthropic.api_key)");
+
+        var propErr = ResolveWritableProperty(cfg, parts, out var target, out var prop);
+        if (propErr is not null)
+            return (false, false, "", propErr);
+
+        var converted = ConvertValue(rawValue, prop!.PropertyType);
+        if (converted is null)
+            return (false, false, "", $"cannot convert '{rawValue}' to {prop.PropertyType.Name}");
+
+        var current = prop.GetValue(target);
+        return (true, Equals(current, converted), FormatValue(current), null);
+    }
+
     // Chooses which file a key is written to. A project config takes precedence when one exists, so
     // settings land alongside the project rather than in the user-global file. Secrets are the
     // exception: api keys always go to the global config because project configs are loaded without
@@ -234,51 +307,68 @@ public static class ConfigEditor
 
     private static string? ApplyInMemory(DotsyConfig cfg, string[] parts, string rawValue)
     {
-        object? target;
+        var propErr = ResolveWritableProperty(cfg, parts, out var target, out var prop);
+        if (propErr is not null)
+            return propErr;
 
-        if (parts.Length == 3 && parts[0] == "model")
-        {
-            target = parts[1] switch
-            {
-                "anthropic"  => (object)cfg.Model.Anthropic,
-                "openai"     => cfg.Model.OpenAi,
-                "azure"      => cfg.Model.Azure,
-                "ollama"     => cfg.Model.Ollama,
-                "compatible" => cfg.Model.Compatible,
-                _ => null
-            };
-            if (target is null)
-                return $"unknown sub-section 'model.{parts[1]}'";
-        }
-        else
-        {
-            target = parts[0] switch
-            {
-                "model"      => (object)cfg.Model,
-                "agent"      => cfg.Agent,
-                "compaction" => cfg.Compaction,
-                "retrieval"  => cfg.Retrieval,
-                "git"        => cfg.Git,
-                "tui"        => cfg.Tui,
-                "session"    => cfg.Session,
-                "trajectory" => cfg.Trajectory,
-                _ => null
-            };
-            if (target is null)
-                return $"unknown config section '{parts[0]}'";
-        }
-
-        var propName = ToPropertyName(parts[^1]);
-        var prop = target.GetType().GetProperty(propName, BindingFlags.Public | BindingFlags.Instance);
-        if (prop is null || !prop.CanWrite)
-            return $"unknown config key '{string.Join(".", parts)}'";
-
-        var converted = ConvertValue(rawValue, prop.PropertyType);
+        var converted = ConvertValue(rawValue, prop!.PropertyType);
         if (converted is null)
             return $"cannot convert '{rawValue}' to {prop.PropertyType.Name}";
 
         prop.SetValue(target, converted);
         return null;
+    }
+
+    private static string? ResolveWritableProperty(
+        DotsyConfig cfg,
+        string[] parts,
+        out object? target,
+        out PropertyInfo? prop)
+    {
+        target = ResolveTarget(cfg, parts);
+        prop = null;
+
+        if (target is null)
+            return parts.Length == 3 && parts[0] == "model"
+                ? $"unknown sub-section 'model.{parts[1]}'"
+                : $"unknown config section '{parts[0]}'";
+
+        var propName = ToPropertyName(parts[^1]);
+        prop = target.GetType().GetProperty(propName, BindingFlags.Public | BindingFlags.Instance);
+        if (prop is null || !prop.CanWrite)
+            return $"unknown config key '{string.Join(".", parts)}'";
+
+        return null;
+    }
+
+    private static object? ResolveTarget(DotsyConfig cfg, string[] parts)
+    {
+        if (parts.Length == 3 && parts[0] == "model")
+        {
+            return parts[1] switch
+            {
+                ProviderConfig.Anthropic  => cfg.Model.Anthropic,
+                ProviderConfig.OpenAi     => cfg.Model.OpenAi,
+                ProviderConfig.Azure      => cfg.Model.Azure,
+                ProviderConfig.Ollama     => cfg.Model.Ollama,
+                ProviderConfig.Compatible => cfg.Model.Compatible,
+                ProviderConfig.Gemini     => cfg.Model.Gemini,
+                _ => null
+            };
+        }
+
+        return parts[0] switch
+        {
+            "model"      => cfg.Model,
+            "agent"      => cfg.Agent,
+            "compaction" => cfg.Compaction,
+            "retrieval"  => cfg.Retrieval,
+            "git"        => cfg.Git,
+            "tui"        => cfg.Tui,
+            "session"    => cfg.Session,
+            "trajectory" => cfg.Trajectory,
+            _ => null
+        };
     }
 
     // ── TOML persistence ──────────────────────────────────────────────────────
@@ -411,6 +501,15 @@ public static class ConfigEditor
         return raw;
     }
 
+    private static string FormatValue(object? value) =>
+        value switch
+        {
+            null => "",
+            bool b => b ? "true" : "false",
+            IFormattable f => f.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
+            _ => value.ToString() ?? ""
+        };
+
 
     private static object? ConvertValue(string raw, Type t)
     {
@@ -434,13 +533,8 @@ public static class ConfigEditor
         return null;
     }
 
-    private static string ToPascalCase(string snake) =>
+    private static string ToPropertyName(string snake) =>
         string.Concat(snake.Split('_').Select(w => w.Length > 0 ? char.ToUpper(w[0]) + w[1..] : w));
-
-    private static string ToPropertyName(string key) =>
-        key == "left-panel-width-percentage"
-            ? nameof(TuiConfig.LeftPanelWidthPercentage)
-            : ToPascalCase(key);
 
     private static string Mask(string key) =>
         string.IsNullOrEmpty(key) ? "(not set)" : key[..Math.Min(8, key.Length)] + "****";

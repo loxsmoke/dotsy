@@ -108,7 +108,7 @@ public sealed class ConfigLoaderTests
     {
         var keys = ConfigEditor.ParamList.SelectMany(g => g.Params).Select(p => p.Key).ToList();
         CollectionAssert.Contains(keys, "model.max_output_tokens_per_request");
-        CollectionAssert.Contains(keys, "tui.left-panel-width-percentage");
+        CollectionAssert.Contains(keys, "tui.left_panel_width_percentage");
         CollectionAssert.Contains(keys, "trajectory.enabled");
         CollectionAssert.Contains(keys, "trajectory.dir");
 
@@ -119,7 +119,7 @@ public sealed class ConfigLoaderTests
             && s.Kvs.Any(kv => kv.Key == "enabled")
             && s.Kvs.Any(kv => kv.Key == "dir")));
         Assert.IsTrue(sections.Any(s => s.Header == "tui"
-            && s.Kvs.Any(kv => kv.Key == "left-panel-width-percentage")));
+            && s.Kvs.Any(kv => kv.Key == "left_panel_width_percentage")));
     }
 
     [TestMethod]
@@ -165,30 +165,7 @@ public sealed class ConfigLoaderTests
         {
             await File.WriteAllTextAsync(Path.Combine(tmp, ".dotsy", "config.toml"), """
                 [tui]
-                left-panel-width-percentage = 64
-                """);
-
-            var config = ConfigLoader.Load(tmp);
-
-            Assert.AreEqual(64, config.Tui.LeftPanelWidthPercentage);
-        }
-        finally
-        {
-            if (Directory.Exists(tmp))
-                Directory.Delete(tmp, recursive: true);
-        }
-    }
-
-    [TestMethod]
-    public async Task Load_ParsesLegacyMisspelledLeftPanelWidthKey()
-    {
-        var tmp = Path.Combine(Path.GetTempPath(), $"dotsy_config_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(Path.Combine(tmp, ".dotsy"));
-        try
-        {
-            await File.WriteAllTextAsync(Path.Combine(tmp, ".dotsy", "config.toml"), """
-                [tui]
-                left-poanel-width-percentage = 64
+                left_panel_width_percentage = 64
                 """);
 
             var config = ConfigLoader.Load(tmp);
@@ -248,11 +225,11 @@ public sealed class ConfigLoaderTests
         Directory.CreateDirectory(Path.Combine(tmp, ".dotsy"));
         try
         {
-            await File.WriteAllTextAsync(projectConfig, """
+            await File.WriteAllTextAsync(projectConfig, $"""
                 [agent]
                 max_turns = 99
 
-                [model.openai]
+                [{("model." + ProviderConfig.OpenAi)}]
                 base_url = "http://proj"
                 api_key = "proj-secret"
                 """);
@@ -262,11 +239,11 @@ public sealed class ConfigLoaderTests
             Assert.AreEqual(projectConfig, sources.ProjectPath);
             Assert.IsTrue(sources.ProjectExists);
             Assert.AreEqual(projectConfig, sources.KeySources["agent.max_turns"]);
-            Assert.AreEqual(projectConfig, sources.KeySources["model.openai.base_url"]);
+            Assert.AreEqual(projectConfig, sources.KeySources["model." + ProviderConfig.OpenAi + ".base_url"]);
             // A key not set in any file falls back to default.
             Assert.AreEqual("default", sources.KeySources["agent.nudge_limit"]);
             // API keys are never sourced from the project config, matching the loader's secrets rule.
-            Assert.AreNotEqual(projectConfig, sources.KeySources["model.openai.api_key"]);
+            Assert.AreNotEqual(projectConfig, sources.KeySources["model." + ProviderConfig.OpenAi + ".api_key"]);
         }
         finally
         {
@@ -296,45 +273,47 @@ public sealed class ConfigLoaderTests
     [TestMethod]
     public void Gemini_ApiKeyResolvesFromEnvAndCatalogIncludesKeys()
     {
-        var old = Environment.GetEnvironmentVariable("GEMINI_API_KEY");
+        var old = Environment.GetEnvironmentVariable(ProviderConfig.GeminiEnvVar);
         try
         {
-            Environment.SetEnvironmentVariable("GEMINI_API_KEY", "g-secret");
+            Environment.SetEnvironmentVariable(ProviderConfig.GeminiEnvVar, "g-secret");
 
             var config = ConfigLoader.Load(Path.GetTempPath());
-            config.Model.Provider = "gemini";
+            config.Model.Provider = ProviderConfig.Gemini;
             config.Model.Gemini.Id = "gemini-2.5-flash-lite";
 
             Assert.AreEqual("g-secret", config.Model.Gemini.ApiKey);
-            Assert.AreEqual("gemini-2.5-flash-lite", config.Model.ActiveModelId);
-            Assert.AreEqual("Gemini", ConfigLoader.GetProviderDisplayName("gemini"));
-            Assert.AreEqual("env GEMINI_API_KEY", ConfigLoader.GetApiKeySource(config));
+            Assert.AreEqual("gemini-2.5-flash-lite", config.Model.ActiveModel.Id);
+            Assert.AreEqual("Gemini", ProviderConfig.GetProviderDisplayName(ProviderConfig.Gemini));
+            Assert.AreEqual($"env {ProviderConfig.GeminiEnvVar}", ConfigLoader.GetApiKeySource(config));
 
             var keys = ConfigEditor.ParamList.SelectMany(g => g.Params).Select(p => p.Key).ToList();
-            CollectionAssert.Contains(keys, "model.gemini.id");
-            CollectionAssert.Contains(keys, "model.gemini.api_key");
+            CollectionAssert.Contains(keys, "model." + ProviderConfig.Gemini + ".id");
+            CollectionAssert.Contains(keys, "model." + ProviderConfig.Gemini + ".api_key");
         }
         finally
         {
-            Environment.SetEnvironmentVariable("GEMINI_API_KEY", old);
+            Environment.SetEnvironmentVariable(ProviderConfig.GeminiEnvVar, old);
         }
     }
 
     [TestMethod]
     public void GetConfigSources_ReportsKnownSecretEnvVarForApiKey()
     {
-        var old = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+        var old = Environment.GetEnvironmentVariable(ProviderConfig.AnthropicEnvVar);
         try
         {
-            Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", "from-env");
+            Environment.SetEnvironmentVariable(ProviderConfig.AnthropicEnvVar, "from-env");
 
             var sources = ConfigLoader.GetConfigSources(Path.GetTempPath());
 
-            Assert.AreEqual("env:ANTHROPIC_API_KEY", sources.KeySources["model.anthropic.api_key"]);
+            Assert.AreEqual(
+                $"env:{ProviderConfig.AnthropicEnvVar}",
+                sources.KeySources["model." + ProviderConfig.Anthropic + ".api_key"]);
         }
         finally
         {
-            Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", old);
+            Environment.SetEnvironmentVariable(ProviderConfig.AnthropicEnvVar, old);
         }
     }
 

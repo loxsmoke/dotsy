@@ -40,7 +40,7 @@ public static class RequestBuilder
         }
 
         return new ChatRequest(
-            config.Model.ActiveModelId,
+            config.Model.ActiveModel.Id,
             systemPrompt,
             messages,
             toolDefs,

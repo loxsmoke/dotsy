@@ -30,14 +30,14 @@ public sealed class ConfigCommandTests
     [TestMethod]
     public void Execute_NoArgsShowsGroupedConfigAndActiveProviderSection()
     {
-        WithContext(Config(provider: "openai"), projectConfigPath: null, () =>
+        WithContext(Config(provider: ProviderConfig.OpenAi), projectConfigPath: null, () =>
         {
             var host = new CapturingHost();
 
             new ConfigCommand().Execute(host, "");
 
             StringAssert.Contains(host.Output, "[model]");
-            StringAssert.Contains(host.Output, "[model.openai]");
+            StringAssert.Contains(host.Output, $"[{"model." + ProviderConfig.OpenAi}]");
             StringAssert.Contains(host.Output, "provider");
             StringAssert.Contains(host.Output, "/config <key> <value>");
         });
@@ -53,8 +53,21 @@ public sealed class ConfigCommandTests
             new ConfigCommand().Execute(host, "list");
 
             StringAssert.Contains(host.Output, "Available config keys:");
-            StringAssert.Contains(host.Output, "model.provider");
-            StringAssert.Contains(host.Output, "tui.theme");
+            StringAssert.Contains(host.Output, "[model]");
+            StringAssert.Contains(host.Output, "provider");
+            StringAssert.Contains(host.Output, $"[{"model." + ProviderConfig.OpenAi}]");
+            StringAssert.Contains(host.Output, "id");
+            Assert.IsFalse(host.Output.Contains("model." + ProviderConfig.OpenAi + ".id", StringComparison.OrdinalIgnoreCase));
+            Assert.IsFalse(host.Output.Contains("tui.theme", StringComparison.OrdinalIgnoreCase));
+            Assert.IsFalse(host.Output.Contains("provider                string", StringComparison.OrdinalIgnoreCase));
+            Assert.IsFalse(host.Output.Contains("verbose                 bool", StringComparison.OrdinalIgnoreCase));
+
+            var lines = host.Output.Split('\n');
+            var providerLine = lines.Single(l => l.Contains("active provider"));
+            Assert.IsTrue(providerLine.StartsWith(" provider", StringComparison.Ordinal));
+            Assert.IsFalse(providerLine.StartsWith("  provider", StringComparison.Ordinal));
+            StringAssert.Contains(host.Output, "max_output_tokens_per_request max output tokens per request");
+            StringAssert.Contains(host.Output, "left_panel_width_percentage conversation panel width percentage");
         });
     }
 
@@ -82,14 +95,34 @@ public sealed class ConfigCommandTests
         {
             var host = new CapturingHost { ApplyThemeResult = ("dark", fellBack: false) };
 
-            new ConfigCommand().Execute(host, "tui.theme dark");
+            new ConfigCommand().Execute(host, "tui.theme light");
 
-            Assert.AreEqual("dark", config.Tui.Theme);
-            Assert.AreEqual("dark", host.AppliedTheme);
-            Assert.AreEqual(config.Model.ActiveModelId, host.ModelId);
+            Assert.AreEqual("light", config.Tui.Theme);
+            Assert.AreEqual("light", host.AppliedTheme);
+            Assert.AreEqual(config.Model.ActiveModel.Id, host.ModelId);
             StringAssert.Contains(host.Output, "tui.theme ");
-            StringAssert.Contains(host.Output, "saved");
-            StringAssert.Contains(File.ReadAllText(projectConfig), "theme = \"dark\"");
+            StringAssert.Contains(host.Output, "Saved");
+            StringAssert.Contains(File.ReadAllText(projectConfig), "theme = \"light\"");
+        });
+    }
+
+    [TestMethod]
+    public void Execute_UnchangedSettingDoesNotPersist()
+    {
+        var projectConfig = WriteProjectConfig();
+        var before = File.ReadAllText(projectConfig);
+
+        WithContext(Config(), projectConfig, () =>
+        {
+            var host = new CapturingHost();
+
+            new ConfigCommand().Execute(host, $"model.provider {ProviderConfig.Anthropic}");
+
+            Assert.AreEqual(before, File.ReadAllText(projectConfig));
+            StringAssert.Contains(host.Output, "model.provider ");
+            StringAssert.Contains(host.Output, $"= {ProviderConfig.Anthropic}");
+            StringAssert.Contains(host.Output, "Value was unchanged.");
+            Assert.IsFalse(host.Output.Contains("saved", StringComparison.OrdinalIgnoreCase));
         });
     }
 
@@ -104,7 +137,7 @@ public sealed class ConfigCommandTests
 
             new ConfigCommand().Execute(host, "tui.theme mystery");
 
-            StringAssert.Contains(host.Output, "unknown theme 'mystery', using dark");
+            StringAssert.Contains(host.Output, "Unknown theme 'mystery', using dark");
         });
     }
 
@@ -124,9 +157,9 @@ public sealed class ConfigCommandTests
             };
             var host = new CapturingHost { Busy = true };
 
-            new ConfigCommand().Execute(host, "model.provider openai");
+            new ConfigCommand().Execute(host, $"model.provider {ProviderConfig.OpenAi}");
 
-            Assert.AreEqual("openai", config.Model.Provider);
+            Assert.AreEqual(ProviderConfig.OpenAi, config.Model.Provider);
             Assert.IsFalse(factoryCalled);
             StringAssert.Contains(host.Output, "provider will reload after the current turn completes");
         });
@@ -143,18 +176,66 @@ public sealed class ConfigCommandTests
 
             new ConfigCommand().Execute(host, "model.unknown.id nope");
 
-            StringAssert.Contains(host.Output, "config error: unknown sub-section 'model.unknown'");
+            StringAssert.Contains(host.Output, "Config error: unknown sub-section 'model.unknown'");
         });
+    }
+
+    [TestMethod]
+    public void Complete_TopLevelShowsListAndSections()
+    {
+        var items = new ConfigCommand().Complete(new CapturingHost(), "");
+
+        CollectionAssert.Contains(items.Select(i => i.Replacement).ToList(), "/config list");
+        CollectionAssert.Contains(items.Select(i => i.Replacement).ToList(), "/config model ");
+        CollectionAssert.Contains(items.Select(i => i.Replacement).ToList(), "/config tui ");
+    }
+
+    [TestMethod]
+    public void Complete_SectionShowsSectionKeys()
+    {
+        var items = new ConfigCommand().Complete(new CapturingHost(), "tui ");
+
+        CollectionAssert.Contains(items.Select(i => i.Replacement).ToList(), "/config tui.theme ");
+        CollectionAssert.Contains(items.Select(i => i.Replacement).ToList(), "/config tui.verbose ");
+    }
+
+    [TestMethod]
+    public void Complete_DottedPrefixShowsMatchingKeys()
+    {
+        var items = new ConfigCommand().Complete(new CapturingHost(), "model.");
+
+        CollectionAssert.Contains(items.Select(i => i.Replacement).ToList(), "/config model.provider ");
+        CollectionAssert.Contains(items.Select(i => i.Replacement).ToList(), $"/config {"model." + ProviderConfig.Anthropic + ".id"} ");
+    }
+
+    [TestMethod]
+    public void Complete_BooleanKeyShowsValuesAfterSpace()
+    {
+        var items = new ConfigCommand().Complete(new CapturingHost(), "tui.verbose ");
+
+        CollectionAssert.AreEqual(
+            new[] { "/config tui.verbose true", "/config tui.verbose false" },
+            items.Select(i => i.Replacement).ToArray());
+    }
+
+    [TestMethod]
+    public void Complete_FiniteValueKeyShowsKnownValuesAfterSpace()
+    {
+        var items = new ConfigCommand().Complete(new CapturingHost(), "model.provider ");
+
+        CollectionAssert.Contains(items.Select(i => i.Replacement).ToList(), $"/config model.provider {ProviderConfig.Anthropic}");
+        CollectionAssert.Contains(items.Select(i => i.Replacement).ToList(), $"/config model.provider {ProviderConfig.OpenAi}");
+        CollectionAssert.Contains(items.Select(i => i.Replacement).ToList(), $"/config model.provider {ProviderConfig.Ollama}");
     }
 
     private string WriteProjectConfig()
     {
         var path = Path.Combine(tmpDir, "config.toml");
-        File.WriteAllText(path, "[tui]\ntheme = \"dark\"\n\n[model]\nprovider = \"anthropic\"\n");
+        File.WriteAllText(path, $"[tui]\ntheme = \"dark\"\n\n[model]\nprovider = \"{ProviderConfig.Anthropic}\"\n");
         return path;
     }
 
-    private static DotsyConfig Config(string provider = "anthropic") => new()
+    private static DotsyConfig Config(string provider = ProviderConfig.Anthropic) => new()
     {
         Model = new ModelConfig
         {

@@ -27,7 +27,7 @@ public sealed class MultiEditTool : ITool
 
     public string FormatPanelArgument(JsonElement input, string cwd)
     {
-        var path = MakeRelative(input.GetStringPropertyOrEmpty("path"), cwd);
+        var path = PathDisplay.MakeRelative(input.GetStringPropertyOrEmpty("path"), cwd);
         var count = input.TryGetProperty("edits", out var editsEl) && editsEl.ValueKind == JsonValueKind.Array
             ? editsEl.GetArrayLength()
             : 0;
@@ -42,18 +42,18 @@ public sealed class MultiEditTool : ITool
                 if (edit.TryGetProperty("start_line", out var sl) && edit.TryGetProperty("end_line", out var el))
                 {
                     totalDeleted += el.GetInt32() - sl.GetInt32() + 1;
-                    totalAdded += CountLines(newString);
+                    totalAdded += EditSummaryFormatter.CountLines(newString);
                 }
                 else
                 {
                     var oldString = edit.GetStringPropertyOrEmpty("old_string");
-                    totalDeleted += CountLines(oldString);
-                    totalAdded += CountLines(newString);
+                    totalDeleted += EditSummaryFormatter.CountLines(oldString);
+                    totalAdded += EditSummaryFormatter.CountLines(newString);
                 }
             }
         }
 
-        return $"{path}  {count} edit{(count == 1 ? "" : "s")}{LineDelta(totalAdded, totalDeleted)}";
+        return $"{path}  {count} edit{(count == 1 ? "" : "s")}{EditSummaryFormatter.LineDelta(totalAdded, totalDeleted)}";
     }
 
     public string? FormatPanelResult(JsonElement input, string resultContent, string cwd)
@@ -67,7 +67,7 @@ public sealed class MultiEditTool : ITool
         }
 
         sb.AppendLine("Input");
-        sb.AppendLine($"path: {MakeRelative(input.GetStringPropertyOrEmpty("path"), cwd)}");
+        sb.AppendLine($"path: {PathDisplay.MakeRelative(input.GetStringPropertyOrEmpty("path"), cwd)}");
 
         if (input.TryGetProperty("edits", out var edits) && edits.ValueKind == JsonValueKind.Array)
         {
@@ -204,31 +204,4 @@ public sealed class MultiEditTool : ITool
         return (list, null);
     }
 
-    private static string LineDelta(int added, int deleted)
-    {
-        if (added == 0 && deleted == 0) return "";
-        var parts = new List<string>();
-        if (added > 0) parts.Add($"+{added}");
-        if (deleted > 0) parts.Add($"-{deleted}");
-        return "  " + string.Join(" ", parts) + " lines";
-    }
-
-    private static int CountLines(string text) =>
-        string.IsNullOrEmpty(text) ? 0 : text.TrimEnd('\n').Split('\n').Length;
-
-    private static string MakeRelative(string path, string cwd)
-    {
-        if (string.IsNullOrEmpty(path)) return ".";
-        try
-        {
-            var abs = Path.IsPathRooted(path) ? path : Path.GetFullPath(Path.Combine(cwd, path));
-            var cwdFull = Path.GetFullPath(cwd);
-            if (abs.StartsWith(cwdFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-                return abs[(cwdFull.Length + 1)..];
-            if (abs.Equals(cwdFull, StringComparison.OrdinalIgnoreCase))
-                return ".";
-        }
-        catch { }
-        return path;
-    }
 }

@@ -2,9 +2,9 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Dotsy.Core.Config;
 using Dotsy.Core.Providers;
 using Dotsy.Core.Utils;
-using Dotsy.Providers;
 
 namespace Dotsy.Providers.OpenAi;
 
@@ -13,7 +13,7 @@ public class OpenAiProvider : IProvider
     protected readonly HttpClient Http;
     protected readonly string ApiKey;
 
-    public virtual string Name => "openai";
+    public virtual string Name => ProviderConfig.OpenAi;
     protected virtual string ChatEndpoint => "/v1/chat/completions";
 
     public OpenAiProvider(string apiKey, string baseUrl = "https://api.openai.com", HttpClient? http = null)
@@ -92,31 +92,21 @@ public class OpenAiProvider : IProvider
         var body = BuildRequestBody(request);
         var content = new StringContent(body, Encoding.UTF8, "application/json");
 
-        HttpResponseMessage? resp = null;
-        Exception? networkEx = null;
-        try
+        var post = await ProviderHttp.PostAsync(Http, ChatEndpoint, content, ct);
+        if (post.Error is not null)
         {
-            resp = await Http.PostAsync(ChatEndpoint, content, ct);
-        }
-        catch (Exception ex)
-        {
-            networkEx = ex;
-        }
-
-        if (networkEx is not null)
-        {
-            yield return new StreamError(new ProviderException(new NetworkError(networkEx)));
+            yield return post.Error;
             yield break;
         }
 
-        if (!resp!.IsSuccessStatusCode)
+        if (!post.Response!.IsSuccessStatusCode)
         {
-            await foreach (var ev in HandleErrorResponse(resp, ct))
+            await foreach (var ev in HandleErrorResponse(post.Response, ct))
                 yield return ev;
             yield break;
         }
 
-        await foreach (var ev in ParseSseStream(resp, ct))
+        await foreach (var ev in ParseSseStream(post.Response, ct))
             yield return ev;
     }
 
@@ -385,19 +375,8 @@ public class OpenAiProvider : IProvider
             var detail = string.IsNullOrEmpty(errType) ? body : errType;
             error = new AuthError($"{detail}\nMessage: {errMsg}\nRequest ID: {reqId}".TrimEnd());
         }
-        else if (status == 429)
-        {
-            TimeSpan? retryAfter = null;
-            if (resp.Headers.TryGetValues("Retry-After", out var values))
-            {
-                var raw = values.FirstOrDefault();
-                if (int.TryParse(raw, out var secs))
-                    retryAfter = TimeSpan.FromSeconds(secs);
-            }
-            error = new RateLimitError(retryAfter);
-        }
-        else if (status >= 500)
-            error = new ServerError(status);
+        else if (ProviderHttp.TryClassifyCommonError(resp, out var commonError))
+            error = commonError!;
         else
         {
             var (errType, errMsg, reqId) = ParseErrorBody(body, resp);

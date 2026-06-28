@@ -36,6 +36,37 @@ public sealed class MultilineInputTests
     }
 
     [TestMethod]
+    public void KeyInterceptor_HandlesEnterBeforeSubmit()
+    {
+        using var input = new MultilineInput();
+        var submitted = false;
+        input.Submitted += (_, _) => submitted = true;
+        input.KeyInterceptor = key => key == Key.Enter;
+        input.Text = "hello";
+
+        var handled = InvokeOnKeyDown(input, Key.Enter);
+
+        Assert.IsTrue(handled);
+        Assert.IsFalse(submitted);
+    }
+
+    [TestMethod]
+    public void KeyInterceptor_HandlesArrowsBeforeHistory()
+    {
+        using var input = new MultilineInput();
+        var historyRequested = false;
+        input.HistoryPrev += (_, _) => historyRequested = true;
+        input.KeyInterceptor = key => key == Key.CursorUp;
+        input.Text = "hello";
+        input.CaretOffset = 0;
+
+        var handled = InvokeOnKeyDown(input, Key.CursorUp);
+
+        Assert.IsTrue(handled);
+        Assert.IsFalse(historyRequested);
+    }
+
+    [TestMethod]
     public void CtrlQ_RaisesQuitRequested()
     {
         using var input = new MultilineInput();

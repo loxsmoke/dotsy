@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Dotsy.Core.Config;
 using Dotsy.Core.Providers;
 using Dotsy.Providers.OpenAi;
 
@@ -7,13 +8,13 @@ namespace Dotsy.Providers.Gemini;
 /// <summary>
 /// Google Gemini via its OpenAI-compatible endpoint. Behaves exactly like the OpenAI
 /// provider but with Google's base URL baked in, so users only set an id and api_key —
-/// no base_url needed. Auth is the standard <c>Authorization: Bearer &lt;GEMINI_API_KEY&gt;</c>.
+/// no base_url needed. Auth uses the value named by <see cref="ProviderConfig.GeminiEnvVar"/>.
 /// </summary>
 public sealed class GeminiProvider : OpenAiProvider
 {
     public const string DefaultBaseUrl = "https://generativelanguage.googleapis.com/v1beta/openai/";
 
-    public override string Name => "gemini";
+    public override string Name => ProviderConfig.Gemini;
 
     // BaseAddress ends in "/openai/"; a relative endpoint appends to it, giving
     // ".../v1beta/openai/chat/completions" (the OpenAI-compatible chat route).

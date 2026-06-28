@@ -30,7 +30,7 @@ public sealed class EditTool : ITool
 
     public string FormatPanelArgument(JsonElement input, string cwd)
     {
-        var path = MakeRelative(input.GetStringPropertyOrEmpty("path"), cwd);
+        var path = PathDisplay.MakeRelative(input.GetStringPropertyOrEmpty("path"), cwd);
         var newString = input.GetStringPropertyOrEmpty("new_string");
         int added;
         int deleted;
@@ -38,16 +38,16 @@ public sealed class EditTool : ITool
         if (input.TryGetProperty("start_line", out var sl) && input.TryGetProperty("end_line", out var el))
         {
             deleted = el.GetInt32() - sl.GetInt32() + 1;
-            added = CountLines(newString);
+            added = EditSummaryFormatter.CountLines(newString);
         }
         else
         {
             var oldString = input.GetStringPropertyOrEmpty("old_string");
-            deleted = CountLines(oldString);
-            added = CountLines(newString);
+            deleted = EditSummaryFormatter.CountLines(oldString);
+            added = EditSummaryFormatter.CountLines(newString);
         }
 
-        return path + LineDelta(added, deleted);
+        return path + EditSummaryFormatter.LineDelta(added, deleted);
     }
 
     public string? FormatPanelResult(JsonElement input, string resultContent, string cwd)
@@ -160,38 +160,10 @@ public sealed class EditTool : ITool
         return first.Length <= maxLen ? first : first[..maxLen] + "...";
     }
 
-    private static string LineDelta(int added, int deleted)
-    {
-        if (added == 0 && deleted == 0) return "";
-        var parts = new List<string>();
-        if (added > 0) parts.Add($"+{added}");
-        if (deleted > 0) parts.Add($"-{deleted}");
-        return "  " + string.Join(" ", parts) + " lines";
-    }
-
-    private static int CountLines(string text) =>
-        string.IsNullOrEmpty(text) ? 0 : text.TrimEnd('\n').Split('\n').Length;
-
-    private static string MakeRelative(string path, string cwd)
-    {
-        if (string.IsNullOrEmpty(path)) return ".";
-        try
-        {
-            var abs = Path.IsPathRooted(path) ? path : Path.GetFullPath(Path.Combine(cwd, path));
-            var cwdFull = Path.GetFullPath(cwd);
-            if (abs.StartsWith(cwdFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-                return abs[(cwdFull.Length + 1)..];
-            if (abs.Equals(cwdFull, StringComparison.OrdinalIgnoreCase))
-                return ".";
-        }
-        catch { }
-        return path;
-    }
-
     internal static void AppendEditInput(StringBuilder sb, JsonElement input, string header, string cwd)
     {
         sb.AppendLine(header);
-        sb.AppendLine($"path: {MakeRelative(input.GetStringPropertyOrEmpty("path"), cwd)}");
+        sb.AppendLine($"path: {PathDisplay.MakeRelative(input.GetStringPropertyOrEmpty("path"), cwd)}");
 
         if (input.TryGetProperty("start_line", out var startLine) && input.TryGetProperty("end_line", out var endLine))
         {

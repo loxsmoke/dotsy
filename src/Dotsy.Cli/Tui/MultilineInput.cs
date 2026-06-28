@@ -23,6 +23,9 @@ internal sealed class MultilineInput : Editor
     public event EventHandler?         QuitRequested;    // Ctrl+Q
     public event EventHandler?         CancelRequested;  // Ctrl+C
 
+    public Func<Key, bool>? KeyInterceptor { get; set; }
+    public Func<string?>? HintProvider { get; set; }
+
     private readonly StringBuilder pasteBuffer = new();
     private Timer? flushTimer;
     private const int PasteFlushMs = 5;
@@ -87,18 +90,21 @@ internal sealed class MultilineInput : Editor
 
     protected override bool OnKeyDown(Key key)
     {
+        if (KeyInterceptor?.Invoke(key) == true)
+        {
+            key.Handled = true;
+            return true;
+        }
+
         // Shift+navigation extends the selection. Invoke the matching TextView "extend" command
         // directly instead of relying on the bound key being matched; selection then works even
         // where the shift+arrow keybinding lookup misbehaves.
-        foreach (var (selKey, command) in ShiftSelectionCommands)
+        if (TextViewInteractions.TryGetShiftSelectionCommand(key, out var selectionCommand))
         {
-            if (key == selKey)
-            {
-                FlushPasteBuffer();
-                InvokeCommand(command);
-                key.Handled = true;
-                return true;
-            }
+            FlushPasteBuffer();
+            InvokeCommand(selectionCommand);
+            key.Handled = true;
+            return true;
         }
 
         // Plain navigation collapses any active selection (from Shift, Ctrl+A, or the mouse).
@@ -207,9 +213,16 @@ internal sealed class MultilineInput : Editor
         return base.OnKeyDown(key);
     }
 
+    protected override bool OnDrawingContent(DrawContext? context)
+    {
+        var handled = base.OnDrawingContent(context);
+        DrawHint();
+        return handled;
+    }
+
     protected override bool OnMouseEvent(Mouse ev)
     {
-        if (IsContextMenuMouseEvent(ev))
+        if (TextViewInteractions.IsContextMenuMouseEvent(ev.Flags, ContextMenu?.MouseFlags))
         {
             ev.Handled = true;
             return true;
@@ -241,30 +254,49 @@ internal sealed class MultilineInput : Editor
             Document?.Insert(CaretOffset, text);
     }
 
-    private bool IsContextMenuMouseEvent(Mouse ev) =>
-        ev.Flags == ContextMenu?.MouseFlags
-        || ev.Flags.HasFlag(MouseFlags.RightButtonPressed)
-        || ev.Flags.HasFlag(MouseFlags.RightButtonReleased)
-        || ev.Flags.HasFlag(MouseFlags.RightButtonClicked)
-        || ev.Flags.HasFlag(MouseFlags.RightButtonDoubleClicked)
-        || ev.Flags.HasFlag(MouseFlags.RightButtonTripleClicked);
+    private void DrawHint()
+    {
+        if (TuiSessionContext.App.Driver is null)
+            return;
 
-    // Shift+navigation keys mapped to the TextView command that extends the selection.
-    private static readonly (Key Key, Command Command)[] ShiftSelectionCommands =
-    [
-        (Key.CursorLeft.WithShift,           Command.LeftExtend),
-        (Key.CursorRight.WithShift,          Command.RightExtend),
-        (Key.CursorUp.WithShift,             Command.UpExtend),
-        (Key.CursorDown.WithShift,           Command.DownExtend),
-        (Key.Home.WithShift,                 Command.LeftStartExtend),
-        (Key.End.WithShift,                  Command.RightEndExtend),
-        (Key.PageUp.WithShift,               Command.PageUpExtend),
-        (Key.PageDown.WithShift,             Command.PageDownExtend),
-        (Key.CursorLeft.WithCtrl.WithShift,  Command.WordLeftExtend),
-        (Key.CursorRight.WithCtrl.WithShift, Command.WordRightExtend),
-        (Key.Home.WithCtrl.WithShift,        Command.StartExtend),
-        (Key.End.WithCtrl.WithShift,         Command.EndExtend),
-    ];
+        var hint = HintProvider?.Invoke();
+        if (string.IsNullOrWhiteSpace(hint))
+            return;
+
+        var text = Text?.ToString() ?? "";
+        if (text.Contains('\n'))
+            return;
+
+        var prefixColumns = CellWidth(text);
+        var hintText = "  " + hint;
+        if (prefixColumns >= Viewport.Width - 1)
+            return;
+
+        SetAttribute(Palette.Dim);
+        Move(prefixColumns, 0);
+        DrawClipped(hintText, Viewport.Width - prefixColumns);
+    }
+
+    private static void DrawClipped(string text, int width)
+    {
+        var col = 0;
+        foreach (var rune in text.EnumerateRunes())
+        {
+            if (col >= width) break;
+            if (Glyphs.GetColumns(rune) <= 0) continue;
+
+            TuiSessionContext.App.Driver?.AddRune(Glyphs.Safe(rune));
+            col++;
+        }
+    }
+
+    private static int CellWidth(string text)
+    {
+        var width = 0;
+        foreach (var rune in text.EnumerateRunes())
+            width += Math.Max(0, Glyphs.GetColumns(rune));
+        return width;
+    }
 
     // Cursor-movement keys (without Shift) that should collapse an existing selection.
     private static readonly Key[] PlainNavigationKeys =

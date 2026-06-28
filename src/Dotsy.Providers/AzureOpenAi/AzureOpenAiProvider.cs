@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Dotsy.Core.Config;
 using Dotsy.Core.Providers;
 using Dotsy.Providers.OpenAi;
 
@@ -13,7 +14,7 @@ public sealed class AzureOpenAiProvider : OpenAiProvider
     private readonly string _deployment;
     private readonly string _apiVersion;
 
-    public override string Name => "azure";
+    public override string Name => ProviderConfig.Azure;
 
     protected override string ChatEndpoint =>
         $"/openai/deployments/{_deployment}/chat/completions?api-version={_apiVersion}";

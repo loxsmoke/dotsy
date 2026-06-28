@@ -76,7 +76,7 @@ runCommand.SetAction(async (parseResult, cancellationToken) =>
 
     // Apply CLI overrides. Provider first so the model override lands in the right section.
     if (providerOverride is not null) config.Model.Provider = providerOverride;
-    if (modelOverride is not null) config.Model.ActiveModelId = modelOverride;
+    if (modelOverride is not null) config.Model.ActiveModel.Id = modelOverride;
     if (maxTurnsOverride.HasValue) config.Agent.MaxTurns = maxTurnsOverride.Value;
 
     // Read prompt from file if -f given
@@ -199,7 +199,7 @@ static async Task RunTui(
 
     // Size the token budget to the model's active context window so compaction triggers at the
     // right point (for Ollama this honors model.ollama.max_context_tokens, sent as num_ctx).
-    var modelInfo = await provider.GetModelInfoAsync(config.Model.ActiveModelId, ct);
+    var modelInfo = await provider.GetModelInfoAsync(config.Model.ActiveModel.Id, ct);
     loopCtx.TokenBudget = new TokenBudget(
         modelInfo.ContextWindow,
         config.Compaction.ReserveTokens,
@@ -241,6 +241,8 @@ static async Task RunTui(
     // it reflects model/provider switches made via /config or /model at runtime.
     TuiSessionContext.ModelInfoLookup = modelId =>
         ProviderRegistry.Resolve(TuiSessionContext.Config).GetModelInfoAsync(modelId, CancellationToken.None);
+    TuiSessionContext.ModelListLookup = ct =>
+        ProviderRegistry.Resolve(TuiSessionContext.Config).GetModelsAsync(ct);
 
     // Ctrl+Break on Windows fires ConsoleSpecialKey.ControlBreak via CancelKeyPress;
     // Terminal.Gui never sees it as a KeyDown, so we intercept it here and stop cleanly.
@@ -264,6 +266,7 @@ static async Task RunTui(
     var app = Application.Create();
     TuiSessionContext.App = app;
     app.Init();
+    EnsureFullScreenOnStartup(app);
     try
     {
         app.Run<AgentWindow>();
@@ -276,6 +279,86 @@ static async Task RunTui(
         TuiSessionContext.Trajectory = null;
         TuiSessionContext.StartupLoadedSession = null;
     }
+}
+
+// Make the TUI fill the whole console at startup.
+//
+// The Terminal.Gui v2 Windows driver renders into a freshly created console screen
+// buffer and reads its size from that buffer (WindowsOutput.GetWindowSize). A new
+// screen buffer reports a default window size rather than the real console window, so
+// the UI sometimes starts confined to a corner of the terminal. The driver's size
+// monitor only raises a resize when the reported size *changes*, so that first wrong
+// value sticks until the user manually resizes the window - which is exactly the
+// workaround users hit today.
+//
+// We mirror that manual resize. The Iteration event fires at the start of each main
+// loop iteration, *before* the driver polls its size, so a single assertion is
+// overwritten by the first poll. Re-asserting the real console dimensions for the
+// first few iterations lets the correct size take and then hold (once the monitor has
+// cached the stale value it stays quiet, so our value is no longer clobbered).
+static void EnsureFullScreenOnStartup(IApplication app)
+{
+    const int requiredStableIterations = 3;
+    var stable = 0;
+
+    // Apply once now, then keep it pinned for the first handful of iterations.
+    ApplyConsoleSize(app);
+
+    EventHandler<EventArgs<IApplication?>>? onIteration = null;
+    onIteration = (_, _) =>
+    {
+        if (ApplyConsoleSize(app))
+        {
+            if (++stable >= requiredStableIterations)
+                app.Iteration -= onIteration;
+        }
+        else
+        {
+            stable = 0;
+        }
+    };
+    app.Iteration += onIteration;
+}
+
+// Forces the driver and application screen to the real console window size. Returns
+// true when they already matched (nothing changed), false when a correction was applied.
+static bool ApplyConsoleSize(IApplication app)
+{
+    int width, height;
+    try
+    {
+        width = Console.WindowWidth;
+        height = Console.WindowHeight;
+    }
+    catch (Exception ex) when (ex is IOException or PlatformNotSupportedException)
+    {
+        // Redirected or non-console hosts do not expose synchronous window dimensions.
+        // Leave Terminal.Gui's own size detection in charge and stop re-asserting.
+        return true;
+    }
+
+    if (width <= 0 || height <= 0)
+        return true;
+
+    var changed = false;
+
+    if (app.Driver is { } driver && (driver.Cols != width || driver.Rows != height))
+    {
+        driver.Cols = width;
+        driver.Rows = height;
+        changed = true;
+    }
+
+    if (app.Screen.Width != width || app.Screen.Height != height)
+    {
+        app.Screen = new System.Drawing.Rectangle(0, 0, width, height);
+        changed = true;
+    }
+
+    if (changed)
+        app.LayoutAndDraw(true);
+
+    return !changed;
 }
 
 static async Task<int> RunHeadless(
@@ -348,7 +431,7 @@ static async Task<int> RunHeadless(
     var trajectory = new TrajectoryRecorder(config, workingDirectory);
 
     // Get model info for token budget
-    var modelInfo = await provider.GetModelInfoAsync(config.Model.ActiveModelId, ct);
+    var modelInfo = await provider.GetModelInfoAsync(config.Model.ActiveModel.Id, ct);
     loopCtx.TokenBudget = new TokenBudget(
         modelInfo.ContextWindow,
         config.Compaction.ReserveTokens,
@@ -359,7 +442,7 @@ static async Task<int> RunHeadless(
     if (prompt.Trim().Equals("/compact", StringComparison.OrdinalIgnoreCase))
     {
         var compactExitCode = await RunHeadlessCompact(loop, loopCtx, workingDirectory, outputFormat, sw, ct);
-        sessionStore.UpdateIndex("manual compaction", workingDirectory, config.Model.ActiveModelId);
+        sessionStore.UpdateIndex("manual compaction", workingDirectory, config.Model.ActiveModel.Id);
         return compactExitCode;
     }
 
@@ -447,7 +530,7 @@ static async Task<int> RunHeadless(
     }
 
     var indexTitle = prompt.Length > 50 ? prompt[..50] + "..." : prompt;
-    sessionStore.UpdateIndex(indexTitle, workingDirectory, config.Model.ActiveModelId);
+    sessionStore.UpdateIndex(indexTitle, workingDirectory, config.Model.ActiveModel.Id);
     TryExportTrajectory(trajectory, loopCtx, finalEnd ?? new LoopEnded(EndReason.Cancelled), msg =>
     {
         if (outputFormat == "stream-json")

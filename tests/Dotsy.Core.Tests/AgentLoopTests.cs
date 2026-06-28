@@ -70,6 +70,9 @@ public sealed class AgentLoopTests
     private static IReadOnlyList<ProviderEvent> TextTurn(string text = "hello") =>
         [new TextDelta(text), new StreamEnd(StopReason.EndTurn)];
 
+    private static IReadOnlyList<ProviderEvent> TruncatedTextTurn(string text = "hello") =>
+        [new TextDelta(text), new StreamEnd(StopReason.MaxTokens)];
+
     private static IReadOnlyList<ProviderEvent> ModelUnknownTurn(string message = "invalid model ID") =>
         [new StreamError(new ProviderException(new ModelUnknownError(message)))];
 
@@ -100,10 +103,24 @@ public sealed class AgentLoopTests
     }
 
     [TestMethod]
-    public async Task NudgeTriggers_AfterConsecutiveNoToolTurns()
+    public async Task TextOnlyEndTurn_CompletesWithoutAnotherProviderRequest()
+    {
+        var config = MakeConfig(maxTurns: 100, nudgeLimit: 3);
+        var provider = new FakeProvider(TextTurn());
+        var loop = new AgentLoop(provider, new ToolRegistry(), YoloStore(), config);
+
+        var events = await Collect(loop.RunAsync(EmptyCtx(), Path.GetTempPath(), CancellationToken.None));
+
+        var ended = events.OfType<LoopEnded>().Single();
+        Assert.AreEqual(EndReason.ResponseComplete, ended.Reason);
+        Assert.AreEqual(1, provider.CallCount);
+    }
+
+    [TestMethod]
+    public async Task NudgeTriggers_AfterConsecutiveNonTerminalNoToolTurns()
     {
         var config   = MakeConfig(maxTurns: 100, nudgeLimit: 2);
-        var provider = new FakeProvider(TextTurn());          // same sequence reused
+        var provider = new FakeProvider(TruncatedTextTurn()); // same sequence reused
         var registry = new ToolRegistry();
         var loop     = new AgentLoop(provider, registry, YoloStore(), config);
 
@@ -121,7 +138,7 @@ public sealed class AgentLoopTests
     public async Task MaxTurns_YieldsLoopEndedTurnLimitReached()
     {
         var config   = MakeConfig(maxTurns: 2, nudgeLimit: 100);
-        var provider = new FakeProvider(TextTurn());
+        var provider = new FakeProvider(TruncatedTextTurn());
         var registry = new ToolRegistry();
         var loop     = new AgentLoop(provider, registry, YoloStore(), config);
 

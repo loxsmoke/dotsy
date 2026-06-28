@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Dotsy.Core.Config;
 using Dotsy.Core.Providers;
 using Dotsy.Core.Utils;
 
@@ -13,7 +14,7 @@ public sealed class OllamaProvider : IProvider
     private readonly int _maxContextTokens;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _thinkingCapable = new();
 
-    public string Name => "ollama";
+    public string Name => ProviderConfig.Ollama;
 
     public OllamaProvider(string baseUrl = "http://localhost:11434", HttpClient? http = null, int maxContextTokens = 0)
     {
@@ -347,6 +348,7 @@ public sealed class OllamaProvider : IProvider
 
         var rawToolCalls = new RawToolCallParser();
         var thinkParser = new ThinkTagParser();
+        var toolCallIdx = 0;
 
         while (!ct.IsCancellationRequested)
         {
@@ -394,17 +396,16 @@ public sealed class OllamaProvider : IProvider
 
                 if (message.TryGetProperty("tool_calls", out var toolCalls))
                 {
-                    int idx = 0;
                     foreach (var tc in toolCalls.EnumerateArray())
                     {
                         if (tc.TryGetProperty("function", out var func))
                         {
-                            var id = $"ollama-{idx}";
+                            var id = $"ollama-{toolCallIdx}";
                             var name = func.GetStringPropertyOrEmpty("name");
                             var args = func.TryGetProperty("arguments", out var a) ? a.GetRawText() : "{}";
                             yield return new ToolCallDelta(id, name, args);
                         }
-                        idx++;
+                        toolCallIdx++;
                     }
                 }
             }

@@ -70,14 +70,11 @@ internal sealed class ScrollableText : Editor
             // would otherwise do nothing. Direct invocation always runs the command.
             if (!key.IsAlt)
             {
-                foreach (var (selKey, command) in ShiftSelectionCommands)
+                if (TextViewInteractions.TryGetShiftSelectionCommand(key, out var selectionCommand))
                 {
-                    if (key == selKey)
-                    {
-                        InvokeCommand(command);
-                        SetNeedsDraw();
-                        return true;
-                    }
+                    InvokeCommand(selectionCommand);
+                    SetNeedsDraw();
+                    return true;
                 }
 
                 foreach (var (navKey, command) in PlainNavigationCommands)
@@ -112,23 +109,6 @@ internal sealed class ScrollableText : Editor
         }
     }
 
-    // Shift+navigation keys mapped to the TextView command that extends the selection.
-    private static readonly (Key Key, Command Command)[] ShiftSelectionCommands =
-    [
-        (Key.CursorLeft.WithShift,           Command.LeftExtend),
-        (Key.CursorRight.WithShift,          Command.RightExtend),
-        (Key.CursorUp.WithShift,             Command.UpExtend),
-        (Key.CursorDown.WithShift,           Command.DownExtend),
-        (Key.Home.WithShift,                 Command.LeftStartExtend),
-        (Key.End.WithShift,                  Command.RightEndExtend),
-        (Key.PageUp.WithShift,               Command.PageUpExtend),
-        (Key.PageDown.WithShift,             Command.PageDownExtend),
-        (Key.CursorLeft.WithCtrl.WithShift,  Command.WordLeftExtend),
-        (Key.CursorRight.WithCtrl.WithShift, Command.WordRightExtend),
-        (Key.Home.WithCtrl.WithShift,        Command.StartExtend),
-        (Key.End.WithCtrl.WithShift,         Command.EndExtend),
-    ];
-
     // Plain navigation keys mapped to the TextView command that moves the caret.
     private static readonly (Key Key, Command Command)[] PlainNavigationCommands =
     [
@@ -148,7 +128,7 @@ internal sealed class ScrollableText : Editor
 
     protected override bool OnMouseEvent(Mouse ev)
     {
-        if (IsContextMenuMouseEvent(ev))
+        if (TextViewInteractions.IsContextMenuMouseEvent(ev.Flags, ContextMenu?.MouseFlags))
         {
             ev.Handled = true;
             return true;
@@ -286,14 +266,6 @@ internal sealed class ScrollableText : Editor
             width += Math.Max(1, Glyphs.GetColumns(rune));
         return width;
     }
-
-    private bool IsContextMenuMouseEvent(Mouse ev) =>
-        ev.Flags == ContextMenu?.MouseFlags
-        || ev.Flags.HasFlag(MouseFlags.RightButtonPressed)
-        || ev.Flags.HasFlag(MouseFlags.RightButtonReleased)
-        || ev.Flags.HasFlag(MouseFlags.RightButtonClicked)
-        || ev.Flags.HasFlag(MouseFlags.RightButtonDoubleClicked)
-        || ev.Flags.HasFlag(MouseFlags.RightButtonTripleClicked);
 
     protected override bool OnDrawingContent(DrawContext? context)
     {

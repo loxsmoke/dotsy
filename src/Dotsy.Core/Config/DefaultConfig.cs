@@ -6,7 +6,7 @@ public static class DefaultConfig
     {
         Model = new ModelConfig
         {
-            Provider = "anthropic",
+            Provider = ProviderConfig.Anthropic,
             MaxOutputTokensPerRequest = 8192,
             Anthropic = new AnthropicConfig { Id = "", ApiKey = "" },
             OpenAi = new OpenAiConfig { Id = "", ApiKey = "", BaseUrl = "https://api.openai.com/v1" },

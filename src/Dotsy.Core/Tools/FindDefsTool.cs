@@ -24,7 +24,7 @@ public sealed class FindDefsTool : ITool
         var rawPath = input.GetStringPropertyOrEmpty("path");
         if (string.IsNullOrEmpty(rawPath)) return ".";
         // A glob isn't a real path; show it verbatim rather than resolving it against cwd.
-        return GlobMatcher.LooksLikeGlob(rawPath) ? rawPath : ReadTool.MakeRelative(rawPath, cwd);
+        return GlobMatcher.LooksLikeGlob(rawPath) ? rawPath : PathDisplay.MakeRelative(rawPath, cwd);
     }
 
     public string? FormatPanelResult(JsonElement input, string resultContent, string cwd)
@@ -111,7 +111,7 @@ public sealed class FindDefsTool : ITool
             return Task.FromResult(NotFound(rawPath, ctx.Cwd));
 
         if (sb.Length == 0)
-            return Task.FromResult(ToolResult.Ok($"No C# definitions found in: {ReadTool.MakeRelative(root, ctx.Cwd)}"));
+            return Task.FromResult(ToolResult.Ok($"No C# definitions found in: {PathDisplay.MakeRelative(root, ctx.Cwd)}"));
 
         if (fileCount >= MaxFiles)
             sb.AppendLine($"<truncated: only first {MaxFiles} files shown>");
@@ -121,7 +121,7 @@ public sealed class FindDefsTool : ITool
 
     private static ToolResult NotFound(string path, string cwd) =>
         ToolResult.Err(
-            $"No C# files found for: {ReadTool.MakeRelative(path, cwd)}\n" +
+            $"No C# files found for: {PathDisplay.MakeRelative(path, cwd)}\n" +
             "`path` accepts an existing .cs file, a directory to outline recursively, a glob such as " +
             "\"**/*Palette.cs\", or a bare file name to search for. To locate files first, use the Glob or Grep tools.");
 

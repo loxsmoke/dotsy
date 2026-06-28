@@ -77,6 +77,53 @@ public sealed class ResumeCommandTests
     }
 
     [TestMethod]
+    public void Complete_TopLevelShowsListAndSelectSession()
+    {
+        var items = new ResumeCommand().Complete(new CapturingHost(), "");
+
+        CollectionAssert.AreEqual(
+            new[] { "/resume list", "/resume select session " },
+            items.Select(i => i.Replacement).ToArray());
+    }
+
+    [TestMethod]
+    public void Complete_SelectSessionDrillsIntoDaysAndSessionIds()
+    {
+        var cwd = Path.Combine(_tmpDir, "work");
+        var sessionDir = Path.Combine(_tmpDir, "sessions");
+        Directory.CreateDirectory(cwd);
+        Directory.CreateDirectory(sessionDir);
+        WriteIndex(sessionDir, cwd, 3);
+
+        var previousConfig = TuiSessionContext.Config;
+        var previousCwd = TuiSessionContext.Cwd;
+        try
+        {
+            TuiSessionContext.Config = new DotsyConfig
+            {
+                Session = new SessionConfig { LogDir = sessionDir }
+            };
+            TuiSessionContext.Cwd = cwd;
+
+            var command = new ResumeCommand();
+            var days = command.Complete(new CapturingHost(), "select session ");
+            CollectionAssert.AreEqual(
+                new[] { "/resume select session 2026-06-24 " },
+                days.Select(i => i.Replacement).ToArray());
+
+            var sessions = command.Complete(new CapturingHost(), "select session 2026-06-24 ");
+            CollectionAssert.AreEqual(
+                new[] { "/resume 20260624.3", "/resume 20260624.2", "/resume 20260624.1" },
+                sessions.Select(i => i.Replacement).ToArray());
+        }
+        finally
+        {
+            TuiSessionContext.Config = previousConfig;
+            TuiSessionContext.Cwd = previousCwd;
+        }
+    }
+
+    [TestMethod]
     public void Execute_LoadsSessionAndRequestsHistoryReplay()
     {
         var cwd = Path.Combine(_tmpDir, "work");

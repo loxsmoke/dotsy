@@ -20,12 +20,12 @@ public sealed class ReadTool : ITool
     public bool IsCompletionSignal => false;
 
     public string FormatPanelArgument(JsonElement input, string cwd) =>
-        MakeRelative(input.GetStringPropertyOrEmpty("path"), cwd);
+        PathDisplay.MakeRelative(input.GetStringPropertyOrEmpty("path"), cwd);
 
     public string? FormatPanelResult(JsonElement input, string resultContent, string cwd)
     {
         if (string.IsNullOrEmpty(resultContent)) return null;
-        var path = MakeRelative(input.GetStringPropertyOrEmpty("path"), cwd);
+        var path = PathDisplay.MakeRelative(input.GetStringPropertyOrEmpty("path"), cwd);
         var lines = resultContent.Split('\n').Count(l =>
         {
             var t = l.TrimStart();
@@ -144,22 +144,6 @@ public sealed class ReadTool : ITool
     {
         var path = input.GetProperty("path").GetString() ?? "";
         return Path.IsPathRooted(path) ? path : Path.GetFullPath(Path.Combine(cwd, path));
-    }
-
-    internal static string MakeRelative(string path, string cwd)
-    {
-        if (string.IsNullOrEmpty(path)) return ".";
-        try
-        {
-            var abs = Path.IsPathRooted(path) ? path : Path.GetFullPath(Path.Combine(cwd, path));
-            var cwdFull = Path.GetFullPath(cwd);
-            if (abs.StartsWith(cwdFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-                return abs[(cwdFull.Length + 1)..];
-            if (abs.Equals(cwdFull, StringComparison.OrdinalIgnoreCase))
-                return ".";
-        }
-        catch { }
-        return path;
     }
 
     private static async Task<string?> TryGetDiffStatAsync(string path, CancellationToken ct)

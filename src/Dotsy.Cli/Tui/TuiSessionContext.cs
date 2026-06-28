@@ -48,4 +48,10 @@ public static class TuiSessionContext
     /// provider/config. Set by Program.cs; used by /model to report the live context window.
     /// </summary>
     public static Func<string, Task<ModelInfo>>? ModelInfoLookup { get; set; }
+
+    /// <summary>
+    /// Lists models for the currently selected provider/config. Set by Program.cs; used by
+    /// slash-command completion for /model.
+    /// </summary>
+    public static Func<CancellationToken, Task<IReadOnlyList<ModelInfo>>>? ModelListLookup { get; set; }
 }

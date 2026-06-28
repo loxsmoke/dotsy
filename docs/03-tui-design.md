@@ -31,7 +31,7 @@
 
 **Conversation/tools split**
 
-- The split is stored as `[tui].left-panel-width-percentage`; invalid values fall back to `70`. (The misspelled legacy key `left-poanel-width-percentage` is still accepted on read.)
+- The split is stored as `[tui].left-panel-width-percentage`; invalid values fall back to `70`.
 - `Alt+Left` / `Alt+Right` resize the split by 1 percentage point when focus is in the conversation, changed-files, or tools panel.
 - Resizing is clamped so each panel keeps at least 20 columns whenever the terminal is wide enough for both minimums plus the divider; otherwise the percentage is clamped to `1..99` and Terminal.Gui lays out the reduced panels.
 - After a resize, the conversation is rewrapped at the new width. A successful resize is persisted to the config file immediately and the status bar briefly shows `split NN%` (restored after ~3 s); if persistence fails, the status bar shows the config error.
@@ -55,7 +55,11 @@ Typing a printable character while a content panel has focus redirects focus to 
 
 ### 3.3 Slash Commands
 
-Slash commands are entered in the input bar and handled synchronously by the TUI before the text is added as a user turn. Unknown commands are rejected inline with `unknown command: /<name> (try /help)`. `Tab` completes command names, and after `/add` it completes paths relative to the current working directory.
+Slash commands are entered in the input bar and handled synchronously by the TUI before the text is added as a user turn. Unknown commands are rejected inline with `unknown command: /<name> (try /help)`.
+
+Typing `/` as the first character in the input opens the slash-command selection popup immediately, without requiring `Tab`. The user can keep typing to filter command names. `Esc` closes only the popup and returns focus to the input with the current text preserved, so normal typing can continue. When a command is highlighted, `Enter` inserts that command into the input field; it does not execute the command until the user submits the input field normally. If the inserted command accepts arguments, the replacement should include a trailing space so argument selection can begin naturally.
+
+Pressing `Space` after a valid slash command opens that command's parameter-selection popup when the command has selectable parameters. Parameter selection uses the same popup interaction as command selection: typing filters available values, `Esc` dismisses and preserves the typed input, and `Enter` inserts the highlighted parameter value into the input field. Commands without selectable parameters do not open a parameter popup after `Space`.
 
 | Command | Arguments | Effect |
 |---------|-----------|--------|
@@ -63,7 +67,7 @@ Slash commands are entered in the input bar and handled synchronously by the TUI
 | `/clear` | none | Clear the visible conversation panel, tool log, and changed-files panel for the current TUI view. |
 | `/tools` | none | List all tool definitions currently registered and sent to the LLM, including descriptions. |
 | `/compact` | none | Run manual conversation compaction for the current session. If the agent is busy, asks the user to cancel the current turn first. |
-| `/verbose` | none | Toggle inline verbose mode for tool calls and tool results. |
+| `/verbose` | none | Toggle inline verbose mode for tool calls and tool results; running it again turns verbose mode off. |
 | `/config` | none | Show the active config file path and current configuration values grouped by section. |
 | `/config list` | none | List every settable configuration key, type, and description. |
 | `/config <key> <value>` | config key and value | Update a config value via `ConfigEditor.Set`. Model-setting changes reload the provider immediately when idle, or after the current turn completes when busy. |
@@ -71,6 +75,7 @@ Slash commands are entered in the input bar and handled synchronously by the TUI
 | `/model <id>` | model ID | Switch the in-memory model ID for the active session and update the status bar. |
 | `/resume` | none | Resume the most recent saved session for the current working directory. |
 | `/resume <id>` | session ID | Resume a specific saved session ID. |
+| `/resume list` | none | List the five most recent saved sessions for the current working directory. |
 | `/sec` | none | Show a security summary of the tool permissions currently in effect. |
 | `/self` | none | Ask the agent to summarize the current Dotsy runtime, configuration, environment, and command usage from a generated self-context prompt. |
 | `/self <question>` | question text | Ask a question about the current Dotsy runtime or usage with the generated self-context prompt injected as context. |
@@ -81,7 +86,17 @@ Slash commands are entered in the input bar and handled synchronously by the TUI
 | `/exit` | none | Quit the TUI. |
 | `/quit` | none | Alias for `/exit`. |
 
-**Tab completion popup:** a framed `ListView` shown directly above the input bar. It appears live while typing a `/` command (or is forced open with `Tab`), sizes itself to the matches (width 20–60 columns, height 3–9 rows), and shows up to 12 path completions for `/add`. `↑ / ↓` navigates, `Enter` / `Tab` applies the selected completion, `Esc` dismisses.
+**Slash-command popup:** a framed `ListView` shown directly above the input bar. It appears live when the input begins with `/` (or is forced open with `Tab`), sizes itself to the matches (width 20–60 columns, height 3–9 rows), and shows command names until a complete command plus trailing space switches it into parameter-selection mode. `↑ / ↓` navigates, `Enter` applies the selected command or parameter to the input field, `Tab` also applies the selected item when the popup is open, and `Esc` dismisses the popup without clearing the input.
+
+**Selectable command parameters:**
+
+| Command | Selectable parameter values |
+|---------|-----------------------------|
+| `/add <path>` | Files and directories relative to the current working directory; directories insert with a trailing path separator so selection can continue. |
+| `/config <key> <value>` | First-level choices are `list` and config sections from `ConfigEditor.ParamList`. Selecting `list` inserts `/config list`. Selecting a section replaces the popup contents with keys in that section; selecting a key inserts `/config <section.key> ` and leaves the value typable. If the selected key is boolean or declares a finite set of valid values, pressing `Space` after `/config <section.key>` opens a value-selection popup with those values. Free-form values remain typable for unconstrained keys. |
+| `/model <id>` | Model IDs loaded from the currently selected provider. The first lookup for a provider may be asynchronous; results are cached per provider for the duration of the TUI session and reused until the session exits. The current configured model is included even if provider listing is unavailable. |
+| `/resume <id>` | First-level choices are `list` and `select session`. Selecting `list` inserts `/resume list`. Selecting `select session` replaces the popup contents with days derived from the current working directory's saved sessions list. Selecting a day replaces the popup contents with that day's session IDs in descending updated-time order; selecting a session ID inserts `/resume <id>`. |
+| `/skill <name>` | Discovered skill names from the active skill search path. |
 
 #### 3.3.1 `/self` Context Prompt
 
@@ -216,14 +231,14 @@ While the agent is running, submitting is rejected with `[Agent is busy — pres
 
 **Tool approval (overlay)**
 
-When the agent loop yields a `PermissionRequired` event, a `FrameView` (` Tool approval `, height 6) appears above the input bar:
+When the agent loop yields a `PermissionRequired` event, a `FrameView` (` Tool approval `, height 6) appears above the input bar. The buttons are laid out in one row when they fit:
 
 ```
 ┌─ Tool approval ─────────────────────────────────────────────────────┐
 │   Shell  rm -rf build/                                              │
 │                                                                     │
-│  [Allow once]   [Always allow]   [Deny]                             │
-│  [Allow for project]                                                │
+│  [Allow once]   [Always allow]   [Deny]   [Allow for project]       │
+│                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 

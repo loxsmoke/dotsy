@@ -1,4 +1,3 @@
-using Microsoft.CodeAnalysis.CSharp.Syntax;
 using System.Reflection;
 using Tomlyn;
 using Tomlyn.Model;
@@ -51,12 +50,12 @@ public static class ConfigLoader
             ApplyScalars(config.Model, model);
             // Non-secret scalars (model id, base urls, …) load from any config; api keys
             // only from the global config (allowSecrets) so project configs never carry them.
-            ApplyModelSubSection(config.Model.Anthropic, model, "anthropic", allowSecrets);
-            ApplyModelSubSection(config.Model.OpenAi, model, "openai", allowSecrets);
-            ApplyModelSubSection(config.Model.Azure, model, "azure", allowSecrets);
-            ApplyModelSubSection(config.Model.Ollama, model, "ollama", allowSecrets);
-            ApplyModelSubSection(config.Model.Compatible, model, "compatible", allowSecrets);
-            ApplyModelSubSection(config.Model.Gemini, model, "gemini", allowSecrets);
+            ApplyModelSubSection(config.Model.Anthropic, model, ProviderConfig.Anthropic, allowSecrets);
+            ApplyModelSubSection(config.Model.OpenAi, model, ProviderConfig.OpenAi, allowSecrets);
+            ApplyModelSubSection(config.Model.Azure, model, ProviderConfig.Azure, allowSecrets);
+            ApplyModelSubSection(config.Model.Ollama, model, ProviderConfig.Ollama, allowSecrets);
+            ApplyModelSubSection(config.Model.Compatible, model, ProviderConfig.Compatible, allowSecrets);
+            ApplyModelSubSection(config.Model.Gemini, model, ProviderConfig.Gemini, allowSecrets);
         }
 
         if (table.TryGetValue("agent", out var agentObj) && agentObj is TomlTable agent)
@@ -118,9 +117,8 @@ public static class ConfigLoader
 
         foreach (var prop in props)
         {
-            var tomlKey = ToConfigKey(prop.Name);
-            if (!table.TryGetValue(tomlKey, out var raw)
-                && (LegacyConfigKey(prop.Name) is not { } legacyKey || !table.TryGetValue(legacyKey, out raw)))
+            var tomlKey = ToSnakeCase(prop.Name);
+            if (!table.TryGetValue(tomlKey, out var raw))
                 continue;
 
             var converted = ConvertValue(raw, prop.PropertyType);
@@ -180,10 +178,10 @@ public static class ConfigLoader
         ApplyEnvSection("TRAJECTORY", config.Trajectory);
 
         // API keys can always come from env vars
-        TrySetFromEnv(config.Model.Anthropic, nameof(AnthropicConfig.ApiKey), "ANTHROPIC_API_KEY");
-        TrySetFromEnv(config.Model.OpenAi, nameof(OpenAiConfig.ApiKey), "OPENAI_API_KEY");
-        TrySetFromEnv(config.Model.Azure, nameof(AzureConfig.ApiKey), "AZURE_OPENAI_API_KEY");
-        TrySetFromEnv(config.Model.Gemini, nameof(GeminiConfig.ApiKey), "GEMINI_API_KEY");
+        TrySetFromEnv(config.Model.Anthropic, nameof(AnthropicConfig.ApiKey), ProviderConfig.AnthropicEnvVar);
+        TrySetFromEnv(config.Model.OpenAi, nameof(OpenAiConfig.ApiKey), ProviderConfig.OpenAiEnvVar);
+        TrySetFromEnv(config.Model.Azure, nameof(AzureConfig.ApiKey), ProviderConfig.AzureEnvVar);
+        TrySetFromEnv(config.Model.Gemini, nameof(GeminiConfig.ApiKey), ProviderConfig.GeminiEnvVar);
     }
 
     private static void ApplyEnvSection(string section, object target)
@@ -205,16 +203,8 @@ public static class ConfigLoader
         }
     }
 
-    public static string GetProviderDisplayName(string providerKey) =>
-        providerKey.ToLowerInvariant() switch
-        {
-            "anthropic"    => "Anthropic",
-            "openai"       => "OpenAI",
-            "ollama"       => "Ollama",
-            "azure_openai" => "Azure OpenAI",
-            "gemini"       => "Gemini",
-            _              => providerKey
-        };
+    public const string NoKeyRequired = "no key required";
+    public const string KeyNotSpecified = "not specified";
 
     /// <summary>
     /// Returns a human-readable description of where the API key for the active provider
@@ -222,24 +212,16 @@ public static class ConfigLoader
     /// </summary>
     public static string GetApiKeySource(DotsyConfig config)
     {
-        return config.Model.Provider.ToLowerInvariant() switch
-        {
-            "anthropic"    => KeySource("ANTHROPIC_API_KEY",    config.Model.Anthropic.ApiKey),
-            "openai"       => KeySource("OPENAI_API_KEY",       config.Model.OpenAi.ApiKey),
-            "azure_openai" => KeySource("AZURE_OPENAI_API_KEY", config.Model.Azure.ApiKey),
-            "gemini"       => KeySource("GEMINI_API_KEY", config.Model.Gemini.ApiKey),
-            "ollama"       => NoKeyRequired,
-            _              => KeySource(null, ""),
-        };
-    }
-    public const string NoKeyRequired = "no key required";
-    public const string KeyNotSpecified = "not specified";
+        var provider = config.Model.Provider.ToLowerInvariant();
 
-    private static string KeySource(string? envVar, string configuredValue)
-    {
+        if (ProviderConfig.Ollama == provider) return NoKeyRequired;
+
+        var envVar = ProviderConfig.ProviderEnvVar(provider);
+
         if (envVar is not null && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(envVar)))
             return $"env {envVar}";
-        if (!string.IsNullOrEmpty(configuredValue))
+
+        if (!string.IsNullOrEmpty(config.Model.ActiveModel.ApiKey))
             return GlobalConfigPath;
         return KeyNotSpecified;
     }
@@ -286,7 +268,7 @@ public static class ConfigLoader
         var envVar = EnvVarForKey(key);
         if (HasEnv(envVar))
             return $"env:{envVar}";
-        if (secret && KnownSecretEnvVar(key) is { } secretEnv && HasEnv(secretEnv))
+        if (secret && GetKnownSecretEnvVar(key) is { } secretEnv && HasEnv(secretEnv))
             return $"env:{secretEnv}";
 
         // Project config is applied after global, but never carries secrets.
@@ -309,15 +291,25 @@ public static class ConfigLoader
         return section.Length == 0 ? $"DOTSY_{prop}" : $"DOTSY_{section}_{prop}";
     }
 
-    private static string? KnownSecretEnvVar(string key) => key.ToLowerInvariant() switch
+    public static string? GetKnownSecretEnvVar(string key)
     {
-        "model.anthropic.api_key"  => "ANTHROPIC_API_KEY",
-        "model.openai.api_key"     => "OPENAI_API_KEY",
-        "model.azure.api_key"      => "AZURE_OPENAI_API_KEY",
-        "model.compatible.api_key" => "OPENAI_API_KEY",
-        "model.gemini.api_key"     => "GEMINI_API_KEY",
-        _ => null
-    };
+        // Extract the provider from the key, e.g. "model.anthropic.api_key" => "anthropic"
+        // Check if this is "api_key"
+        // Then map the provider to its known environment variable name.
+        return key.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) switch
+        {
+            ["model", var provider, "api_key"] => ProviderConfig.ProviderEnvVar(provider),
+            _ => null
+        };
+    }
+
+    public static bool IsSecretKey(string key) =>
+        key.EndsWith(".api_key", StringComparison.OrdinalIgnoreCase)
+        || key.Contains("secret", StringComparison.OrdinalIgnoreCase)
+        || key.Contains("auth_token", StringComparison.OrdinalIgnoreCase)
+        || key.Contains("access_token", StringComparison.OrdinalIgnoreCase)
+        || key.Contains("bearer", StringComparison.OrdinalIgnoreCase)
+        || key.Contains("password", StringComparison.OrdinalIgnoreCase);
 
     // Flattens a TOML file into the set of dotted leaf keys it sets (e.g. "model.anthropic.api_key").
     private static HashSet<string> FlattenTomlKeys(string path)
@@ -332,10 +324,6 @@ public static class ConfigLoader
                 FlattenTable(table, "", keys);
         }
         catch { }
-
-        // The TUI width key shipped misspelled; treat the legacy form as the canonical key.
-        if (keys.Contains("tui.left-poanel-width-percentage"))
-            keys.Add("tui.left-panel-width-percentage");
         return keys;
     }
 
@@ -371,20 +359,6 @@ public static class ConfigLoader
         }
         return sb.ToString();
     }
-
-    private static string ToConfigKey(string name) =>
-        name == nameof(TuiConfig.LeftPanelWidthPercentage)
-            ? "left-panel-width-percentage"
-            : ToSnakeCase(name);
-
-    // Keys shipped under a different spelling in earlier builds; still accepted on read so saved
-    // configs keep working.
-    private static string? LegacyConfigKey(string name) => name switch
-    {
-        nameof(TuiConfig.LeftPanelWidthPercentage) => "left-poanel-width-percentage",
-        nameof(CompactionConfig.ToolPairSummarize) => "tool_pair_summarise", // British spelling
-        _ => null
-    };
 
     private static List<McpServerConfig> ParseMcpServers(object serversObj)
     {
@@ -423,21 +397,15 @@ public static class ConfigLoader
 
     private static bool TryParseTransport(string? raw, out McpTransport transport)
     {
-        transport = McpTransport.Stdio;
-        if (string.IsNullOrWhiteSpace(raw))
-            return false;
-
-        return raw.Trim().ToLowerInvariant() switch
+        McpTransport? tr = raw?.Trim().ToLowerInvariant() switch
         {
-            "stdio" => SetTransport(McpTransport.Stdio, out transport),
-            "http" => SetTransport(McpTransport.Http, out transport),
-            _ => false
+            "stdio" => McpTransport.Stdio,
+            "http" => McpTransport.Http,
+            _ => null
         };
-    }
 
-    private static bool SetTransport(McpTransport value, out McpTransport transport)
-    {
-        transport = value;
-        return true;
+        transport = tr ?? McpTransport.Stdio;
+
+        return tr.HasValue;
     }
 }

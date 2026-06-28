@@ -54,7 +54,7 @@ public sealed class TrajectoryRecorder
                 Cwd = cwd,
                 GitBranch = TryGetGitBranch(cwd),
                 GitCommit = TryGetGitCommit(cwd),
-                Model = config.Model.ActiveModelId,
+                Model = config.Model.ActiveModel.Id,
                 Provider = config.Model.Provider,
                 StartedAt = startedAt,
                 EndedAt = endedAt,
@@ -86,6 +86,7 @@ public sealed class TrajectoryRecorder
     private static string Outcome(EndReason reason) => reason switch
     {
         EndReason.TaskComplete => "completed",
+        EndReason.ResponseComplete => "completed",
         EndReason.TurnLimitReached => "turn_limit",
         EndReason.NudgeLimitReached => "nudge_limit",
         EndReason.ContextTooSmall => "context_too_small",

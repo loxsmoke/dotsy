@@ -286,7 +286,7 @@ public partial class AgentWindow
         catch { return lines; }
 
         var path = input.GetStringPropertyOrEmpty("path");
-        LabelValue("Path", MakeRelCwd(path, cwd), Palette.Normal);
+        LabelValue("Path", PathDisplay.MakeRelative(path, cwd), Palette.Normal);
 
         if (toolName == EditTool.ToolName)
         {
@@ -309,20 +309,5 @@ public partial class AgentWindow
         return lines;
     }
 
-    private static string MakeRelCwd(string path, string cwd)
-    {
-        if (string.IsNullOrEmpty(path)) return ".";
-        try
-        {
-            var abs = Path.IsPathRooted(path) ? path : Path.GetFullPath(Path.Combine(cwd, path));
-            var cwdFull = Path.GetFullPath(cwd);
-            if (abs.StartsWith(cwdFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-                return abs[(cwdFull.Length + 1)..];
-            if (abs.Equals(cwdFull, StringComparison.OrdinalIgnoreCase))
-                return ".";
-        }
-        catch { }
-        return path;
-    }
     #endregion
 }

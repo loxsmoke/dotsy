@@ -52,7 +52,7 @@ max_steps            = 0               # currently reserved; 0 = unlimited
 max_turns            = 1000            # hard ceiling; 0 = unlimited
 parallel_tools       = true            # execute eligible tools concurrently
 auto_commit          = false           # git auto-commit after file edits
-nudge_limit          = 3               # max consecutive text-only turns before stopping
+nudge_limit          = 3               # max consecutive non-terminal text-only turns before stopping
 repeat_window_turns  = 8               # rolling window for repeated tool-call detection
 repeat_threshold     = 3               # 0 disables repeated tool-call nudging
 auto_lint            = false           # run dotnet build after writes and reflect on errors

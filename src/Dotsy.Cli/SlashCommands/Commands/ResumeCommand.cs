@@ -88,7 +88,7 @@ internal sealed class ResumeCommand : ISlashCommand
         // continuation posts back to the UI loop), so blocking on it here would deadlock the UI
         // thread — run it off-thread and fold the result into the restored budget when it resolves.
         var lookup = TuiSessionContext.ModelInfoLookup;
-        var activeModelId = config.Model.ActiveModelId;
+        var activeModelId = config.Model.ActiveModel.Id;
         _ = Task.Run(async () =>
         {
             ModelInfo? info = null;
@@ -111,9 +111,76 @@ internal sealed class ResumeCommand : ISlashCommand
     }
 
     public IReadOnlyList<CompletionItem> Complete(ISlashCommandHost host, string partial) =>
-        "list".StartsWith(partial.TrimStart(), StringComparison.OrdinalIgnoreCase)
-            ? [new CompletionItem("list", "list")]
-            : [];
+        BuildCompletions(partial);
+
+    private static IReadOnlyList<CompletionItem> BuildCompletions(string partial)
+    {
+        var text = partial.TrimStart();
+        if (string.IsNullOrEmpty(text))
+        {
+            return
+            [
+                new("list", "/resume list"),
+                new("select session", "/resume select session "),
+            ];
+        }
+
+        if ("list".StartsWith(text, StringComparison.OrdinalIgnoreCase))
+            return [new CompletionItem("list", "/resume list")];
+
+        const string selectSession = "select session";
+        if (!selectSession.StartsWith(text, StringComparison.OrdinalIgnoreCase) &&
+            !text.StartsWith(selectSession + " ", StringComparison.OrdinalIgnoreCase))
+            return [];
+
+        if (!text.StartsWith(selectSession + " ", StringComparison.OrdinalIgnoreCase))
+            return [new CompletionItem("select session", "/resume select session ")];
+
+        var rest = text[selectSession.Length..].TrimStart();
+        var sessions = GetSessionsForCurrentCwd();
+        if (string.IsNullOrEmpty(rest))
+            return DayCompletions(sessions, "");
+
+        var trailingSpace = text.EndsWith(' ');
+        var parts = rest.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0)
+            return DayCompletions(sessions, "");
+
+        var day = parts[0];
+        if (!trailingSpace)
+            return DayCompletions(sessions, day);
+
+        return sessions
+            .Where(s => SessionDay(s).Equals(day, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(s => s.UpdatedAt)
+            .Select(s => new CompletionItem(SessionDisplay(s), "/resume " + s.SessionId))
+            .ToList();
+    }
+
+    private static IReadOnlyList<Dotsy.Core.Session.Data.SessionIndexEntry> GetSessionsForCurrentCwd()
+    {
+        var sessionDir = SessionStore.ResolveDir(TuiSessionContext.Config.Session.LogDir, TuiSessionContext.Cwd);
+        return SessionStore.GetAllSessions(sessionDir, TuiSessionContext.Cwd);
+    }
+
+    private static IReadOnlyList<CompletionItem> DayCompletions(
+        IReadOnlyList<Dotsy.Core.Session.Data.SessionIndexEntry> sessions,
+        string prefix) =>
+        sessions
+            .Select(SessionDay)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(day => day.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(day => day, StringComparer.OrdinalIgnoreCase)
+            .Select(day => new CompletionItem(day, "/resume select session " + day + " "))
+            .ToList();
+
+    private static string SessionDay(Dotsy.Core.Session.Data.SessionIndexEntry session) =>
+        session.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd");
+
+    private static string SessionDisplay(Dotsy.Core.Session.Data.SessionIndexEntry session) =>
+        string.IsNullOrWhiteSpace(session.Title)
+            ? session.SessionId
+            : $"{session.SessionId}  {SingleLine(session.Title)}";
 
     private static void ListRecentSessions(ISlashCommandHost host, string sessionDir, string cwd)
     {

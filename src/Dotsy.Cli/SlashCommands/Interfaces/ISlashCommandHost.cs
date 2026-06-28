@@ -68,6 +68,9 @@ internal interface ISlashCommandHost
     #region Prompt pipeline
     void SubmitUserPrompt(string displayText, string promptText);
     void AddPromptHistory(string entry);
+
+    /// <summary>Rebuild the currently visible slash-command completion popup.</summary>
+    void RefreshCompletions() { }
     #endregion
 
     #region Turn lifecycle

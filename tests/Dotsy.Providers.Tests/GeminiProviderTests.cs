@@ -1,3 +1,4 @@
+using Dotsy.Core.Config;
 using Dotsy.Core.Providers;
 using Dotsy.Providers.Gemini;
 using Dotsy.Providers.Tests.Helpers;
@@ -19,7 +20,7 @@ public sealed class GeminiProviderTests
     public void Name_IsGemini()
     {
         var provider = new GeminiProvider("test-key", http: new HttpClient(new FakeSseHandler("")));
-        Assert.AreEqual("gemini", provider.Name);
+        Assert.AreEqual(ProviderConfig.Gemini, provider.Name);
     }
 
     [TestMethod]

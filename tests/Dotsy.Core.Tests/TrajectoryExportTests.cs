@@ -16,7 +16,7 @@ public sealed class TrajectoryExportTests
     private static DotsyConfig MakeIntegrationConfig(string tmp, bool trajectoryEnabled) =>
         new()
         {
-            Model = new ModelConfig { Provider = "fake", Anthropic = new() { Id = "test-model" }, MaxOutputTokensPerRequest = 1024 },
+            Model = new ModelConfig { Provider = ProviderConfig.Anthropic, Anthropic = new() { Id = "test-model" }, MaxOutputTokensPerRequest = 1024 },
             Agent = new AgentConfig
             {
                 MaxTurns = 1,
@@ -249,7 +249,7 @@ public sealed class TrajectoryExportTests
 
             var ended = await RunLoopAndExport(config, tmp);
 
-            Assert.AreEqual(EndReason.TurnLimitReached, ended.Reason);
+            Assert.AreEqual(EndReason.ResponseComplete, ended.Reason);
             var trajectoryDir = config.Trajectory.Dir;
             var jsonFiles = Directory.GetFiles(trajectoryDir, "*.json");
             Assert.AreEqual(1, jsonFiles.Length);
@@ -258,7 +258,7 @@ public sealed class TrajectoryExportTests
 
             using var json = JsonDocument.Parse(await File.ReadAllTextAsync(jsonFiles[0]));
             Assert.AreEqual("hello integration", json.RootElement.GetProperty("question").GetString());
-            Assert.AreEqual("fake", json.RootElement.GetProperty("metadata").GetProperty("provider").GetString());
+            Assert.AreEqual(ProviderConfig.Anthropic, json.RootElement.GetProperty("metadata").GetProperty("provider").GetString());
             Assert.AreEqual(11, json.RootElement.GetProperty("metadata").GetProperty("token_usage").GetProperty("input_tokens").GetInt32());
         }
         finally

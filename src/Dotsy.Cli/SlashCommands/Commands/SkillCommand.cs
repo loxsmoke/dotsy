@@ -64,4 +64,16 @@ internal sealed class SkillCommand : ISlashCommand
             host.Write("\n", Palette.Normal);
         }
     }
+
+    public IReadOnlyList<CompletionItem> Complete(ISlashCommandHost host, string partial)
+    {
+        var prefix = partial.TrimStart();
+        var disc = new SkillDiscovery(TuiSessionContext.Config.Skills, TuiSessionContext.Cwd);
+        return disc.FindAll()
+            .Select(s => s.Name)
+            .Where(name => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .Select(name => new CompletionItem(name, "/skill " + name))
+            .ToList();
+    }
 }

@@ -16,12 +16,38 @@ namespace Dotsy.Core.Loop;
 
 public sealed class AgentLoop
 {
+    /// <summary>
+    /// The provider used to generate responses and stream events. This is typically an LLM provider.
+    /// </summary>
     private readonly IProvider provider;
+    /// <summary>
+    /// The registry of available tools that the agent can invoke. Tools are registered with their names and metadata.
+    /// </summary>
     private readonly ToolRegistry toolRegistry;
+    /// <summary>
+    /// The permission store that tracks which tools and actions are allowed or denied for the agent. 
+    /// It is used to enforce safety and security policies.
+    /// </summary>
     private readonly PermissionStore permissions;
+    /// <summary>
+    /// The configuration settings for the agent loop, including parameters for compaction, 
+    /// skill discovery, and other behaviors.
+    /// </summary>
     private readonly DotsyConfig config;
+    /// <summary>
+    /// Optional base system prompt that can be used to initialize the agent's context. This prompt can provide
+    /// initial instructions or context for the agent's behavior.
+    /// </summary>
     private readonly string? baseSystemPrompt;
+    /// <summary>
+    /// Optional session store that records the agent's interactions, tool calls, and other events 
+    /// for auditing or debugging purposes.
+    /// </summary>
     private readonly SessionStore? sessionStore;
+    /// <summary>
+    /// Optional trajectory recorder that captures the sequence of events and decisions 
+    /// made by the agent during its loop.
+    /// </summary>
     private readonly TrajectoryRecorder? trajectoryRecorder;
 
     public Func<ITool, string, CancellationToken, Task<PermissionDecision>>? PermissionPrompter { get; set; }
@@ -44,14 +70,12 @@ public sealed class AgentLoop
         trajectoryRecorder = trajectory;
     }
 
-    private static string ProviderDisplayName(string name) =>
-        ConfigLoader.GetProviderDisplayName(name);
-
     public async IAsyncEnumerable<LoopEvent> RunAsync(
         LoopContext ctx,
-        string cwd,
+        string workingDirectory,
         [EnumeratorCancellation] CancellationToken ct)
     {
+        var cwd = workingDirectory;
         int turn = 0;
         int nudgeCount = 0;
         var budget = ctx.TokenBudget;
@@ -63,27 +87,11 @@ public sealed class AgentLoop
         int toolEventIndex = 0;
         var retriedContextLengthError = false;
 
-        // Records the reason the loop terminated into the session log, then returns the event to
-        // yield. Routing every terminal LoopEnded through here keeps the JSONL diagnosable (e.g.
-        // telling a clean Done from a nudge-limit bail-out, which both render as "idle" in the TUI).
-        LoopEnded End(EndReason reason, string? message = null)
-        {
-            sessionStore?.Append(new SessionRecord
-            {
-                Type = SessionRecordType.End,
-                Cwd = cwd,
-                Message = message is null
-                    ? new { reason = reason.ToString() }
-                    : new { reason = reason.ToString(), message }
-            });
-            return new LoopEnded(reason, message);
-        }
-
         while (!ct.IsCancellationRequested)
         {
             if (config.Agent.MaxTurns > 0 && turn >= config.Agent.MaxTurns)
             {
-                yield return End(EndReason.TurnLimitReached);
+                yield return End(cwd, EndReason.TurnLimitReached);
                 yield break;
             }
 
@@ -104,7 +112,7 @@ public sealed class AgentLoop
             // Check token budget
             if (budget.ContextWindow > 0 && budget.UsedTokens > budget.ContextWindow - budget.ReserveTokens)
             {
-                yield return End(EndReason.ContextTooSmall);
+                yield return End(cwd, EndReason.ContextTooSmall);
                 yield break;
             }
 
@@ -150,88 +158,19 @@ public sealed class AgentLoop
                     }
                 }
 
-                yield return End(EndReason.ContextTooSmall, ctxError.Message);
+                yield return End(cwd, EndReason.ContextTooSmall, ctxError.Message);
                 yield break;
             }
 
             trajectoryRecorder?.CaptureInitialRequest(request!);
 
-            // --- Stream response ---
-            var textBuilder = new StringBuilder();
-            var thinkingBuilder = new StringBuilder();
-            var toolCalls = new List<(string Id, string Name, string Args)>();
-            var pendingToolIndex = new Dictionary<string, int>(); // id -> LoopEvent index
-            bool hadError = false;
-            Exception? contextLengthError = null;
-            int lastInputTokens = 0, lastOutputTokens = 0, lastCacheReadTokens = 0, lastCacheWriteTokens = 0;
+            var response = new TurnResponse(toolEventIndex, budget);
+            await foreach (var ev in StreamResponseAsync(request!, ctx, cwd, response, ct))
+                yield return ev;
+            toolEventIndex = response.NextToolEventIndex;
+            budget = response.Budget;
 
-            await foreach (var provEv in provider.StreamAsync(request!, ct))
-            {
-                switch (provEv)
-                {
-                    case TextDelta td:
-                        textBuilder.Append(td.Text);
-                        yield return new TextChunk(td.Text);
-                        break;
-
-                    case ThinkingDelta thk:
-                        thinkingBuilder.Append(thk.Text);
-                        yield return new ThinkingChunk(thk.Text);
-                        break;
-
-                    case ToolCallDelta tc:
-                        toolCalls.Add((tc.Id, tc.Name, tc.ArgumentsJson));
-                        yield return new ToolStarted(toolEventIndex, tc.Name, tc.ArgumentsJson);
-                        pendingToolIndex[tc.Id] = toolEventIndex++;
-                        break;
-
-                    case UsageUpdate uu:
-                        budget = budget.WithUsed(uu.InputTokens + uu.OutputTokens);
-                        ctx.TokenBudget = budget;
-                        trajectoryRecorder?.RecordUsage(
-                            uu.InputTokens,
-                            uu.OutputTokens,
-                            uu.CacheReadTokens,
-                            uu.CacheWriteTokens);
-                        lastInputTokens = uu.InputTokens;
-                        lastOutputTokens = uu.OutputTokens;
-                        lastCacheReadTokens = uu.CacheReadTokens;
-                        lastCacheWriteTokens = uu.CacheWriteTokens;
-                        yield return new TokenUsageUpdated(
-                            uu.InputTokens,
-                            uu.OutputTokens,
-                            uu.CacheReadTokens,
-                            uu.CacheWriteTokens);
-                        break;
-
-                    case StreamEnd se:
-                        break;
-
-                     case StreamError serr:
-                         if (IsContextLengthError(serr.Ex))
-                         {
-                             contextLengthError = serr.Ex;
-                         }
-                         else if (serr.Ex is ProviderException { Error: ModelUnknownError mue })
-                         {
-                             var models = await provider.GetModelsAsync(ct);
-                             var modelList = string.Join("\n", models.Select(m => $"- {m.Id}"));
-                             yield return End(EndReason.Error, 
-                                 $"Model unknown: {mue.Message}\n\nAvailable models for {ProviderDisplayName(provider.Name)}:\n{modelList}");
-                         }
-                         else
-                         {
-                             yield return End(EndReason.Error,
-                                 $"Error while invoking {ProviderDisplayName(provider.Name)} API\n{serr.Ex.Message}");
-                         }
-                         hadError = true;
-                         break;
-                }
-
-                if (hadError) break;
-            }
-
-            if (contextLengthError is not null)
+            if (response.ContextLengthError is not null)
             {
                 if (config.Compaction.Enabled && !retriedContextLengthError)
                 {
@@ -250,82 +189,38 @@ public sealed class AgentLoop
                     }
                 }
 
-                yield return End(EndReason.ContextTooSmall, contextLengthError.Message);
+                yield return End(cwd, EndReason.ContextTooSmall, response.ContextLengthError.Message);
                 yield break;
             }
 
-            if (hadError)
+            if (response.HadError)
                 yield break;
 
             retriedContextLengthError = false;
 
-            // Build assistant message
-            var assistantBlocks = new List<ContentBlock>();
-            if (textBuilder.Length > 0)
-                assistantBlocks.Add(new TextBlock(textBuilder.ToString()));
-            if (thinkingBuilder.Length > 0)
-                assistantBlocks.Add(new ThinkingBlock(thinkingBuilder.ToString()));
-            foreach (var (id, name, args) in toolCalls)
-            {
-                var argsJson = TryParseArgs(args);
-                assistantBlocks.Add(new ToolUseBlock(id, name, argsJson));
-            }
-            ctx.Messages.Add(new AssistantMessage(assistantBlocks));
+            AppendAssistantTurn(ctx, cwd, response, request!);
+            var textBuilder = response.Text;
+            var toolCalls = response.ToolCalls;
+            var stopReason = response.StopReason;
 
-            // Log assistant turn
-            if (sessionStore is not null && (textBuilder.Length > 0 || toolCalls.Count > 0))
-            {
-                object messageObj;
-                if (toolCalls.Count > 0)
-                {
-                    var contentParts = new List<object>();
-                    if (textBuilder.Length > 0)
-                        contentParts.Add(new { type = "text", text = textBuilder.ToString() });
-                    foreach (var (tcId, tcName, tcArgs) in toolCalls)
-                        contentParts.Add(new { type = "tool_use", id = tcId, name = tcName, input = tcArgs });
-                    messageObj = new { content = contentParts };
-                }
-                else
-                {
-                    messageObj = new { content = textBuilder.ToString() };
-                }
-                sessionStore.Append(new SessionRecord
-                {
-                    Type = SessionRecordType.Assistant,
-                    Cwd = cwd,
-                    Message = messageObj,
-                    Usage = lastInputTokens > 0 || lastOutputTokens > 0
-                        ? new SessionUsage
-                        {
-                            InputTokens = lastInputTokens,
-                            OutputTokens = lastOutputTokens,
-                            CacheReadTokens = lastCacheReadTokens,
-                            CacheWriteTokens = lastCacheWriteTokens,
-                            ContextWindowTokens = budget.ContextWindow,
-                            MaxOutputTokens = request!.MaxTokens,
-                            ReserveTokens = budget.ReserveTokens,
-                            UsedTokens = budget.UsedTokens
-                        }
-                        : null
-                });
-            }
-
-            // Nudge tracking — tool use resets nudge; turns with no tool calls count toward the limit
+            // Nudge tracking — tool use resets nudge. A normal text-only EndTurn is a completed
+            // response, not a request to invoke the model again.
             if (toolCalls.Count > 0)
             {
                 nudgeCount = 0;
             }
-            else
+            else if (stopReason is not (StopReason.EndTurn or StopReason.StopSequence))
             {
                 nudgeCount++;
                 if (config.Agent.NudgeLimit > 0 && nudgeCount >= config.Agent.NudgeLimit)
                 {
-                    yield return End(EndReason.NudgeLimitReached);
+                    yield return End(cwd, EndReason.NudgeLimitReached);
                     yield break;
                 }
             }
 
             // --- Execute tool calls ---
+            // Tool-loop state remains local to this run; helper methods handle the individual paths.
             bool anyWriteTools = false;
             bool signalCompletion = false;
             ExecuteToolsResult? execResult = null;
@@ -333,118 +228,39 @@ public sealed class AgentLoop
             if (toolCalls.Count > 0)
             {
                 // Detect exact duplicate tool calls from the previous turn (loop trap)
-                var currentSigList = toolCalls.Select(tc => $"{tc.Name}:{tc.Args.Trim()}").ToList();
-                var currentSigs = new HashSet<string>(currentSigList, StringComparer.Ordinal);
-                bool isDuplicate = prevToolSigs is not null
-                    && currentSigs.Count > 0
-                    && currentSigs.SetEquals(prevToolSigs);
+                var repetition = DetectToolCallRepetition(toolCalls, prevToolSigs, recentTurnSigs);
 
                 // Rolling-window guard: catch multi-turn cycles (A,B,C,A,B,C…) the adjacent check
                 // misses. Trips when every distinct call this turn has already recurred enough times
                 // in the recent window that, counting this turn, it reaches RepeatThreshold.
-                bool isRepeating = false;
-                if (!isDuplicate && config.Agent.RepeatThreshold > 1 && currentSigs.Count > 0)
-                {
-                    var windowCounts = recentTurnSigs
-                        .SelectMany(s => s)
-                        .GroupBy(s => s, StringComparer.Ordinal)
-                        .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
-                    isRepeating = currentSigs.All(sig =>
-                        windowCounts.TryGetValue(sig, out var c) && c + 1 >= config.Agent.RepeatThreshold);
-                }
-
-                if (isDuplicate || isRepeating)
+                if (repetition.IsDuplicate || repetition.IsRepeating)
                 {
                     consecutiveDuplicates++;
-                    string hint = isDuplicate
-                        ? "You are repeating the exact same tool calls as the previous turn. "
-                          + "Do not use any tools. Synthesize the information already returned and respond to the user in plain text."
-                        : "You keep repeating the same reads and searches without making progress. "
-                          + "Stop gathering information. Either make a concrete change with Edit or Write, "
-                          + "or respond in plain text with what you found or why you are blocked.";
-                    var blocks = new List<ContentBlock>();
-                    for (int i = 0; i < toolCalls.Count; i++)
-                    {
-                        var (id, name, _) = toolCalls[i];
-                        var idx = pendingToolIndex.TryGetValue(id, out var ti) ? ti : i;
-                        yield return new ToolFinished(idx, name, ToolResult.Ok("[skipped: loop guard]"));
-                        blocks.Add(new ToolResultBlock(id, hint, false));
-                    }
-                    ctx.Messages.Add(new UserMessage(blocks));
+                    foreach (var ev in ApplyToolLoopGuard(ctx, response, repetition.IsDuplicate))
+                        yield return ev;
 
                     if (consecutiveDuplicates >= 2)
                     {
                         yield return new TurnComplete(budget.UsedTokens, false);
-                        yield return End(EndReason.NudgeLimitReached);
+                        yield return End(cwd, EndReason.NudgeLimitReached);
                         yield break;
                     }
                 }
                 else
                 {
                     consecutiveDuplicates = 0;
-                    execResult = await ExecuteTools(ctx, cwd, toolCalls, ct);
+                    (execResult, consecutiveErrorTurns, var Events) =
+                        await ExecuteToolTurnAsync(ctx, cwd, response, consecutiveErrorTurns, ct);
                     anyWriteTools = execResult.AnyWriteTools;
                     signalCompletion = execResult.SignalCompletion;
 
-                    var resultBlocks = new List<ContentBlock>();
-                    for (int i = 0; i < toolCalls.Count; i++)
-                    {
-                        var (id, name, _) = toolCalls[i];
-                        var result = execResult.Results[i].Result;
-                        var idx = pendingToolIndex.TryGetValue(id, out var ti) ? ti : i;
-                        yield return new ToolFinished(idx, name, result);
-                        resultBlocks.Add(new ToolResultBlock(id, result.Content, result.IsError));
-                    }
-                    ctx.Messages.Add(new UserMessage(resultBlocks));
+                    foreach (var ev in Events)
+                        yield return ev;
 
-                    // Loop trap: the model keeps calling tools that all fail (often guessing file
-                    // paths that don't exist). The exact-duplicate trap above misses this when the
-                    // failing arguments vary turn to turn, so guard on consecutive all-error turns.
-                    var allErrors = execResult.Results.Length > 0 && execResult.Results.All(r => r.Result.IsError);
-                    if (allErrors)
-                    {
-                        consecutiveErrorTurns++;
-                        if (consecutiveErrorTurns == 2)
-                            ctx.Messages.Add(new UserMessage([new TextBlock(
-                                "Every recent tool call failed. Stop guessing paths — use Grep or Glob to locate "
-                                + "files before reading them, or tell the user plainly what you could not find. "
-                                + "Do not repeat calls that already failed.")]));
-                    }
-                    else
-                    {
-                        consecutiveErrorTurns = 0;
-                    }
-
-                    if (sessionStore is not null)
-                    {
-                        var parts = new List<object>(toolCalls.Count);
-                        for (int i = 0; i < toolCalls.Count; i++)
-                        {
-                            var (id, name, _) = toolCalls[i];
-                            var result = execResult.Results[i];
-                            parts.Add(new
-                            {
-                                type = "tool_result",
-                                tool_use_id = id,
-                                name,
-                                content = result.Result.Content,
-                                is_error = result.Result.IsError,
-                                duration_ms = result.DurationMs,
-                                approval_wait_ms = result.ApprovalWaitMs
-                            });
-                        }
-                        sessionStore.Append(new SessionRecord
-                        {
-                            Type = SessionRecordType.ToolResult,
-                            Cwd = cwd,
-                            Message = new { content = parts }
-                        });
-                    }
-
-                    prevToolSigs = currentSigs;
+                    prevToolSigs = repetition.Signatures;
 
                     // Record this executed turn in the sliding window for cycle detection.
-                    recentTurnSigs.Enqueue(currentSigList);
+                    recentTurnSigs.Enqueue(repetition.SignatureList);
                     while (recentTurnSigs.Count > Math.Max(1, config.Agent.RepeatWindowTurns))
                         recentTurnSigs.Dequeue();
 
@@ -452,7 +268,7 @@ public sealed class AgentLoop
                     if (consecutiveErrorTurns >= 4)
                     {
                         yield return new TurnComplete(budget.UsedTokens, false);
-                        yield return End(EndReason.NudgeLimitReached);
+                        yield return End(cwd, EndReason.NudgeLimitReached);
                         yield break;
                     }
                 }
@@ -464,15 +280,7 @@ public sealed class AgentLoop
 
             if (anyWriteTools)
             {
-                var git = new GitIntegration(cwd);
-                if (config.Agent.AutoCommit)
-                {
-                    var firstLine = textBuilder.ToString()
-                        .Split('\n', StringSplitOptions.RemoveEmptyEntries)
-                        .FirstOrDefault() ?? "turn complete";
-                    git.AutoCommit(ctx.SessionId, turn, firstLine, execResult?.AffectedPaths);
-                }
-                git.WriteCheckpoint(ctx.SessionId, turn);
+                GitCheckpoint(cwd, ctx, textBuilder, turn, execResult?.AffectedPaths);
             }
 
             yield return new TurnComplete(budget.UsedTokens, anyWriteTools);
@@ -484,34 +292,22 @@ public sealed class AgentLoop
 
             if (signalCompletion)
             {
-                yield return End(EndReason.TaskComplete);
+                yield return End(cwd, EndReason.TaskComplete);
                 yield break;
             }
 
-            // --- Reflection (section 16) ---
-            if (anyWriteTools && (config.Agent.AutoLint || config.Agent.AutoTest))
+            if (toolCalls.Count == 0
+                && stopReason is StopReason.EndTurn or StopReason.StopSequence)
             {
-                var reflectResult = await RunReflection(ctx, cwd, ct);
-                if (reflectResult is not null)
-                {
-                    if (ctx.Reflections >= config.Agent.MaxReflections)
-                    {
-                        yield return new ReflectionOccurred($"Max reflections ({config.Agent.MaxReflections}) reached");
-                        ctx.Reflections = 0;
-                    }
-                    else
-                    {
-                        ctx.Reflections++;
-                        yield return new ReflectionOccurred(reflectResult);
-                        ctx.Messages.Add(new UserMessage([new TextBlock(reflectResult)]));
-                        continue; // Re-enter loop with error context
-                    }
-                }
-                else
-                {
-                    ctx.Reflections = 0;
-                }
+                yield return End(cwd, EndReason.ResponseComplete);
+                yield break;
             }
+
+            var reflection = await ProcessReflectionAsync(ctx, cwd, anyWriteTools, ct);
+            if (reflection.Event is not null)
+                yield return reflection.Event;
+            if (reflection.ShouldContinue)
+                continue;
 
             // --- Compaction check (section 18, done inline here) ---
             if (config.Compaction.Enabled && ShouldCompact(budget))
@@ -521,14 +317,319 @@ public sealed class AgentLoop
                 budget = ctx.TokenBudget;
             }
 
-            // If no tool calls and model is done, check if we should end
-            if (toolCalls.Count == 0)
-            {
-                // Model produced text without tools — let it continue unless nudge limit hit
-            }
         }
 
-        yield return End(EndReason.Cancelled);
+        yield return End(cwd, EndReason.Cancelled);
+    }
+
+    private sealed record ToolCallRepetition(
+        List<string> SignatureList,
+        HashSet<string> Signatures,
+        bool IsDuplicate,
+        bool IsRepeating);
+
+    private static List<LoopEvent> ApplyToolLoopGuard(
+        LoopContext ctx,
+        TurnResponse response,
+        bool isDuplicate)
+    {
+        var hint = isDuplicate
+            ? "You are repeating the exact same tool calls as the previous turn. "
+              + "Do not use any tools. Synthesize the information already returned and respond to the user in plain text."
+            : "You keep repeating the same reads and searches without making progress. "
+              + "Stop gathering information. Either make a concrete change with Edit or Write, "
+              + "or respond in plain text with what you found or why you are blocked.";
+        var events = new List<LoopEvent>(response.ToolCalls.Count);
+        var blocks = new List<ContentBlock>(response.ToolCalls.Count);
+        for (var i = 0; i < response.ToolCalls.Count; i++)
+        {
+            var (id, name, _) = response.ToolCalls[i];
+            var index = response.PendingToolIndex.TryGetValue(id, out var toolIndex) ? toolIndex : i;
+            events.Add(new ToolFinished(index, name, ToolResult.Ok("[skipped: loop guard]")));
+            blocks.Add(new ToolResultBlock(id, hint, false));
+        }
+        ctx.Messages.Add(new UserMessage(blocks));
+        return events;
+    }
+
+    private async Task<(ExecuteToolsResult Result, int ConsecutiveErrorTurns, List<LoopEvent> Events)>
+        ExecuteToolTurnAsync(
+            LoopContext ctx,
+            string cwd,
+            TurnResponse response,
+            int consecutiveErrorTurns,
+            CancellationToken ct)
+    {
+        var result = await ExecuteTools(ctx, cwd, response.ToolCalls, ct);
+        var events = new List<LoopEvent>(response.ToolCalls.Count);
+        var resultBlocks = new List<ContentBlock>(response.ToolCalls.Count);
+        for (var i = 0; i < response.ToolCalls.Count; i++)
+        {
+            var (id, name, _) = response.ToolCalls[i];
+            var toolResult = result.Results[i].Result;
+            var index = response.PendingToolIndex.TryGetValue(id, out var toolIndex) ? toolIndex : i;
+            events.Add(new ToolFinished(index, name, toolResult));
+            resultBlocks.Add(new ToolResultBlock(id, toolResult.Content, toolResult.IsError));
+        }
+        ctx.Messages.Add(new UserMessage(resultBlocks));
+
+        if (result.Results.Length > 0 && result.Results.All(run => run.Result.IsError))
+        {
+            consecutiveErrorTurns++;
+            if (consecutiveErrorTurns == 2)
+                ctx.Messages.Add(new UserMessage([new TextBlock(
+                    "Every recent tool call failed. Stop guessing paths — use Grep or Glob to locate "
+                    + "files before reading them, or tell the user plainly what you could not find. "
+                    + "Do not repeat calls that already failed.")]));
+        }
+        else
+        {
+            consecutiveErrorTurns = 0;
+        }
+
+        AppendToolResultSession(cwd, response.ToolCalls, result);
+        return (result, consecutiveErrorTurns, events);
+    }
+
+    private ToolCallRepetition DetectToolCallRepetition(
+        List<(string Id, string Name, string Args)> toolCalls,
+        HashSet<string>? previousSignatures,
+        Queue<List<string>> recentTurnSignatures)
+    {
+        var signatureList = toolCalls.Select(call => $"{call.Name}:{call.Args.Trim()}").ToList();
+        var signatures = new HashSet<string>(signatureList, StringComparer.Ordinal);
+        var isDuplicate = previousSignatures is not null
+            && signatures.Count > 0
+            && signatures.SetEquals(previousSignatures);
+
+        var isRepeating = false;
+        if (!isDuplicate && config.Agent.RepeatThreshold > 1 && signatures.Count > 0)
+        {
+            var windowCounts = recentTurnSignatures
+                .SelectMany(turn => turn)
+                .GroupBy(signature => signature, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+            isRepeating = signatures.All(signature =>
+                windowCounts.TryGetValue(signature, out var count)
+                && count + 1 >= config.Agent.RepeatThreshold);
+        }
+
+        return new ToolCallRepetition(signatureList, signatures, isDuplicate, isRepeating);
+    }
+
+    private void AppendToolResultSession(
+        string cwd,
+        List<(string Id, string Name, string Args)> toolCalls,
+        ExecuteToolsResult execution)
+    {
+        if (sessionStore is null)
+            return;
+
+        var parts = new List<object>(toolCalls.Count);
+        for (var i = 0; i < toolCalls.Count; i++)
+        {
+            var (id, name, _) = toolCalls[i];
+            var result = execution.Results[i];
+            parts.Add(new
+            {
+                type = "tool_result",
+                tool_use_id = id,
+                name,
+                content = result.Result.Content,
+                is_error = result.Result.IsError,
+                duration_ms = result.DurationMs,
+                approval_wait_ms = result.ApprovalWaitMs
+            });
+        }
+
+        sessionStore.Append(new SessionRecord
+        {
+            Type = SessionRecordType.ToolResult,
+            Cwd = cwd,
+            Message = new { content = parts }
+        });
+    }
+
+    private sealed class TurnResponse(int nextToolEventIndex, TokenBudget budget)
+    {
+        public StringBuilder Text { get; } = new();
+        public StringBuilder Thinking { get; } = new();
+        public List<(string Id, string Name, string Args)> ToolCalls { get; } = [];
+        public Dictionary<string, int> PendingToolIndex { get; } = [];
+        public int NextToolEventIndex { get; set; } = nextToolEventIndex;
+        public TokenBudget Budget { get; set; } = budget;
+        public bool HadError { get; set; }
+        public Exception? ContextLengthError { get; set; }
+        public StopReason? StopReason { get; set; }
+        public int InputTokens { get; set; }
+        public int OutputTokens { get; set; }
+        public int CacheReadTokens { get; set; }
+        public int CacheWriteTokens { get; set; }
+    }
+
+    private async IAsyncEnumerable<LoopEvent> StreamResponseAsync(
+        ChatRequest request,
+        LoopContext ctx,
+        string cwd,
+        TurnResponse response,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        await foreach (var providerEvent in provider.StreamAsync(request, ct))
+        {
+            switch (providerEvent)
+            {
+                case TextDelta text:
+                    response.Text.Append(text.Text);
+                    yield return new TextChunk(text.Text);
+                    break;
+
+                case ThinkingDelta thinking:
+                    response.Thinking.Append(thinking.Text);
+                    yield return new ThinkingChunk(thinking.Text);
+                    break;
+
+                case ToolCallDelta toolCall:
+                    response.ToolCalls.Add((toolCall.Id, toolCall.Name, toolCall.ArgumentsJson));
+                    yield return new ToolStarted(
+                        response.NextToolEventIndex,
+                        toolCall.Name,
+                        toolCall.ArgumentsJson);
+                    response.PendingToolIndex[toolCall.Id] = response.NextToolEventIndex++;
+                    break;
+
+                case UsageUpdate usage:
+                    response.Budget = response.Budget.WithUsed(usage.InputTokens + usage.OutputTokens);
+                    ctx.TokenBudget = response.Budget;
+                    trajectoryRecorder?.RecordUsage(
+                        usage.InputTokens,
+                        usage.OutputTokens,
+                        usage.CacheReadTokens,
+                        usage.CacheWriteTokens);
+                    response.InputTokens = usage.InputTokens;
+                    response.OutputTokens = usage.OutputTokens;
+                    response.CacheReadTokens = usage.CacheReadTokens;
+                    response.CacheWriteTokens = usage.CacheWriteTokens;
+                    yield return new TokenUsageUpdated(
+                        usage.InputTokens,
+                        usage.OutputTokens,
+                        usage.CacheReadTokens,
+                        usage.CacheWriteTokens);
+                    break;
+
+                case StreamEnd streamEnd:
+                    response.StopReason = streamEnd.Reason;
+                    break;
+
+                case StreamError streamError:
+                    await foreach (var errorEvent in HandleStreamErrorAsync(cwd, response, streamError.Ex, ct))
+                        yield return errorEvent;
+                    break;
+            }
+
+            if (response.HadError)
+                yield break;
+        }
+    }
+
+    private async IAsyncEnumerable<LoopEvent> HandleStreamErrorAsync(
+        string cwd,
+        TurnResponse response,
+        Exception exception,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        if (IsContextLengthError(exception))
+        {
+            response.ContextLengthError = exception;
+        }
+        else if (exception is ProviderException { Error: ModelUnknownError modelError })
+        {
+            var models = await provider.GetModelsAsync(ct);
+            var modelList = string.Join("\n", models.Select(model => $"- {model.Id}"));
+            yield return End(
+                cwd,
+                EndReason.Error,
+                $"Model unknown: {modelError.Message}\n\nAvailable models for {ProviderConfig.GetProviderDisplayName(provider.Name)}:\n{modelList}");
+        }
+        else
+        {
+            yield return End(
+                cwd,
+                EndReason.Error,
+                $"Error while invoking {ProviderConfig.GetProviderDisplayName(provider.Name)} API\n{exception.Message}");
+        }
+
+        response.HadError = true;
+    }
+
+    private void AppendAssistantTurn(LoopContext ctx, string cwd, TurnResponse response, ChatRequest request)
+    {
+        var assistantBlocks = new List<ContentBlock>();
+        if (response.Text.Length > 0)
+            assistantBlocks.Add(new TextBlock(response.Text.ToString()));
+        if (response.Thinking.Length > 0)
+            assistantBlocks.Add(new ThinkingBlock(response.Thinking.ToString()));
+        foreach (var (id, name, args) in response.ToolCalls)
+            assistantBlocks.Add(new ToolUseBlock(id, name, TryParseArgs(args)));
+        ctx.Messages.Add(new AssistantMessage(assistantBlocks));
+
+        if (sessionStore is null || (response.Text.Length == 0 && response.ToolCalls.Count == 0))
+            return;
+
+        object message;
+        if (response.ToolCalls.Count > 0)
+        {
+            var contentParts = new List<object>();
+            if (response.Text.Length > 0)
+                contentParts.Add(new { type = "text", text = response.Text.ToString() });
+            foreach (var (id, name, args) in response.ToolCalls)
+                contentParts.Add(new { type = "tool_use", id, name, input = args });
+            message = new { content = contentParts };
+        }
+        else
+        {
+            message = new { content = response.Text.ToString() };
+        }
+
+        sessionStore.Append(new SessionRecord
+        {
+            Type = SessionRecordType.Assistant,
+            Cwd = cwd,
+            Message = message,
+            Usage = response.InputTokens > 0 || response.OutputTokens > 0
+                ? new SessionUsage
+                {
+                    InputTokens = response.InputTokens,
+                    OutputTokens = response.OutputTokens,
+                    CacheReadTokens = response.CacheReadTokens,
+                    CacheWriteTokens = response.CacheWriteTokens,
+                    ContextWindowTokens = response.Budget.ContextWindow,
+                    MaxOutputTokens = request.MaxTokens,
+                    ReserveTokens = response.Budget.ReserveTokens,
+                    UsedTokens = response.Budget.UsedTokens
+                }
+                : null
+        });
+    }
+
+    /// <summary>
+    /// Records the reason the loop terminated into the session log, then returns the event to
+    /// yield. Routing every terminal LoopEnded through here keeps the JSONL diagnosable (e.g.
+    /// telling a clean Done from a nudge-limit bail-out, which both render as "idle" in the TUI).
+    /// </summary>
+    /// <param name="reason"></param>
+    /// <param name="message"></param>
+    /// <returns></returns>
+    private LoopEnded End(string cwd, EndReason reason, string? message = null)
+    {
+        sessionStore?.Append(new SessionRecord
+        {
+            Type = SessionRecordType.End,
+            Cwd = cwd,
+            Message = message is null
+                ? new { reason = reason.ToString() }
+                : new { reason = reason.ToString(), message }
+        });
+        return new LoopEnded(reason, message);
     }
 
     private bool ShouldCompact(TokenBudget budget) =>
@@ -779,6 +880,35 @@ public sealed class AgentLoop
         return sb.Length > 0 ? sb.ToString().TrimEnd() : null;
     }
 
+    private async Task<(LoopEvent? Event, bool ShouldContinue)> ProcessReflectionAsync(
+        LoopContext ctx,
+        string cwd,
+        bool anyWriteTools,
+        CancellationToken ct)
+    {
+        if (!anyWriteTools || (!config.Agent.AutoLint && !config.Agent.AutoTest))
+            return (null, false);
+
+        var reflection = await RunReflection(ctx, cwd, ct);
+        if (reflection is null)
+        {
+            ctx.Reflections = 0;
+            return (null, false);
+        }
+
+        if (ctx.Reflections >= config.Agent.MaxReflections)
+        {
+            ctx.Reflections = 0;
+            return (
+                new ReflectionOccurred($"Max reflections ({config.Agent.MaxReflections}) reached"),
+                false);
+        }
+
+        ctx.Reflections++;
+        ctx.Messages.Add(new UserMessage([new TextBlock(reflection)]));
+        return (new ReflectionOccurred(reflection), true);
+    }
+
     private static async Task<ToolResult> RunShell(string command, string cwd, CancellationToken ct)
     {
         var tool = new ShellTool();
@@ -804,7 +934,7 @@ public sealed class AgentLoop
 
         var summaryPrompt = BuildSummaryPrompt(toSummarize);
         var summaryRequest = new ChatRequest(
-            config.Model.ActiveModelId,
+            config.Model.ActiveModel.Id,
             "You are a concise summarizer. Summarize the conversation context below preserving key facts, decisions, and code changes.",
             [new UserMessage([new TextBlock(summaryPrompt)])],
             [],
@@ -925,5 +1055,19 @@ public sealed class AgentLoop
             return el;
         }
         catch { return System.Text.Json.JsonDocument.Parse("{}").RootElement; }
+    }
+
+    private void GitCheckpoint(string cwd, LoopContext ctx, StringBuilder textBuilder, 
+        int turn, IReadOnlyList<string>? affectedPaths)
+    {
+        var git = new GitIntegration(cwd);
+        if (config.Agent.AutoCommit)
+        {
+            var firstLine = textBuilder.ToString()
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .FirstOrDefault() ?? "turn complete";
+            git.AutoCommit(ctx.SessionId, turn, firstLine, affectedPaths);
+        }
+        git.WriteCheckpoint(ctx.SessionId, turn);
     }
 }

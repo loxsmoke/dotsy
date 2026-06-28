@@ -30,7 +30,7 @@ public partial class AgentWindow : Window, IDisposable
     private readonly Label          promptLabel;
     private readonly MultilineInput promptInput;
     private readonly FrameView      completionFrame;
-    private readonly ListView       completionList;
+    private readonly CompletionListView completionList;
     private int    leftPanelWidthPercentage;
     private int    inputHeight    = 1;
     private string lastInputText  = "";
@@ -64,6 +64,10 @@ public partial class AgentWindow : Window, IDisposable
     private bool streamCursorVisible;
     #endregion
 
+    // Set while a coalesced convo reload is already queued for the next main-loop
+    // iteration. Touched only on the UI thread (all reloads run there), so no lock.
+    private bool convoReloadScheduled;
+
     // ── File change rows ────────────────────────────────────────────────────────────────
     private readonly ObservableCollection<FileRow> fileRows = [];
 
@@ -72,6 +76,16 @@ public partial class AgentWindow : Window, IDisposable
     // Lines at these indices must not be word-wrapped (diff lines with background padding)
     private readonly HashSet<int> noWrapLineIndices = [];
     private int convoWrapWidth;
+
+    // ── Incremental wrap cache ───────────────────────────────────────────────────────────
+    // Wrapping the whole conversation on every append is O(total); instead we cache the
+    // wrapped display rows. Every logical line except the tail (conversationLines[^1], the
+    // only one AppendConvo mutates) is immutable, so its rows are reused across reloads and
+    // only the tail is re-wrapped. A width change or InvalidateConvoCache() rebuilds it.
+    private readonly List<List<Cell>> convoCachedRows = [];
+    private int convoCachedWidth = -1;    // wrap width the cache holds; -1 = invalid
+    private int convoCachedLogical;       // # of immutable logical lines wrapped into the prefix
+    private int convoCachedTailRows;      // # of trailing rows in convoCachedRows belonging to the tail
 
 
     #region Command history
@@ -278,13 +292,14 @@ public partial class AgentWindow : Window, IDisposable
             Title = " complete ", Visible = false
         };
         completionFrame.SetScheme(Palette.Scheme());
-        completionList = new ListView
+        completionList = new CompletionListView
         {
             X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(),
             CanFocus = true
         };
         completionList.SetScheme(Palette.Scheme());
         completionList.SetSource(completionItems);
+        completionList.EditKeyHandler = EditCompletionFilter;
         completionList.KeyDown += (_, key) =>
         {
             if (key.KeyCode == KeyCode.Enter)
@@ -316,7 +331,7 @@ public partial class AgentWindow : Window, IDisposable
         loaded = true;
 
         var config = TuiSessionContext.Config;
-        statusBar.SetModel(config.Model.ActiveModelId);
+        statusBar.SetModel(config.Model.ActiveModel.Id);
         statusBar.SetSession(TuiSessionContext.LoopCtx?.SessionId ?? "");
         TuiSessionContext.StatusUpdate = SetStatus;
 
@@ -574,10 +589,7 @@ public partial class AgentWindow : Window, IDisposable
         if (!persist)
             return;
 
-        var (ok, msg) = ConfigEditor.Set(
-            TuiSessionContext.Config,
-            "tui.left-panel-width-percentage",
-            clamped.ToString(CultureInfo.InvariantCulture));
+        var (ok, msg) = ConfigEditor.Set(TuiSessionContext.Config, "tui.left_panel_width_percentage", clamped.ToString());
         if (ok)
             ShowTemporarySplitStatus($"split {clamped}%");
         else
@@ -973,7 +985,7 @@ public partial class AgentWindow : Window, IDisposable
         if (ctx is null) return;
         TuiSessionContext.App.Invoke(() =>
         {
-            statusBar.SetModel(config.Model.ActiveModelId);
+            statusBar.SetModel(config.Model.ActiveModel.Id);
             statusBar.SetCtxPct(ctx.TokenBudget.UsagePct);
         });
     }
@@ -1026,7 +1038,7 @@ public partial class AgentWindow : Window, IDisposable
                 if (!streamCursorActive || streamCursorVisible) return;
                 streamCursorVisible = true;
             }
-            ReloadConvo();
+            ScheduleReloadConvo();
         });
     }
 
@@ -1039,7 +1051,7 @@ public partial class AgentWindow : Window, IDisposable
                 if (!streamCursorVisible) return;
                 streamCursorVisible = false;
             }
-            ReloadConvo();
+            ScheduleReloadConvo();
         });
     }
     #endregion

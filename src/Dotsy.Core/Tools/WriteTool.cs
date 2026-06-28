@@ -34,9 +34,9 @@ public sealed class WriteTool : ITool
 
     public string FormatPanelArgument(JsonElement input, string cwd)
     {
-        var path = MakeRelative(input.GetStringPropertyOrEmpty("path"), cwd);
+        var path = PathDisplay.MakeRelative(input.GetStringPropertyOrEmpty("path"), cwd);
         var content = input.GetStringPropertyOrEmpty("content");
-        return $"{path}  +{CountPanelLines(content)} lines";
+        return $"{path}  +{EditSummaryFormatter.CountLines(content)} lines";
     }
 
     public Task<ToolResult> ExecuteAsync(JsonElement input, ToolContext ctx, CancellationToken ct)
@@ -62,22 +62,4 @@ public sealed class WriteTool : ITool
     private static int CountLines(string text) =>
         string.IsNullOrEmpty(text) ? 0 : text.Split('\n').Length;
 
-    private static int CountPanelLines(string text) =>
-        string.IsNullOrEmpty(text) ? 0 : text.TrimEnd('\n').Split('\n').Length;
-
-    private static string MakeRelative(string path, string cwd)
-    {
-        if (string.IsNullOrEmpty(path)) return ".";
-        try
-        {
-            var abs = Path.IsPathRooted(path) ? path : Path.GetFullPath(Path.Combine(cwd, path));
-            var cwdFull = Path.GetFullPath(cwd);
-            if (abs.StartsWith(cwdFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-                return abs[(cwdFull.Length + 1)..];
-            if (abs.Equals(cwdFull, StringComparison.OrdinalIgnoreCase))
-                return ".";
-        }
-        catch { }
-        return path;
-    }
 }

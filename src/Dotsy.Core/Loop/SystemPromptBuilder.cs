@@ -3,6 +3,7 @@ using Dotsy.Core.Config;
 using Dotsy.Core.Git;
 using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Skills;
+using Dotsy.Core.Utils;
 
 namespace Dotsy.Core.Loop;
 
@@ -206,7 +207,7 @@ public static class SystemPromptBuilder
         foreach (var addedPath in ctx.AddedFiles.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             var resolved = ResolvePath(cwd, addedPath);
-            var displayPath = MakeRelative(resolved, cwd);
+            var displayPath = PathDisplay.MakeRelative(resolved, cwd);
 
             if (!File.Exists(resolved))
             {
@@ -263,23 +264,6 @@ public static class SystemPromptBuilder
 
     private static string ResolvePath(string cwd, string path) =>
         Path.IsPathRooted(path) ? path : Path.GetFullPath(Path.Combine(cwd, path));
-
-    private static string MakeRelative(string path, string cwd)
-    {
-        try
-        {
-            var abs = Path.GetFullPath(path);
-            var cwdFull = Path.GetFullPath(cwd);
-            if (abs.StartsWith(cwdFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-                return abs[(cwdFull.Length + 1)..];
-            if (abs.Equals(cwdFull, StringComparison.OrdinalIgnoreCase))
-                return ".";
-        }
-        catch
-        {
-        }
-        return path;
-    }
 
     private static bool IsBinaryFile(string path)
     {

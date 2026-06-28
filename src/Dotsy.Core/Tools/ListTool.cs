@@ -16,12 +16,12 @@ public sealed class ListTool : ITool
     public bool IsCompletionSignal => false;
 
     public string FormatPanelArgument(JsonElement input, string cwd) =>
-        ReadTool.MakeRelative(input.GetStringPropertyOrEmpty("path"), cwd);
+        PathDisplay.MakeRelative(input.GetStringPropertyOrEmpty("path"), cwd);
 
     public string? FormatPanelResult(JsonElement input, string resultContent, string cwd)
     {
         if (string.IsNullOrEmpty(resultContent)) return null;
-        var path = ReadTool.MakeRelative(input.GetStringPropertyOrEmpty("path"), cwd);
+        var path = PathDisplay.MakeRelative(input.GetStringPropertyOrEmpty("path"), cwd);
         if (resultContent.Trim() == "(empty)") return $"{path}  0 files";
         var count = resultContent.Split('\n').Count(l => l.Length > 0);
         return $"{path}  {count} files";

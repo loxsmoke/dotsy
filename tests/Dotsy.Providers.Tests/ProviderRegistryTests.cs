@@ -13,12 +13,13 @@ namespace Dotsy.Providers.Tests;
 public sealed class ProviderRegistryTests
 {
     [TestMethod]
-    [DataRow("anthropic", typeof(AnthropicProvider))]
-    [DataRow("openai", typeof(OpenAiProvider))]
-    [DataRow("azure", typeof(AzureOpenAiProvider))]
-    [DataRow("ollama", typeof(OllamaProvider))]
-    [DataRow("compatible", typeof(OpenAiCompatibleProvider))]
-    [DataRow("gemini", typeof(GeminiProvider))]
+    [DataRow(ProviderConfig.Anthropic, typeof(AnthropicProvider))]
+    [DataRow(ProviderConfig.OpenAi, typeof(OpenAiProvider))]
+    [DataRow(ProviderConfig.Azure, typeof(AzureOpenAiProvider))]
+    [DataRow(ProviderConfig.AzureOpenAi, typeof(AzureOpenAiProvider))]
+    [DataRow(ProviderConfig.Ollama, typeof(OllamaProvider))]
+    [DataRow(ProviderConfig.Compatible, typeof(OpenAiCompatibleProvider))]
+    [DataRow(ProviderConfig.Gemini, typeof(GeminiProvider))]
     public void Resolve_CreatesProviderForConfiguredProvider(string providerName, Type expectedType)
     {
         using var http = new HttpClient(new EmptyHandler());
@@ -70,7 +71,7 @@ public sealed class ProviderRegistryTests
                 Id = "compatible-model",
                 BaseUrl = "https://compatible.example.test"
             },
-            Gemini = new GeminiConfig { ApiKey = "gemini-key", Id = "gemini" }
+            Gemini = new GeminiConfig { ApiKey = "gemini-key", Id = "gemini-model" }
         }
     };
 

@@ -79,8 +79,8 @@ public sealed class SelfContextBuilderTests
             Directory.GetCurrentDirectory(),
             ProbeTimeout: TimeSpan.Zero));
 
-        StringAssert.Contains(markdown, "| model.anthropic.api_key | string | set:redacted |");
-        StringAssert.Contains(markdown, "| model.openai.api_key | string | placeholder |");
+        StringAssert.Contains(markdown, $"| {"model." + ProviderConfig.Anthropic + ".api_key"} | string | set:redacted |");
+        StringAssert.Contains(markdown, $"| {"model." + ProviderConfig.OpenAi + ".api_key"} | string | placeholder |");
         Assert.IsFalse(markdown.Contains("real-secret-value"));
         Assert.IsFalse(markdown.Contains("sk-example-placeholder"));
     }

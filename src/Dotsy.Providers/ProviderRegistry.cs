@@ -14,45 +14,28 @@ public static class ProviderRegistry
     public static IProvider Resolve(DotsyConfig config, HttpClient? http = null)
     {
         var model = config.Model;
-        var apiKey = ResolveApiKey(model);
+        var apiKeyOverrideVariableName = ProviderConfig.ProviderEnvVar(model.Provider);
+
+        var apiKey = FirstNonEmpty(
+            model.ActiveModel.ApiKey,
+            (apiKeyOverrideVariableName != null ? Environment.GetEnvironmentVariable(apiKeyOverrideVariableName) : "") ?? "");
 
         return model.Provider.ToLowerInvariant() switch
         {
-            "anthropic" => new AnthropicProvider(apiKey, http),
-            "openai" => new OpenAiProvider(apiKey, model.OpenAi.BaseUrl, http),
-            "azure" => new AzureOpenAiProvider(
+            ProviderConfig.Anthropic => new AnthropicProvider(apiKey, http),
+            ProviderConfig.OpenAi => new OpenAiProvider(apiKey, model.OpenAi.BaseUrl, http),
+            ProviderConfig.Azure or ProviderConfig.AzureOpenAi => new AzureOpenAiProvider(
                 apiKey,
                 model.Azure.Endpoint,
                 model.Azure.Deployment,
                 model.Azure.ApiVersion,
                 http),
-            "ollama" => new OllamaProvider(model.Ollama.BaseUrl, http, model.Ollama.MaxContextTokens),
-            "compatible" => new OpenAiCompatibleProvider(apiKey, model.Compatible.BaseUrl, http),
-            "gemini" => new GeminiProvider(apiKey, http: http),
+            ProviderConfig.Ollama => new OllamaProvider(model.Ollama.BaseUrl, http, model.Ollama.MaxContextTokens),
+            ProviderConfig.Compatible => new OpenAiCompatibleProvider(apiKey, model.Compatible.BaseUrl, http),
+            ProviderConfig.Gemini => new GeminiProvider(apiKey, http: http),
             _ => throw new InvalidOperationException($"Unknown provider: {model.Provider}")
         };
     }
-
-    private static string ResolveApiKey(ModelConfig model) => model.Provider.ToLowerInvariant() switch
-    {
-        "anthropic" => FirstNonEmpty(
-            model.Anthropic.ApiKey,
-            Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY") ?? ""),
-        "openai" => FirstNonEmpty(
-            model.OpenAi.ApiKey,
-            Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? ""),
-        "azure" => FirstNonEmpty(
-            model.Azure.ApiKey,
-            Environment.GetEnvironmentVariable("AZURE_OPENAI_API_KEY") ?? ""),
-        "compatible" => FirstNonEmpty(
-            model.Compatible.ApiKey,
-            Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? ""),
-        "gemini" => FirstNonEmpty(
-            model.Gemini.ApiKey,
-            Environment.GetEnvironmentVariable("GEMINI_API_KEY") ?? "",
-            Environment.GetEnvironmentVariable("GOOGLE_API_KEY") ?? ""),
-        _ => ""
-    };
 
     private static string FirstNonEmpty(params string[] values) =>
         values.FirstOrDefault(v => !string.IsNullOrEmpty(v)) ?? "";

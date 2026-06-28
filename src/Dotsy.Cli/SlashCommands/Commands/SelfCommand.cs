@@ -147,7 +147,7 @@ internal sealed class SelfCommand : ISlashCommand
             ["Process ID", Environment.ProcessId.ToString()],
             ["Session ID", request.LoopContext.SessionId],
             ["Provider", request.Config.Model.Provider],
-            ["Model", request.Config.Model.ActiveModelId],
+            ["Model", request.Config.Model.ActiveModel.Id],
             ["Theme (configured)", string.IsNullOrWhiteSpace(request.Config.Tui.Theme) ? "dark" : request.Config.Tui.Theme],
             ["Theme (resolved)", request.ResolvedTheme ?? Unknown],
             ["Mode", request.Mode]
@@ -223,7 +223,7 @@ internal sealed class SelfCommand : ISlashCommand
                 {
                     p.Key,
                     p.Type,
-                    IsSecretKey(p.Key) ? RedactSecret(raw) : FormatValue(raw),
+                    ConfigLoader.IsSecretKey(p.Key) ? RedactSecret(raw) : FormatValue(raw),
                     source,
                     p.Description
                 };
@@ -332,14 +332,6 @@ internal sealed class SelfCommand : ISlashCommand
         return value[..keep].TrimEnd() + suffix;
     }
 
-    private static bool IsSecretKey(string key) =>
-        key.EndsWith(".api_key", StringComparison.OrdinalIgnoreCase)
-        || key.Contains("secret", StringComparison.OrdinalIgnoreCase)
-        || key.Contains("auth_token", StringComparison.OrdinalIgnoreCase)
-        || key.Contains("access_token", StringComparison.OrdinalIgnoreCase)
-        || key.Contains("bearer", StringComparison.OrdinalIgnoreCase)
-        || key.Contains("password", StringComparison.OrdinalIgnoreCase);
-
     private static string RedactSecret(object? value)
     {
         var raw = value?.ToString();
@@ -369,7 +361,7 @@ internal sealed class SelfCommand : ISlashCommand
 
     private static string InferSource(DotsyConfig config, string key, object? value)
     {
-        if (IsSecretKey(key) && GetKnownSecretEnvVar(key) is { } envName)
+        if (ConfigLoader.IsSecretKey(key) && ConfigLoader.GetKnownSecretEnvVar(key) is { } envName)
         {
             var envValue = Environment.GetEnvironmentVariable(envName);
             if (!string.IsNullOrEmpty(envValue) && string.Equals(envValue, value?.ToString(), StringComparison.Ordinal))
@@ -379,15 +371,6 @@ internal sealed class SelfCommand : ISlashCommand
         var defaultValue = GetConfigValue(DefaultConfig.Create(), key);
         return Equals(ValueKey(defaultValue), ValueKey(value)) ? "default" : "current";
     }
-
-    private static string? GetKnownSecretEnvVar(string key) => key.ToLowerInvariant() switch
-    {
-        "model.anthropic.api_key" => "ANTHROPIC_API_KEY",
-        "model.openai.api_key" => "OPENAI_API_KEY",
-        "model.azure.api_key" => "AZURE_OPENAI_API_KEY",
-        "model.compatible.api_key" => "OPENAI_API_KEY",
-        _ => null
-    };
 
     private static string? ValueKey(object? value) =>
         value switch
@@ -411,9 +394,7 @@ internal sealed class SelfCommand : ISlashCommand
     }
 
     private static string ToPropertyName(string key) =>
-        key == "left-panel-width-percentage"
-            ? nameof(TuiConfig.LeftPanelWidthPercentage)
-            : string.Concat(key.Split('_').Select(w => w.Length > 0 ? char.ToUpperInvariant(w[0]) + w[1..] : w));
+        string.Concat(key.Split('_').Select(w => w.Length > 0 ? char.ToUpperInvariant(w[0]) + w[1..] : w));
 
     private sealed record FolderSnapshot(
         string GitRoot,

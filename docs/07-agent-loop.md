@@ -29,11 +29,12 @@ flowchart TD
     Build --> Stream[Stream model response]
     Stream --> Usage[Update token usage]
     Usage --> Tools{Tool calls returned?}
-    Tools -- No --> Nudge[Increment no-tool count]
+    Tools -- No --> EndTurn{Normal end turn?}
+    EndTurn -- Yes --> Final[Assistant final response]
+    EndTurn -- No --> Nudge[Increment no-tool count]
     Nudge --> Limit{Nudge limit reached?}
-    Limit -- Yes --> Final[Assistant final response]
-    Limit -- No --> AddNudge[Append hidden tool nudge if tools are expected]
-    AddNudge --> Turn
+    Limit -- Yes --> Stop
+    Limit -- No --> Turn
     Tools -- Yes --> Reset[Reset no-tool count]
     Reset --> Execute[Execute tool calls]
     Execute --> Events[Yield LoopEvents to TUI]
@@ -51,8 +52,8 @@ Step notes:
 - **Initialize turn counter** sets `turns = 0` before entering the loop. **Increment turn counter** is only a loop guard, used to stop runaway sessions at `agent.max_turns`.
 - **Maybe compact context** runs when token usage crosses `compaction.threshold_pct`, when the usable context is nearly exhausted, or after a provider context-length error. It summarises older messages, keeps recent messages verbatim, stores the summary on the context, and rebuilds the next request with that summary.
 - **Build provider request** converts system prompt, compacted prior context, messages, and tool definitions into the provider payload sent to the LLM API.
-- **Increment no-tool count** tracks consecutive model turns that returned text but no tool calls. It is used to detect a stalled agent when the loop expected tool progress.
-- **Nudge limit** is the configured maximum number of consecutive no-tool turns before the loop stops nudging. A **nudge** is a hidden user-role instruction appended to the message list telling the model to either call an appropriate tool or give the final answer.
+- **Increment no-tool count** tracks consecutive non-terminal model turns that returned text but no tool calls. A normal text-only `EndTurn` is final and does not increment this counter.
+- **Nudge limit** is the configured maximum number of consecutive non-terminal no-tool turns before the loop stops requesting continuation. The historical name remains, but the loop does not add a hidden user message between those requests.
 - **Assistant final response** is model-generated text from the LLM stream. It becomes final when the model returns no tool calls and the loop is allowed to stop for the current user turn, or when a completion signal such as the `done` tool is observed.
 
 ### 7.2 Loop Pseudocode
@@ -79,11 +80,12 @@ function RunLoop(userMessage, ctx, ct):
         UpdateTokenUsage(ctx, usage)
 
         if toolCalls.IsEmpty:
+            if response.StopReason is EndTurn or StopSequence:
+                break  // normal text-only assistant response is final
             consecutiveNoTool++
             if consecutiveNoTool >= ctx.Config.NudgeLimit:
-                break  // text-only assistant response is final for this turn
-            AppendNudge(ctx)  // hidden instruction to use tools or finalise
-            continue
+                break  // non-terminal response guard reached
+            continue  // request continuation without adding another message
 
         consecutiveNoTool = 0
 

@@ -39,7 +39,7 @@ public sealed class GrepTool : ITool
 
         var exclude = input.GetStringPropertyOrEmpty("exclude");
 
-        var rel = string.IsNullOrEmpty(rawPath) ? "." : ReadTool.MakeRelative(rawPath, cwd);
+        var rel = string.IsNullOrEmpty(rawPath) ? "." : PathDisplay.MakeRelative(rawPath, cwd);
         var globPart = string.IsNullOrEmpty(glob) ? "" : $" ({glob})";
         var excludePart = string.IsNullOrEmpty(exclude) ? "" : $" (!{exclude.TrimStart('!')})";
         return $"\"{pattern}\" in {rel}{globPart}{excludePart}";
@@ -74,7 +74,7 @@ public sealed class GrepTool : ITool
             // can't act on. Point it at the exclude parameter, the usual reason this happens.
             if (!Directory.Exists(searchPath) && !File.Exists(searchPath))
                 return ToolResult.Err(
-                    $"Search path not found: {ReadTool.MakeRelative(searchPath, ctx.Cwd)}\n" +
+                    $"Search path not found: {PathDisplay.MakeRelative(searchPath, ctx.Cwd)}\n" +
                     "The `path` argument is the directory or file to search IN, and it must exist. " +
                     "To skip a directory, leave `path` at the default and pass it in `exclude` instead " +
                     "(e.g. exclude: \"terminal.gui\").");

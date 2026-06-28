@@ -66,6 +66,12 @@ public partial class AgentWindow : ISlashCommandHost
 
     void ISlashCommandHost.AddPromptHistory(string entry) => promptHistory.Add(entry);
 
+    void ISlashCommandHost.RefreshCompletions()
+    {
+        if (completionFrame.Visible)
+            UpdateCompletionPopup(force: true);
+    }
+
     CancellationToken ISlashCommandHost.BeginScenario()
     {
         scenarioCts = new CancellationTokenSource();
@@ -91,6 +97,7 @@ public partial class AgentWindow : ISlashCommandHost
         conversationLines.Clear();
         conversationLines.Add([]);
         noWrapLineIndices.Clear();
+        InvalidateConvoCache();
         lock (streamCursorLock)
             streamCursorVisible = false;
         ReloadConvo();

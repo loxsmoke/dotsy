@@ -15,9 +15,15 @@ public sealed class DotsyConfig
     public TrajectoryConfig Trajectory { get; set; } = new();
 }
 
-public sealed class ModelConfig
+public interface IModelBaseConfig
 {
-    public string Provider { get; set; } = "anthropic";
+    string Id { get; set; }
+    string ApiKey { get; }
+}
+
+public sealed class ModelConfig
+{                                         
+    public string Provider { get; set; } = ProviderConfig.Anthropic;
     public int MaxOutputTokensPerRequest { get; set; } = 8192;
     public AnthropicConfig Anthropic { get; set; } = new();
     public OpenAiConfig OpenAi { get; set; } = new();
@@ -26,53 +32,37 @@ public sealed class ModelConfig
     public CompatibleConfig Compatible { get; set; } = new();
     public GeminiConfig Gemini { get; set; } = new();
 
-    /// <summary>
-    /// The model ID of the active provider. Reads from / writes to the per-provider
-    /// section (e.g. <c>[model.anthropic] id</c>) selected by <see cref="Provider"/>.
-    /// </summary>
-    public string ActiveModelId
-    {
+
+    public IModelBaseConfig ActiveModel
+    { 
         get => Provider.ToLowerInvariant() switch
         {
-            "anthropic"    => Anthropic.Id,
-            "openai"       => OpenAi.Id,
-            "azure"        => Azure.Id,
-            "azure_openai" => Azure.Id,
-            "ollama"       => Ollama.Id,
-            "compatible"   => Compatible.Id,
-            "gemini"       => Gemini.Id,
-            _              => "",
+            ProviderConfig.Anthropic    => Anthropic,
+            ProviderConfig.OpenAi       => OpenAi,
+            ProviderConfig.Azure        => Azure,
+            ProviderConfig.AzureOpenAi  => Azure,
+            ProviderConfig.Ollama       => Ollama,
+            ProviderConfig.Compatible   => Compatible,
+            ProviderConfig.Gemini       => Gemini,
+            _ => throw new InvalidOperationException($"Unknown provider: {Provider}")
         };
-        set
-        {
-            switch (Provider.ToLowerInvariant())
-            {
-                case "anthropic":    Anthropic.Id = value;  break;
-                case "openai":       OpenAi.Id = value;     break;
-                case "azure":        Azure.Id = value;      break;
-                case "azure_openai": Azure.Id = value;      break;
-                case "ollama":       Ollama.Id = value;     break;
-                case "compatible":   Compatible.Id = value; break;
-                case "gemini":       Gemini.Id = value;     break;
-            }
-        }
     }
 }
 
-public sealed class AnthropicConfig
+public sealed class AnthropicConfig : IModelBaseConfig
 {
     public string Id { get; set; } = "";
     public string ApiKey { get; set; } = "";
 }
 
-public sealed class OpenAiConfig
+public sealed class OpenAiConfig : IModelBaseConfig
 {
     public string Id { get; set; } = "";
     public string ApiKey { get; set; } = "";
     public string BaseUrl { get; set; } = "https://api.openai.com/v1";
 }
 
-public sealed class AzureConfig
+public sealed class AzureConfig : IModelBaseConfig
 {
     public string Id { get; set; } = "";
     public string ApiKey { get; set; } = "";
@@ -81,23 +71,26 @@ public sealed class AzureConfig
     public string ApiVersion { get; set; } = "2025-01-01";
 }
 
-public sealed class OllamaConfig
+public sealed class OllamaConfig : IModelBaseConfig
 {
     public string Id { get; set; } = "";
+    
+    public string ApiKey => "";
+
     public string BaseUrl { get; set; } = "http://localhost:11434";
     // Context window (num_ctx) requested when invoking Ollama. Ollama otherwise loads models at a
     // small default (e.g. 8192); this sizes the window the model actually runs with. 128K decimal.
     public int MaxContextTokens { get; set; } = 131_072;
 }
 
-public sealed class CompatibleConfig
+public sealed class CompatibleConfig : IModelBaseConfig
 {
     public string Id { get; set; } = "";
     public string ApiKey { get; set; } = "";
     public string BaseUrl { get; set; } = "";
 }
 
-public sealed class GeminiConfig
+public sealed class GeminiConfig : IModelBaseConfig
 {
     public string Id { get; set; } = "";
     public string ApiKey { get; set; } = "";
@@ -109,6 +102,8 @@ public sealed class AgentConfig
     public int MaxTurns { get; set; } = 1000;
     public bool ParallelTools { get; set; } = true;
     public bool AutoCommit { get; set; } = false;
+    // Maximum consecutive non-terminal text-only responses. Normal EndTurn and StopSequence
+    // responses complete immediately without consuming this guard.
     public int NudgeLimit { get; set; } = 3;
     // Rolling-window loop guard: if a tool-call signature recurs RepeatThreshold times within the
     // last RepeatWindowTurns turns, the agent is nudged out of a multi-turn read/search cycle.
