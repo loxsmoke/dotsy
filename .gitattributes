@@ -1,4 +1,6 @@
-* text=auto eol=lf
+# Normalize text to LF in the repo (so Linux/macOS check out LF). The working-tree
+# line ending is left to each platform's core.autocrlf: CRLF on Windows, LF elsewhere.
+* text=auto
 
 *.cmd text eol=crlf
 *.bat text eol=crlf

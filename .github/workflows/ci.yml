@@ -27,6 +27,12 @@ jobs:
       - name: Build
         run: dotnet build --no-restore --configuration Release
 
+      # Provide ripgrep locally so GrepTool tests resolve it via PATH instead of
+      # downloading it from GitHub releases at test time (which intermittently hits
+      # GitHub's unauthenticated rate limit and fails with HTTP 403).
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
       - name: Test
         run: dotnet test --no-build --configuration Release --logger trx --results-directory ./test-results --collect "XPlat Code Coverage"
 
