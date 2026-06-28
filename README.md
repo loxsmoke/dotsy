@@ -1,7 +1,7 @@
 # Dotsy
 
 [![CI](https://github.com/loxsmoke/dotsy/actions/workflows/ci.yml/badge.svg)](https://github.com/loxsmoke/dotsy/actions/workflows/ci.yml)
-[![Coverage](https://img.shields.io/badge/coverage-59.31%25-yellow)](https://github.com/loxsmoke/dotsy/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/badge/coverage-59.68%25-yellow)](https://github.com/loxsmoke/dotsy/actions/workflows/ci.yml)
 
 ```text
          _       _
