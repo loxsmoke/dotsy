@@ -19,12 +19,37 @@ public enum EndReason
     TurnLimitReached,
 
     /// <summary>
-    /// The loop stopped because the model reached <c>agent.nudge_limit</c> consecutive
-    /// non-terminal responses without calling a tool, repeatedly issued the same tool calls,
-    /// or reached the consecutive failing-tool guard. A successful or failed tool call resets
-    /// the text-only nudge counter; a non-positive nudge limit disables only that counter.
+    /// Legacy catch-all for the nudge/loop guards. Retained for backward compatibility with
+    /// older session logs; the loop no longer emits it. New runs report the specific cause via
+    /// <see cref="NoProgress"/>, <see cref="MaxTokens"/>, <see cref="Repetition"/>, or
+    /// <see cref="ToolErrorStreak"/>.
     /// </summary>
     NudgeLimitReached,
+
+    /// <summary>
+    /// The model reached <c>agent.nudge_limit</c> consecutive responses that neither called a
+    /// tool nor cleanly ended the turn, and auto-continue (if enabled) did not recover it. The
+    /// model produced no new work to act on.
+    /// </summary>
+    NoProgress,
+
+    /// <summary>
+    /// The model's response was cut off by the provider's output token limit
+    /// (<c>StopReason.MaxTokens</c>) repeatedly, without making tool-call progress in between.
+    /// </summary>
+    MaxTokens,
+
+    /// <summary>
+    /// The model kept issuing the same tool calls — either identical to the previous turn or
+    /// cycling within the rolling window — without making progress, tripping the loop guard.
+    /// </summary>
+    Repetition,
+
+    /// <summary>
+    /// Consecutive turns of failing tool calls exceeded the guard threshold; the model was not
+    /// recovering from the errors.
+    /// </summary>
+    ToolErrorStreak,
 
     /// <summary>
     /// The conversation no longer fit in the model's context window and compaction was

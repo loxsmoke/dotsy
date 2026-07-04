@@ -45,12 +45,17 @@ public static class RepoMap
         int n = outlines.Count;
         if (n == 0) return [];
 
-        // Build name → index map using type names from outlines
-        var nameToIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        // Build name → indices map using type names from outlines. References are
+        // bare type names, so two files sharing a name (e.g. Options.cs in different
+        // directories) must both be reachable — map to a list, not a single index,
+        // so neither is silently overwritten.
+        var nameToIndices = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
         for (int i = 0; i < n; i++)
         {
             var fn = Path.GetFileNameWithoutExtension(outlines[i].FilePath);
-            nameToIndex[fn] = i;
+            if (!nameToIndices.TryGetValue(fn, out var list))
+                nameToIndices[fn] = list = new List<int>();
+            list.Add(i);
         }
 
         // Build adjacency: file i references file j
@@ -60,8 +65,10 @@ public static class RepoMap
             var edges = new List<int>();
             foreach (var refName in outlines[i].ReferencedFiles)
             {
-                if (nameToIndex.TryGetValue(refName, out var j) && j != i)
-                    edges.Add(j);
+                if (nameToIndices.TryGetValue(refName, out var targets))
+                    foreach (var j in targets)
+                        if (j != i)
+                            edges.Add(j);
             }
             outEdges.Add(edges.Distinct().ToList());
         }

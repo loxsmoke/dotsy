@@ -14,7 +14,10 @@ namespace Dotsy.Core.Tests;
 [TestClass]
 public sealed class AgentLoopTests
 {
-    private static DotsyConfig MakeConfig(int maxTurns = 1000, int nudgeLimit = 3) =>
+    private static DotsyConfig MakeConfig(
+        int maxTurns = 1000, int nudgeLimit = 3,
+        bool autoContinue = false, int autoContinueMax = 3,
+        bool autoContinueEndTurnIntent = false) =>
         new()
         {
             Model    = new ModelConfig { Anthropic = new() { Id = "test-model" }, MaxOutputTokensPerRequest = 1024 },
@@ -22,7 +25,9 @@ public sealed class AgentLoopTests
             {
                 MaxTurns = maxTurns, NudgeLimit = nudgeLimit, ParallelTools = true,
                 AutoLint = false, AutoTest = false, MaxReflections = 0,
-                InjectEnvironment = false, InjectGitStatus = false
+                InjectEnvironment = false, InjectGitStatus = false,
+                AutoContinueOnNudge = autoContinue, AutoContinueMaxAttempts = autoContinueMax,
+                AutoContinueOnEndTurnIntent = autoContinueEndTurnIntent
             },
             Compaction  = new CompactionConfig { Enabled = false },
             Retrieval   = new RetrievalConfig  { RepoMapTokens = 0 },
@@ -41,7 +46,8 @@ public sealed class AgentLoopTests
             {
                 MaxTurns = 1, NudgeLimit = 1, ParallelTools = true,
                 AutoLint = false, AutoTest = false, MaxReflections = 0,
-                InjectEnvironment = false, InjectGitStatus = false
+                InjectEnvironment = false, InjectGitStatus = false,
+                AutoContinueOnNudge = false
             },
             Compaction = new CompactionConfig
             {
@@ -72,6 +78,11 @@ public sealed class AgentLoopTests
 
     private static IReadOnlyList<ProviderEvent> TruncatedTextTurn(string text = "hello") =>
         [new TextDelta(text), new StreamEnd(StopReason.MaxTokens)];
+
+    // Model signalled tool use but emitted no parseable tool call and no text — a stalled,
+    // no-progress turn (common with local models producing malformed tool syntax).
+    private static IReadOnlyList<ProviderEvent> EmptyToolUseTurn() =>
+        [new StreamEnd(StopReason.ToolUse)];
 
     private static IReadOnlyList<ProviderEvent> ModelUnknownTurn(string message = "invalid model ID") =>
         [new StreamError(new ProviderException(new ModelUnknownError(message)))];
@@ -128,8 +139,231 @@ public sealed class AgentLoopTests
 
         var ended = events.OfType<LoopEnded>().LastOrDefault();
         Assert.IsNotNull(ended, "Expected a LoopEnded event");
-        Assert.AreEqual(EndReason.NudgeLimitReached, ended.Reason);
+        Assert.AreEqual(EndReason.MaxTokens, ended.Reason);
         Assert.AreEqual(2, provider.CallCount, "Provider called once per nudge turn");
+    }
+
+    [TestMethod]
+    public async Task NoProgressStall_EndsWithNoProgress_WhenAutoContinueDisabled()
+    {
+        // No text, no tool call, non-terminal stop: a genuine no-progress stall.
+        var config   = MakeConfig(maxTurns: 100, nudgeLimit: 2, autoContinue: false);
+        var provider = new FakeProvider(EmptyToolUseTurn());
+        var loop     = new AgentLoop(provider, new ToolRegistry(), YoloStore(), config);
+
+        var events = await Collect(loop.RunAsync(EmptyCtx(), Path.GetTempPath(), CancellationToken.None));
+
+        var ended = events.OfType<LoopEnded>().LastOrDefault();
+        Assert.IsNotNull(ended);
+        Assert.AreEqual(EndReason.NoProgress, ended.Reason);
+    }
+
+    // ── Auto-continue recovery ────────────────────────────────────────────────
+
+    [TestMethod]
+    public async Task AutoContinue_InjectsHintAndRecovers_WhenModelResumes()
+    {
+        // Turn 1 stalls (no progress), auto-continue injects a hint, turn 2 completes cleanly.
+        var config   = MakeConfig(maxTurns: 100, nudgeLimit: 1, autoContinue: true, autoContinueMax: 3);
+        var provider = new FakeProvider(EmptyToolUseTurn(), TextTurn("all done"));
+        var loop     = new AgentLoop(provider, new ToolRegistry(), YoloStore(), config);
+
+        var events = await Collect(loop.RunAsync(EmptyCtx(), Path.GetTempPath(), CancellationToken.None));
+
+        var ended = events.OfType<LoopEnded>().Single();
+        Assert.AreEqual(EndReason.ResponseComplete, ended.Reason);
+        Assert.AreEqual(2, provider.CallCount);
+
+        var autoContinued = events.OfType<AutoContinued>().ToList();
+        Assert.AreEqual(1, autoContinued.Count, "Exactly one recovery attempt");
+        Assert.AreEqual(1, autoContinued[0].Attempt);
+
+        // The recovery hint must be present in the second request's messages.
+        var secondRequestText = string.Join("\n", provider.Requests[1].Messages
+            .OfType<UserMessage>()
+            .SelectMany(m => m.Content.OfType<TextBlock>())
+            .Select(t => t.Text));
+        StringAssert.Contains(secondRequestText, "did not make progress");
+    }
+
+    [TestMethod]
+    public async Task AutoContinue_ExhaustsAttempts_ThenEndsWithSpecificReason()
+    {
+        // Model never recovers: auto-continue fires up to the cap, then the loop ends reporting
+        // the underlying cause (truncated output here).
+        var config   = MakeConfig(maxTurns: 100, nudgeLimit: 1, autoContinue: true, autoContinueMax: 2);
+        var provider = new FakeProvider(TruncatedTextTurn());
+        var loop     = new AgentLoop(provider, new ToolRegistry(), YoloStore(), config);
+
+        var events = await Collect(loop.RunAsync(EmptyCtx(), Path.GetTempPath(), CancellationToken.None));
+
+        var ended = events.OfType<LoopEnded>().Single();
+        Assert.AreEqual(EndReason.MaxTokens, ended.Reason);
+        Assert.AreEqual(2, events.OfType<AutoContinued>().Count(), "Retried exactly max attempts");
+        Assert.AreEqual(3, provider.CallCount, "1 initial + 2 retries");
+    }
+
+    [TestMethod]
+    public async Task AutoContinue_ProgressResetsRetryBudget()
+    {
+        // Progress guard: a successful tool call between stalls resets the retry budget, so the
+        // agent can recover more than max-attempts times as long as it keeps making progress.
+        var config   = MakeConfig(maxTurns: 100, nudgeLimit: 1, autoContinue: true, autoContinueMax: 1);
+        var provider = new FakeProvider(
+            TruncatedTextTurn(),                                                             // stall -> attempt 1
+            [new ToolCallDelta("t1", "Look", """{"p":"a"}"""), new StreamEnd(StopReason.ToolUse)], // progress -> resets
+            TruncatedTextTurn(),                                                             // stall -> attempt 1 again
+            TextTurn("done"));                                                               // completes
+        var registry = new ToolRegistry();
+        registry.Register(new AlwaysOkTool());
+        var loop = new AgentLoop(provider, registry, YoloStore(), config);
+
+        var events = await Collect(loop.RunAsync(EmptyCtx(), Path.GetTempPath(), CancellationToken.None));
+
+        var ended = events.OfType<LoopEnded>().Single();
+        Assert.AreEqual(EndReason.ResponseComplete, ended.Reason);
+        Assert.AreEqual(2, events.OfType<AutoContinued>().Count(),
+            "Two recoveries despite max-attempts=1, because progress reset the budget");
+    }
+
+    // ── Auto-continue on announced-but-unacted next step (text-only EndTurn) ──
+
+    private static IReadOnlyList<ProviderEvent> AnnouncedNextStepTurn() =>
+        [new TextDelta("I have enough context from prior reads. Let me implement the feature now."),
+         new StreamEnd(StopReason.EndTurn)];
+
+    [TestMethod]
+    public async Task AnnouncedNextStep_EndTurn_AutoContinuesInsteadOfStopping()
+    {
+        // Turn 1 is a clean EndTurn but only *announces* the next action (no tool call). With the
+        // guard enabled the loop nudges and retries; turn 2 completes.
+        var config   = MakeConfig(maxTurns: 100, autoContinueEndTurnIntent: true, autoContinueMax: 3);
+        var provider = new FakeProvider(AnnouncedNextStepTurn(), TextTurn("all done"));
+        var loop     = new AgentLoop(provider, new ToolRegistry(), YoloStore(), config);
+
+        var events = await Collect(loop.RunAsync(EmptyCtx(), Path.GetTempPath(), CancellationToken.None));
+
+        var ended = events.OfType<LoopEnded>().Single();
+        Assert.AreEqual(EndReason.ResponseComplete, ended.Reason);
+        Assert.AreEqual(2, provider.CallCount, "Announced-intent turn should have triggered a retry");
+
+        var autoContinued = events.OfType<AutoContinued>().Single();
+        Assert.AreEqual(1, autoContinued.Attempt);
+
+        var secondRequestText = string.Join("\n", provider.Requests[1].Messages
+            .OfType<UserMessage>()
+            .SelectMany(m => m.Content.OfType<TextBlock>())
+            .Select(t => t.Text));
+        StringAssert.Contains(secondRequestText, "did not take it");
+    }
+
+    [TestMethod]
+    public async Task AnnouncedNextStep_Disabled_EndsImmediately()
+    {
+        // Same announced-intent turn, but the guard is off: legacy behaviour (end immediately).
+        var config   = MakeConfig(maxTurns: 100, autoContinueEndTurnIntent: false);
+        var provider = new FakeProvider(AnnouncedNextStepTurn());
+        var loop     = new AgentLoop(provider, new ToolRegistry(), YoloStore(), config);
+
+        var events = await Collect(loop.RunAsync(EmptyCtx(), Path.GetTempPath(), CancellationToken.None));
+
+        Assert.AreEqual(EndReason.ResponseComplete, events.OfType<LoopEnded>().Single().Reason);
+        Assert.AreEqual(1, provider.CallCount);
+        Assert.AreEqual(0, events.OfType<AutoContinued>().Count());
+    }
+
+    [TestMethod]
+    public async Task PlainFinalAnswer_EndTurn_EndsWithoutRetry_EvenWhenGuardEnabled()
+    {
+        // A genuine final answer (no announced next action, and a closing pleasantry that merely
+        // contains "let me know") must not be mistaken for a stall.
+        var config   = MakeConfig(maxTurns: 100, autoContinueEndTurnIntent: true);
+        var provider = new FakeProvider(TextTurn("Done. Let me know if you need anything else."));
+        var loop     = new AgentLoop(provider, new ToolRegistry(), YoloStore(), config);
+
+        var events = await Collect(loop.RunAsync(EmptyCtx(), Path.GetTempPath(), CancellationToken.None));
+
+        Assert.AreEqual(EndReason.ResponseComplete, events.OfType<LoopEnded>().Single().Reason);
+        Assert.AreEqual(1, provider.CallCount, "A final answer must not trigger a retry");
+        Assert.AreEqual(0, events.OfType<AutoContinued>().Count());
+    }
+
+    [TestMethod]
+    public async Task AnnouncedNextStep_ExhaustsBudget_ThenEndsResponseComplete()
+    {
+        // The model keeps announcing without ever acting: retries up to the cap, then stops.
+        var config   = MakeConfig(maxTurns: 100, autoContinueEndTurnIntent: true, autoContinueMax: 2);
+        var provider = new FakeProvider(AnnouncedNextStepTurn());
+        var loop     = new AgentLoop(provider, new ToolRegistry(), YoloStore(), config);
+
+        var events = await Collect(loop.RunAsync(EmptyCtx(), Path.GetTempPath(), CancellationToken.None));
+
+        Assert.AreEqual(EndReason.ResponseComplete, events.OfType<LoopEnded>().Single().Reason);
+        Assert.AreEqual(2, events.OfType<AutoContinued>().Count(), "Retried exactly max attempts");
+        Assert.AreEqual(3, provider.CallCount, "1 initial + 2 retries");
+    }
+
+    [TestMethod]
+    public async Task AnnouncedNextStep_ThenToolCall_ResetsBudget()
+    {
+        // Progress guard: acting (a tool call) after an announced-intent stall resets the retry
+        // budget, so a later stall can recover again even with max-attempts=1.
+        var config   = MakeConfig(maxTurns: 100, autoContinueEndTurnIntent: true, autoContinueMax: 1);
+        var provider = new FakeProvider(
+            AnnouncedNextStepTurn(),                                                           // stall -> attempt 1
+            [new ToolCallDelta("t1", "Look", """{"p":"a"}"""), new StreamEnd(StopReason.ToolUse)], // acts -> resets
+            AnnouncedNextStepTurn(),                                                           // stall -> attempt 1 again
+            TextTurn("done"));                                                                 // completes
+        var registry = new ToolRegistry();
+        registry.Register(new AlwaysOkTool());
+        var loop = new AgentLoop(provider, registry, YoloStore(), config);
+
+        var events = await Collect(loop.RunAsync(EmptyCtx(), Path.GetTempPath(), CancellationToken.None));
+
+        Assert.AreEqual(EndReason.ResponseComplete, events.OfType<LoopEnded>().Single().Reason);
+        Assert.AreEqual(2, events.OfType<AutoContinued>().Count(),
+            "Two recoveries despite max-attempts=1, because acting reset the budget");
+    }
+
+    // ── Headless: model asks the user a question with nobody to answer ────────
+
+    private static IReadOnlyList<ProviderEvent> AsksUserTurn() =>
+        [new TextDelta("The request seems cut off. Could you clarify what you want, and what's your name?"),
+         new StreamEnd(StopReason.EndTurn)];
+
+    [TestMethod]
+    public async Task HeadlessQuestionToUser_AutoContinuesInsteadOfStopping()
+    {
+        var config = MakeConfig(maxTurns: 100, autoContinueEndTurnIntent: true, autoContinueMax: 3);
+        config.Agent.Headless = true;
+        var provider = new FakeProvider(AsksUserTurn(), TextTurn("done"));
+        var loop = new AgentLoop(provider, new ToolRegistry(), YoloStore(), config);
+
+        var events = await Collect(loop.RunAsync(EmptyCtx(), Path.GetTempPath(), CancellationToken.None));
+
+        Assert.AreEqual(EndReason.ResponseComplete, events.OfType<LoopEnded>().Single().Reason);
+        Assert.AreEqual(2, provider.CallCount, "Question in headless mode should trigger a retry");
+        var ac = events.OfType<AutoContinued>().Single();
+        Assert.AreEqual(1, ac.Attempt);
+        var secondReq = string.Join("\n", provider.Requests[1].Messages
+            .OfType<UserMessage>().SelectMany(m => m.Content.OfType<TextBlock>()).Select(t => t.Text));
+        StringAssert.Contains(secondReq, "no user available");
+    }
+
+    [TestMethod]
+    public async Task QuestionToUser_Interactive_EndsWithoutRetry()
+    {
+        // Same question, but NOT headless: a user could answer, so ending (yielding to them) is right.
+        var config = MakeConfig(maxTurns: 100, autoContinueEndTurnIntent: true);
+        config.Agent.Headless = false;
+        var provider = new FakeProvider(AsksUserTurn());
+        var loop = new AgentLoop(provider, new ToolRegistry(), YoloStore(), config);
+
+        var events = await Collect(loop.RunAsync(EmptyCtx(), Path.GetTempPath(), CancellationToken.None));
+
+        Assert.AreEqual(EndReason.ResponseComplete, events.OfType<LoopEnded>().Single().Reason);
+        Assert.AreEqual(1, provider.CallCount);
+        Assert.AreEqual(0, events.OfType<AutoContinued>().Count());
     }
 
     // ── MaxTurns ─────────────────────────────────────────────────────────────
@@ -184,7 +418,7 @@ public sealed class AgentLoopTests
 
         var ended = events.OfType<LoopEnded>().LastOrDefault();
         Assert.IsNotNull(ended, "Expected the loop to stop");
-        Assert.AreEqual(EndReason.NudgeLimitReached, ended.Reason);
+        Assert.AreEqual(EndReason.ToolErrorStreak, ended.Reason);
         Assert.IsTrue(provider.CallCount <= 5, $"Loop should bail quickly, made {provider.CallCount} calls");
     }
 
@@ -304,8 +538,55 @@ public sealed class AgentLoopTests
 
         var ended = events.OfType<LoopEnded>().LastOrDefault();
         Assert.IsNotNull(ended, "Expected the loop to stop");
-        Assert.AreEqual(EndReason.NudgeLimitReached, ended.Reason);
+        Assert.AreEqual(EndReason.Repetition, ended.Reason);
         Assert.IsTrue(provider.CallCount <= 9, $"Loop should bail within ~2 cycles, made {provider.CallCount} calls");
+    }
+
+    [TestMethod]
+    public async Task RepeatLoop_WithAutoContinue_EscalatesThenRecoversWhenModelActs()
+    {
+        // A weak model re-reads the same file, tripping the repetition guard. With auto-continue on,
+        // the loop no longer bails after 2 strikes — it injects escalating hints (AutoContinued) and
+        // recovers once the model finally does something different.
+        var config = MakeConfig(maxTurns: 100, nudgeLimit: 1000, autoContinue: true, autoContinueMax: 3);
+        var provider = new FakeProvider(
+            [new ToolCallDelta("c", "Look", """{"p":"a"}"""), new StreamEnd(StopReason.ToolUse)], // execute
+            [new ToolCallDelta("c", "Look", """{"p":"a"}"""), new StreamEnd(StopReason.ToolUse)], // dup -> guard 1
+            [new ToolCallDelta("c", "Look", """{"p":"a"}"""), new StreamEnd(StopReason.ToolUse)], // dup -> guard 2
+            [new ToolCallDelta("c", "Look", """{"p":"b"}"""), new StreamEnd(StopReason.ToolUse)], // different -> progress
+            [new ToolCallDelta("done", "Done", """{"summary":"ok"}"""), new StreamEnd(StopReason.ToolUse)]);
+        var registry = new ToolRegistry();
+        registry.Register(new AlwaysOkTool());
+        registry.Register(new DoneTool());
+        var loop = new AgentLoop(provider, registry, YoloStore(), config);
+
+        var events = await Collect(loop.RunAsync(EmptyCtx(), Path.GetTempPath(), CancellationToken.None));
+
+        var ended = events.OfType<LoopEnded>().Single();
+        Assert.AreEqual(EndReason.TaskComplete, ended.Reason);
+        Assert.AreEqual(2, events.OfType<AutoContinued>().Count(),
+            "Two escalating repetition-recovery hints before the model broke out");
+        Assert.AreEqual(5, provider.CallCount);
+    }
+
+    [TestMethod]
+    public async Task RepeatLoop_WithAutoContinue_StillEndsRepetition_WhenModelNeverActs()
+    {
+        // Bound check: if the model keeps repeating forever, the loop still terminates — just after a
+        // few more (budgeted) chances rather than immediately.
+        var config = MakeConfig(maxTurns: 100, nudgeLimit: 1000, autoContinue: true, autoContinueMax: 2);
+        var provider = new FakeProvider(
+            [new ToolCallDelta("c", "Look", """{"p":"a"}"""), new StreamEnd(StopReason.ToolUse)]);
+        var registry = new ToolRegistry();
+        registry.Register(new AlwaysOkTool());
+        var loop = new AgentLoop(provider, registry, YoloStore(), config);
+
+        var events = await Collect(loop.RunAsync(EmptyCtx(), Path.GetTempPath(), CancellationToken.None));
+
+        Assert.AreEqual(EndReason.Repetition, events.OfType<LoopEnded>().Single().Reason);
+        // repeatBailAt = 1 + max(1, 2) = 3: hints fire on the 1st and 2nd repeat, the 3rd repeat ends.
+        Assert.AreEqual(2, events.OfType<AutoContinued>().Count());
+        Assert.AreEqual(4, provider.CallCount, "initial execute + 3 repeating turns (the 3rd ends)");
     }
 
     [TestMethod]

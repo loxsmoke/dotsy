@@ -882,6 +882,7 @@ public partial class AgentWindow : Window, IDisposable
         approvalView.Y      = Pos.AnchorEnd(5 + h);
         completionFrame.Y   = Pos.AnchorEnd(h + Math.Max(3, completionFrame.Frame.Height));
         convo.MoveEnd();
+        promptInput.MoveEnd();
         SetNeedsDraw();
     }
 

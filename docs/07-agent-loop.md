@@ -30,7 +30,10 @@ flowchart TD
     Stream --> Usage[Update token usage]
     Usage --> Tools{Tool calls returned?}
     Tools -- No --> EndTurn{Normal end turn?}
-    EndTurn -- Yes --> Final[Assistant final response]
+    EndTurn -- Yes --> Intent{Announced next step but no tool call?}
+    Intent -- No --> Final[Assistant final response]
+    Intent -- Yes --> AutoCont[Inject recovery hint, retry within budget]
+    AutoCont --> Turn
     EndTurn -- No --> Nudge[Increment no-tool count]
     Nudge --> Limit{Nudge limit reached?}
     Limit -- Yes --> Stop
@@ -55,6 +58,8 @@ Step notes:
 - **Increment no-tool count** tracks consecutive non-terminal model turns that returned text but no tool calls. A normal text-only `EndTurn` is final and does not increment this counter.
 - **Nudge limit** is the configured maximum number of consecutive non-terminal no-tool turns before the loop stops requesting continuation. The historical name remains, but the loop does not add a hidden user message between those requests.
 - **Assistant final response** is model-generated text from the LLM stream. It becomes final when the model returns no tool calls and the loop is allowed to stop for the current user turn, or when a completion signal such as the `done` tool is observed.
+- **Announced-next-step recovery** guards against weaker models that end a turn cleanly (`EndTurn`) while only *announcing* the next action ("Let me implement this now.") without calling a tool — leaving the task untouched. When `agent.auto_continue_on_end_turn_intent` is enabled, such a response is treated as a recoverable stall: a hint is injected and the model is retried instead of stopping. It shares the `agent.auto_continue_max_attempts` budget and is progress-guarded (any tool call resets the counter), so a genuine final answer — one that does not end by announcing more work — still stops immediately. In **headless** runs (`run` with no interactive user) the same recovery also fires when a text-only turn ends by *asking the user to clarify* — since nobody can answer, the model is nudged to make reasonable assumptions and proceed instead of dead-ending. Interactive sessions still yield to the user on a question.
+- **Repetition-guard recovery** handles the related read-loop stall: a weak model re-reads the same files turn after turn without ever editing. The rolling-window guard skips the repeated calls and injects an **escalating** hint (a gentle nudge first, then an imperative "your next action MUST be an Edit"). When `agent.auto_continue_on_nudge` is enabled it allows a few budgeted retries (`1 + auto_continue_max_attempts`) before ending with `Repetition`, instead of bailing after the first repeat, so the model gets a real chance to break out and act. A single non-repeating (progress) turn resets the counter.
 
 ### 7.2 Loop Pseudocode
 
@@ -62,6 +67,7 @@ Step notes:
 function RunLoop(userMessage, ctx, ct):
     turns = 0
     consecutiveNoTool = 0
+    autoContinueAttempts = 0   // reset to 0 whenever a tool call makes progress
     AppendUserMessage(ctx, userMessage)
 
     while not ct.IsCancellationRequested:
@@ -81,6 +87,15 @@ function RunLoop(userMessage, ctx, ct):
 
         if toolCalls.IsEmpty:
             if response.StopReason is EndTurn or StopSequence:
+                // A clean text-only turn is normally final — unless it only announced the next
+                // action without taking it (e.g. "Let me implement this now."). That is a
+                // recoverable stall: nudge and retry, bounded by autoContinueMaxAttempts.
+                if Config.AutoContinueOnEndTurnIntent
+                        and autoContinueAttempts < Config.AutoContinueMaxAttempts
+                        and LooksLikeAnnouncedNextStep(assistantMsg.Text):
+                    autoContinueAttempts++
+                    InjectHint(ctx, "You described the next step but did not take it…")
+                    continue
                 break  // normal text-only assistant response is final
             consecutiveNoTool++
             if consecutiveNoTool >= ctx.Config.NudgeLimit:
@@ -119,6 +134,7 @@ public record ToolStarted(string Name, string Arg) : LoopEvent;
 public record ToolFinished(string Name, ToolResult Result) : LoopEvent;
 public record TurnComplete(int TotalTokens)      : LoopEvent;
 public record CompactionOccurred(string Summary) : LoopEvent;
+public record AutoContinued(int Attempt, int MaxAttempts, string Reason) : LoopEvent; // recovery hint injected instead of stopping
 public record LoopEnded(EndReason Reason)        : LoopEvent;
 ```
 

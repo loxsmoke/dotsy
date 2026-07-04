@@ -68,22 +68,45 @@ internal sealed class MultilineInput : Editor
 
     public void MoveEnd()
     {
+        FlushPasteBuffer();
         InvokeCommand(Command.End);
+        ScrollToBottom();
         SetNeedsDraw();
     }
 
-    public void InsertText(string text)
+    /// <summary>
+    /// Scrolls the view so the last visible row shows the bottom of the content.
+    /// </summary>
+    public void ScrollToBottom()
     {
-        if (HasSelection)
-            ReplaceSelection(text);
-        else
-            Document?.Insert(CaretOffset, text);
+        // Editor is a Terminal.Gui View; it keeps its content size in sync with the wrapped
+        // line count, so scroll the Viewport to the bottom using that rather than recomputing
+        // the wrap map ourselves.
+        int totalRows   = GetContentSize().Height;
+        int visibleRows = Math.Max(1, Viewport.Height);
+        int targetY     = Math.Max(0, totalRows - visibleRows);
+
+        if (Viewport.Y != targetY)
+            Viewport = Viewport with { Y = targetY };
     }
 
+    /// <summary>
+    /// Appends text at the caret position (used during paste).
+    /// </summary>
+    public void InsertText(string text)
+    {
+        FlushPasteBuffer();
+        Document?.Insert(CaretOffset, Glyphs.Sanitize(text));
+    }
+
+    /// <summary>
+    /// Replaces all content and positions the caret at the end.
+    /// Does NOT scroll TopRow; callers that need scrolling should call MoveEnd or ScrollToBottom separately.
+    /// </summary>
     public void SetTextAndMoveEnd(string text)
     {
         FlushPasteBuffer();
-        Text = text;
+        Document?.Replace(0, Document.TextLength, text);
         InvokeCommand(Command.End);
         SetNeedsDraw();
     }

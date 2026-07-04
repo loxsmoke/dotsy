@@ -105,6 +105,27 @@ public sealed class AgentConfig
     // Maximum consecutive non-terminal text-only responses. Normal EndTurn and StopSequence
     // responses complete immediately without consuming this guard.
     public int NudgeLimit { get; set; } = 3;
+    // Nudge limit used by the interactive TUI, which yields to the user after this many
+    // non-advancing responses. Kept separate from NudgeLimit (headless) so raising interactivity
+    // headroom doesn't change batch behaviour. 1 = end the turn after a single stalled response.
+    public int InteractiveNudgeLimit { get; set; } = 3;
+    // When the nudge limit is hit on a recoverable stop (no clean completion / truncated output),
+    // inject a recovery hint and retry instead of ending. Bounded by AutoContinueMaxAttempts and
+    // progress-guarded: any successful tool call resets the attempt counter, so only a genuinely
+    // stalled agent (no progress) exhausts the attempts and stops.
+    public bool AutoContinueOnNudge { get; set; } = true;
+    public int AutoContinueMaxAttempts { get; set; } = 3;
+    // A text-only response that cleanly ends the turn (StopReason.EndTurn) normally completes the
+    // run. But weaker models often *announce* the next step ("Let me implement this now.") and end
+    // the turn without calling a tool — no work gets done. When enabled, such a response is treated
+    // as a recoverable stall: a hint is injected and the model is retried instead of stopping.
+    // Shares the AutoContinueMaxAttempts budget and is progress-guarded (any tool call resets it),
+    // so a genuine final answer (no announced next action) still ends immediately.
+    public bool AutoContinueOnEndTurnIntent { get; set; } = true;
+    // Runtime flag (not a user setting): true when running non-interactively (headless `run`), where
+    // there is no user to answer a clarifying question. Set by the CLI. When set, a text-only turn
+    // that ends by asking the user to clarify is treated as a recoverable stall rather than an end.
+    public bool Headless { get; set; }
     // Rolling-window loop guard: if a tool-call signature recurs RepeatThreshold times within the
     // last RepeatWindowTurns turns, the agent is nudged out of a multi-turn read/search cycle.
     // Set RepeatThreshold to 0 to disable.

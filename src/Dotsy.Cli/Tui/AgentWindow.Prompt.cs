@@ -315,6 +315,15 @@ public partial class AgentWindow
                                 AppendConvo($"\n[reflection: {ro.Error}]\n\n", Palette.Warn));
                             break;
 
+                        case AutoContinued ac:
+                            StopStreamCursor();
+                            VerboseOutput(ac);
+                            TuiSessionContext.App.Invoke(() =>
+                                AppendConvo(
+                                    $"\n[auto-continue {ac.Attempt}/{ac.MaxAttempts} — recovering from {ac.Reason}]\n\n",
+                                    Palette.Warn));
+                            break;
+
                         case LoopEnded le:
                             {
                                 StopStreamCursor();
@@ -339,7 +348,11 @@ public partial class AgentWindow
                                 {
                                     EndReason.ResponseComplete => null,
                                     EndReason.TaskComplete => "done.",
-                                    EndReason.NudgeLimitReached => "nudge limit",
+                                    EndReason.NudgeLimitReached => $"nudge limit reached {TuiSessionContext.Config.Agent.NudgeLimit}",
+                                    EndReason.NoProgress => "no progress — the model stopped advancing the task",
+                                    EndReason.MaxTokens => "response cut off by the output token limit",
+                                    EndReason.Repetition => "stuck repeating the same tool calls",
+                                    EndReason.ToolErrorStreak => "too many consecutive tool errors",
                                     EndReason.TurnLimitReached => $"turn limit reached {TuiSessionContext.Config.Agent.MaxTurns}",
                                     EndReason.ContextTooSmall => "context window full",
                                     EndReason.Cancelled => "cancelled",
@@ -356,6 +369,10 @@ public partial class AgentWindow
                                     EndReason.TaskComplete => "idle",
                                     EndReason.ResponseComplete => "idle",
                                     EndReason.NudgeLimitReached => "idle",
+                                    EndReason.NoProgress => "idle  [no progress]",
+                                    EndReason.MaxTokens => "idle  [truncated]",
+                                    EndReason.Repetition => "idle  [repetition]",
+                                    EndReason.ToolErrorStreak => "idle  [tool errors]",
                                     EndReason.TurnLimitReached => "idle  [turn limit]",
                                     EndReason.Cancelled => "idle  [cancelled]",
                                     EndReason.Error => "idle  [error]",
@@ -434,6 +451,11 @@ public partial class AgentWindow
     {
         if (!TuiSessionContext.Config.Tui.Verbose) return;
         VerboseOutput($"Verbose {nameof(ReflectionOccurred)}: ", $"{tc.ToString()}");
+    }
+    private void VerboseOutput(AutoContinued tc)
+    {
+        if (!TuiSessionContext.Config.Tui.Verbose) return;
+        VerboseOutput($"Verbose {nameof(AutoContinued)}: ", $"{tc.ToString()}");
     }
     private void VerboseOutput(LoopEnded tc)
     {

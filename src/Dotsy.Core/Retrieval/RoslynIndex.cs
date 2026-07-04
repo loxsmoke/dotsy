@@ -29,7 +29,9 @@ public sealed class RoslynIndex : IDisposable
 
     public RoslynIndex(string cacheDir)
     {
-        cachePath = Path.Combine(cacheDir, "roslyn-index.json");
+        // v2: outline headers now carry the repo-relative path instead of a bare
+        // filename. Use a fresh cache file so stale bare-name outlines are not served.
+        cachePath = Path.Combine(cacheDir, "roslyn-index-v2.json");
         Directory.CreateDirectory(cacheDir);
     }
 
@@ -50,21 +52,29 @@ public sealed class RoslynIndex : IDisposable
     public IReadOnlyList<FileOutline> ScanDirectory(string root, int maxFiles = 200)
     {
         var csFiles = Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories)
-            .Where(f => !f.Contains("obj") && !f.Contains("bin"))
+            .Where(f => !HasBinOrObjSegment(f))
             .Take(maxFiles)
             .ToList();
 
         var results = new List<FileOutline>();
         foreach (var file in csFiles)
         {
-            var outline = GetOrBuild(file);
+            var outline = GetOrBuild(file, root);
             if (outline is not null)
                 results.Add(outline);
         }
         return results;
     }
 
-    private FileOutline? GetOrBuild(string filePath)
+    private static bool HasBinOrObjSegment(string path)
+    {
+        var segments = path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return segments.Any(s =>
+            s.Equals("obj", StringComparison.OrdinalIgnoreCase)
+            || s.Equals("bin", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private FileOutline? GetOrBuild(string filePath, string repoRoot)
     {
         var lastWrite = File.GetLastWriteTimeUtc(filePath).ToString("O");
 
@@ -81,10 +91,10 @@ public sealed class RoslynIndex : IDisposable
             };
         }
 
-        return BuildAndCache(filePath, lastWrite);
+        return BuildAndCache(filePath, repoRoot, lastWrite);
     }
 
-    private FileOutline? BuildAndCache(string filePath, string lastWrite)
+    private FileOutline? BuildAndCache(string filePath, string repoRoot, string lastWrite)
     {
         string source;
         try { source = File.ReadAllText(filePath); }
@@ -93,7 +103,7 @@ public sealed class RoslynIndex : IDisposable
         var tree = CSharpSyntaxTree.ParseText(source);
         var root = tree.GetCompilationUnitRoot();
 
-        var outline = BuildOutline(root, filePath);
+        var outline = BuildOutline(root, filePath, repoRoot);
         var refs = ExtractTypeReferences(root);
 
         if (cache is not null)
@@ -116,10 +126,13 @@ public sealed class RoslynIndex : IDisposable
         };
     }
 
-    private static string BuildOutline(CompilationUnitSyntax root, string filePath)
+    private static string BuildOutline(CompilationUnitSyntax root, string filePath, string repoRoot)
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"// {Path.GetFileName(filePath)}");
+        // Repo-relative path so the model can `read` the file directly instead of
+        // guessing a path from a bare filename.
+        var relPath = Path.GetRelativePath(repoRoot, filePath).Replace('\\', '/');
+        sb.AppendLine($"// {relPath}");
 
         foreach (var type in root.DescendantNodes().OfType<TypeDeclarationSyntax>())
         {
@@ -132,7 +145,9 @@ public sealed class RoslynIndex : IDisposable
                 _ => "type"
             };
             var mods = string.Join(" ", type.Modifiers.Select(m => m.Text));
-            sb.AppendLine($"  {mods} {kind} {type.Identifier.Text}");
+            var ns = GetNamespace(type);
+            var qualifiedName = string.IsNullOrEmpty(ns) ? type.Identifier.Text : $"{ns}.{type.Identifier.Text}";
+            sb.AppendLine($"  {mods} {kind} {qualifiedName}");
 
             foreach (var member in type.Members)
             {
@@ -151,6 +166,16 @@ public sealed class RoslynIndex : IDisposable
         }
 
         return sb.ToString();
+    }
+
+    private static string GetNamespace(SyntaxNode node)
+    {
+        for (var current = node.Parent; current is not null; current = current.Parent)
+        {
+            if (current is BaseNamespaceDeclarationSyntax ns)
+                return ns.Name.ToString();
+        }
+        return "";
     }
 
     private static List<string> ExtractTypeReferences(CompilationUnitSyntax root)

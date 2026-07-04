@@ -78,6 +78,7 @@ public sealed class AgentLoop
         var cwd = workingDirectory;
         int turn = 0;
         int nudgeCount = 0;
+        int autoContinueAttempts = 0;
         var budget = ctx.TokenBudget;
         HashSet<string>? prevToolSigs = null;
         int consecutiveDuplicates = 0;
@@ -204,17 +205,44 @@ public sealed class AgentLoop
             var stopReason = response.StopReason;
 
             // Nudge tracking — tool use resets nudge. A normal text-only EndTurn is a completed
-            // response, not a request to invoke the model again.
+            // response, not a request to invoke the model again. Tool use is also the progress
+            // signal for auto-continue: it resets the retry budget so only a genuinely stalled
+            // agent (no progress between nudges) exhausts the attempts.
             if (toolCalls.Count > 0)
             {
                 nudgeCount = 0;
+                autoContinueAttempts = 0;
             }
             else if (stopReason is not (StopReason.EndTurn or StopReason.StopSequence))
             {
                 nudgeCount++;
                 if (config.Agent.NudgeLimit > 0 && nudgeCount >= config.Agent.NudgeLimit)
                 {
-                    yield return End(cwd, EndReason.NudgeLimitReached);
+                    // Recoverable stall: instead of ending, inject a targeted hint and give the
+                    // model another nudge window — bounded by auto_continue_max_attempts.
+                    if (config.Agent.AutoContinueOnNudge
+                        && autoContinueAttempts < config.Agent.AutoContinueMaxAttempts)
+                    {
+                        autoContinueAttempts++;
+                        nudgeCount = 0;
+                        var hint = stopReason == StopReason.MaxTokens
+                            ? "Your previous response was cut off by the output length limit. "
+                              + "Continue from exactly where you left off; do not restart."
+                            : "Your previous response did not make progress on the task. "
+                              + "Take the next concrete action now (use a tool to make a change or gather what you still need), "
+                              + "or, if the task is already complete, give your final answer to the user in plain text.";
+                        ctx.Messages.Add(new UserMessage([new TextBlock(hint)]));
+                        yield return new AutoContinued(
+                            autoContinueAttempts,
+                            config.Agent.AutoContinueMaxAttempts,
+                            stopReason == StopReason.MaxTokens ? "truncated output" : "no progress");
+                        continue;
+                    }
+
+                    var reason = stopReason == StopReason.MaxTokens
+                        ? EndReason.MaxTokens
+                        : EndReason.NoProgress;
+                    yield return End(cwd, reason);
                     yield break;
                 }
             }
@@ -236,15 +264,27 @@ public sealed class AgentLoop
                 if (repetition.IsDuplicate || repetition.IsRepeating)
                 {
                     consecutiveDuplicates++;
-                    foreach (var ev in ApplyToolLoopGuard(ctx, response, repetition.IsDuplicate))
+                    foreach (var ev in ApplyToolLoopGuard(ctx, response, repetition.IsDuplicate, consecutiveDuplicates))
                         yield return ev;
 
-                    if (consecutiveDuplicates >= 2)
+                    // Weak models can get stuck re-reading the same files without ever editing.
+                    // Rather than bail after the first repeat, give a few escalating, progress-guarded
+                    // chances to break out and act (the guard skips the repeated calls and the hint gets
+                    // firmer each time). Bounded by the auto-continue budget so a hopeless loop still ends.
+                    var repeatBailAt = config.Agent.AutoContinueOnNudge
+                        ? 1 + Math.Max(1, config.Agent.AutoContinueMaxAttempts)
+                        : 2;
+                    if (consecutiveDuplicates >= repeatBailAt)
                     {
                         yield return new TurnComplete(budget.UsedTokens, false);
-                        yield return End(cwd, EndReason.NudgeLimitReached);
+                        yield return End(cwd, EndReason.Repetition);
                         yield break;
                     }
+
+                    yield return new AutoContinued(
+                        consecutiveDuplicates,
+                        repeatBailAt - 1,
+                        "repeated tool calls — redirecting to make an edit");
                 }
                 else
                 {
@@ -268,7 +308,7 @@ public sealed class AgentLoop
                     if (consecutiveErrorTurns >= 4)
                     {
                         yield return new TurnComplete(budget.UsedTokens, false);
-                        yield return End(cwd, EndReason.NudgeLimitReached);
+                        yield return End(cwd, EndReason.ToolErrorStreak);
                         yield break;
                     }
                 }
@@ -299,6 +339,38 @@ public sealed class AgentLoop
             if (toolCalls.Count == 0
                 && stopReason is StopReason.EndTurn or StopReason.StopSequence)
             {
+                // A clean text-only turn normally means the model is done. But weaker models often
+                // announce the next step ("Let me implement this now.") and end the turn without
+                // acting — no work happens. Treat that as a recoverable stall: nudge and retry
+                // instead of stopping. Bounded by the shared auto-continue budget and progress-
+                // guarded (a tool call next turn resets it), so a genuine final answer still ends.
+                var endText = textBuilder.ToString();
+                var announced = LooksLikeAnnouncedNextStep(endText);
+                // In a headless run there is no user to answer, so a turn that ends by asking the
+                // user to clarify is a dead end — nudge the model to proceed on its own instead.
+                var askedUser = config.Agent.Headless && LooksLikeQuestionToUser(endText);
+                if (config.Agent.AutoContinueOnEndTurnIntent
+                    && autoContinueAttempts < config.Agent.AutoContinueMaxAttempts
+                    && (announced || askedUser))
+                {
+                    autoContinueAttempts++;
+                    nudgeCount = 0;
+                    var hint = askedUser
+                        ? "You are running autonomously with no user available to answer questions. "
+                          + "Do not ask for clarification. Make reasonable assumptions and complete the "
+                          + "task now by editing files with tools (e.g. Edit or Write)."
+                        : "You described the next step but did not take it. Do not just explain — "
+                          + "take that action now by calling a tool (e.g. Edit or Write to make the "
+                          + "change). If the task is already complete, say so explicitly as your "
+                          + "final answer instead.";
+                    ctx.Messages.Add(new UserMessage([new TextBlock(hint)]));
+                    yield return new AutoContinued(
+                        autoContinueAttempts,
+                        config.Agent.AutoContinueMaxAttempts,
+                        askedUser ? "asked the user a question in headless mode" : "announced next step without acting");
+                    continue;
+                }
+
                 yield return End(cwd, EndReason.ResponseComplete);
                 yield break;
             }
@@ -331,14 +403,21 @@ public sealed class AgentLoop
     private static List<LoopEvent> ApplyToolLoopGuard(
         LoopContext ctx,
         TurnResponse response,
-        bool isDuplicate)
+        bool isDuplicate,
+        int attempt)
     {
-        var hint = isDuplicate
-            ? "You are repeating the exact same tool calls as the previous turn. "
-              + "Do not use any tools. Synthesize the information already returned and respond to the user in plain text."
-            : "You keep repeating the same reads and searches without making progress. "
-              + "Stop gathering information. Either make a concrete change with Edit or Write, "
-              + "or respond in plain text with what you found or why you are blocked.";
+        // Escalate: the first hint nudges, later ones become an imperative demand to act, since a
+        // weak model that ignored the gentle hint needs a firmer push before the loop gives up.
+        var hint = attempt >= 2
+            ? "You are STILL repeating the same reads/searches and have made no edits. "
+              + "Stop reading immediately. Your very next action MUST be an Edit or Write tool call "
+              + "that changes a file. Do NOT call Read, Glob, Grep, or List again."
+            : isDuplicate
+                ? "You are repeating the exact same tool calls as the previous turn. "
+                  + "Do not use any tools. Synthesize the information already returned and respond to the user in plain text."
+                : "You keep repeating the same reads and searches without making progress. "
+                  + "Stop gathering information. Either make a concrete change with Edit or Write, "
+                  + "or respond in plain text with what you found or why you are blocked.";
         var events = new List<LoopEvent>(response.ToolCalls.Count);
         var blocks = new List<ContentBlock>(response.ToolCalls.Count);
         for (var i = 0; i < response.ToolCalls.Count; i++)
@@ -693,6 +772,91 @@ public sealed class AgentLoop
 
     private static bool IsContextLengthError(Exception ex) =>
         ex is ProviderException { Error: ContextLengthError };
+
+    // Phrases a model uses to announce an action it is about to take.
+    private static readonly string[] IntentLeads =
+    [
+        "let me", "let's", "let us", "i'll", "i will", "i am going to", "i'm going to",
+        "i am now going to", "i'm now going to", "now i", "now let me", "next i", "next, i",
+        "going to", "i'll now", "let me now", "i'll go ahead", "let me go ahead",
+        "i'll proceed", "let me proceed", "proceeding to", "time to", "let me start",
+    ];
+
+    // Action verbs that indicate task work (not a closing remark) follows the intent lead.
+    private static readonly string[] IntentActions =
+    [
+        "implement", "add", "fix", "update", "create", "write", "edit", "modify", "change",
+        "start", "begin", "make", "apply", "build", "refactor", "continue", "proceed", "do",
+        "handle", "wire", "set up", "read", "check", "look", "examine", "inspect",
+        "investigate", "explore", "search", "find", "run", "test", "rewrite", "remove",
+        "delete", "rename", "move", "replace", "correct",
+    ];
+
+    /// <summary>
+    /// True when a text-only response reads like the model announced its next action but stopped
+    /// before taking it (e.g. "Let me implement the feature now."). Only the trailing line is
+    /// examined — a genuine final answer rarely *ends* by announcing more work. "Let me know…"
+    /// (a closing pleasantry) is explicitly excluded.
+    /// </summary>
+    internal static bool LooksLikeAnnouncedNextStep(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        var tail = text.TrimEnd();
+        var lastBreak = tail.LastIndexOfAny(['\n', '\r']);
+        if (lastBreak >= 0)
+            tail = tail[(lastBreak + 1)..];
+        var lower = tail.Trim().ToLowerInvariant();
+        if (lower.Length == 0 || lower.Contains("let me know"))
+            return false;
+
+        foreach (var lead in IntentLeads)
+        {
+            var idx = lower.IndexOf(lead, StringComparison.Ordinal);
+            if (idx < 0)
+                continue;
+
+            var after = lower[(idx + lead.Length)..];
+            // "Let me implement this:" — trailing colon is itself an announced-but-unfinished cue.
+            if (after.TrimEnd().EndsWith(':'))
+                return true;
+            foreach (var action in IntentActions)
+                if (System.Text.RegularExpressions.Regex.IsMatch(
+                        after,
+                        $@"\b{System.Text.RegularExpressions.Regex.Escape(action)}\b"))
+                    return true;
+        }
+
+        return false;
+    }
+
+    // Second-person cues that a response is asking the user to clarify or decide, rather than acting.
+    private static readonly string[] QuestionCues =
+    [
+        "could you", "can you", "would you", "do you want", "do you mean", "did you mean",
+        "should i", "shall i", "please clarify", "please confirm", "please specify",
+        "please provide", "let me know", "which ", "what's your", "what is your", "your name",
+        "can you clarify", "can you confirm", "to confirm", "which one",
+    ];
+
+    /// <summary>
+    /// True when a text-only response ends by asking the user to clarify/decide (contains a question
+    /// mark and a second-person clarification cue). In headless runs no user can answer, so this is a
+    /// dead end the loop should recover from rather than treat as completion.
+    /// </summary>
+    internal static bool LooksLikeQuestionToUser(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text) || !text.Contains('?'))
+            return false;
+
+        var tail = text.Length > 600 ? text[^600..] : text;
+        var lower = tail.ToLowerInvariant();
+        foreach (var cue in QuestionCues)
+            if (lower.Contains(cue, StringComparison.Ordinal))
+                return true;
+        return false;
+    }
 
     private sealed class ExecuteToolsResult
     {

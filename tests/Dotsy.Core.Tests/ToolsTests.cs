@@ -62,6 +62,46 @@ public sealed class ToolsTests
     }
 
     [TestMethod]
+    public async Task ShellTool_BlocksWholesaleWorktreeWipes()
+    {
+        var tool = new ShellTool();
+        string[] dangerous =
+        [
+            "git checkout -- .",
+            "git checkout .",
+            "git reset --hard",
+            "git reset --hard HEAD",
+            "git clean -fd",
+            "git restore .",
+            "dotnet build && git checkout -- .",
+        ];
+        foreach (var cmd in dangerous)
+        {
+            var result = await tool.ExecuteAsync(
+                Args($$"""{"command":"{{JsonPath(cmd)}}"}"""), Ctx(), CancellationToken.None);
+            Assert.IsTrue(result.IsError, $"expected block for: {cmd}");
+            StringAssert.Contains(result.Content, "discard ALL uncommitted", $"wrong message for: {cmd}");
+        }
+    }
+
+    [TestMethod]
+    public async Task ShellTool_AllowsSingleFileCheckoutAndNormalCommands()
+    {
+        var tool = new ShellTool();
+        // Reverting a single named file is allowed (not a wholesale wipe); it may fail because the
+        // temp dir isn't a git repo, but it must NOT be blocked by our guard.
+        var single = await tool.ExecuteAsync(
+            Args("""{"command":"git checkout -- src/Foo.cs"}"""), Ctx(), CancellationToken.None);
+        Assert.IsFalse(single.Content.Contains("discard ALL uncommitted", StringComparison.Ordinal),
+            "single-file checkout must not be blocked");
+
+        var echo = await tool.ExecuteAsync(
+            Args("""{"command":"echo safe"}"""), Ctx(), CancellationToken.None);
+        Assert.IsFalse(echo.IsError, echo.Content);
+        StringAssert.Contains(echo.Content, "safe");
+    }
+
+    [TestMethod]
     public async Task ReadTool_ReturnsNumberedLinesAndTruncationNotice()
     {
         await File.WriteAllTextAsync(Path.Combine(_tmpDir, "notes.txt"), "one\ntwo\nthree");

@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Dotsy.Core.Tools;
 using Dotsy.Core.Tools.Interfaces;
 
@@ -26,11 +27,18 @@ public record CompactionOccurred(int TokensBefore, int TokensAfter, string Summa
 public record LoopEnded(EndReason Reason, string? Message = null) : LoopEvent;
 
 public record PermissionRequired(
-    ITool Tool,
+    [property: JsonIgnore] ITool Tool,
     string ToolName,
     string DisplayArgument,
-    TaskCompletionSource<PermissionDecision> Decision) : LoopEvent;
+    [property: JsonIgnore] TaskCompletionSource<PermissionDecision> Decision) : LoopEvent;
 
 public record RetryScheduled(int AttemptNumber, int MaxAttempts, int DelaySeconds) : LoopEvent;
 
 public record ReflectionOccurred(string Error) : LoopEvent;
+
+/// <summary>
+/// Emitted when the loop hits the nudge limit but auto-continue (agent.auto_continue_on_nudge)
+/// injects a recovery hint and retries instead of ending. <paramref name="Reason"/> is the
+/// stuck condition being recovered from.
+/// </summary>
+public record AutoContinued(int Attempt, int MaxAttempts, string Reason) : LoopEvent;

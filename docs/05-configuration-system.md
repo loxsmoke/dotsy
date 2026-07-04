@@ -52,7 +52,11 @@ max_steps            = 0               # currently reserved; 0 = unlimited
 max_turns            = 1000            # hard ceiling; 0 = unlimited
 parallel_tools       = true            # execute eligible tools concurrently
 auto_commit          = false           # git auto-commit after file edits
-nudge_limit          = 3               # max consecutive non-terminal text-only turns before stopping
+nudge_limit          = 3               # max consecutive non-terminal text-only turns before stopping (headless)
+interactive_nudge_limit = 3            # nudge limit used by the TUI (1 = yield after one stalled turn)
+auto_continue_on_nudge = true          # on a recoverable nudge, inject a hint and retry instead of stopping
+auto_continue_max_attempts = 3         # max progress-guarded auto-continue retries before giving up
+auto_continue_on_end_turn_intent = true # retry when a text-only turn announces the next step but calls no tool
 repeat_window_turns  = 8               # rolling window for repeated tool-call detection
 repeat_threshold     = 3               # 0 disables repeated tool-call nudging
 auto_lint            = false           # run dotnet build after writes and reflect on errors

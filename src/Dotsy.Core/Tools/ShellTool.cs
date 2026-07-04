@@ -29,6 +29,9 @@ public sealed class ShellTool : ITool
         var command = input.GetProperty("command").GetString() ?? "";
         int timeoutMs = input.TryGetProperty("timeout_ms", out var t) ? t.GetInt32() : DefaultTimeoutMs;
 
+        if (WorktreeWipe(command) is { } blockedReason)
+            return ToolResult.Err(blockedReason);
+
         var (fileName, args) = ParseCommand(command);
 
         using var proc = new Process
@@ -81,6 +84,39 @@ public sealed class ShellTool : ITool
         return proc.ExitCode == 0
             ? ToolResult.Ok(output)
             : ToolResult.Err($"Exit code {proc.ExitCode}\n{output}");
+    }
+
+    // Regexes for commands that discard ALL uncommitted work in one shot. Reverting a single named
+    // file is left alone — only wholesale wipes are blocked.
+    private static readonly (System.Text.RegularExpressions.Regex Rx, string What)[] WorktreeWipes =
+    [
+        (new(@"\bgit\s+reset\s+(--\S+\s+)*--hard\b", RxOpts), "git reset --hard"),
+        (new(@"\bgit\s+checkout\s+(-f\s+|--force\s+|HEAD\s+|\S+\s+)*(--\s+)?(\.|:/|\*)(\s|$|&|;|\|)", RxOpts), "git checkout of the whole tree"),
+        (new(@"\bgit\s+restore\s+(?!.*--staged\b)(--worktree\s+|--source\S*\s+|\S+\s+)*(--\s+)?(\.|:/|\*)(\s|$|&|;|\|)", RxOpts), "git restore of the whole tree"),
+        (new(@"\bgit\s+clean\s+-\S*f", RxOpts), "git clean -f"),
+    ];
+
+    private const System.Text.RegularExpressions.RegexOptions RxOpts =
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase
+        | System.Text.RegularExpressions.RegexOptions.CultureInvariant;
+
+    /// <summary>
+    /// Returns a block message if the command would discard all uncommitted changes in the working
+    /// tree (reverting/resetting/cleaning everything) — a destructive action that can wipe in-progress
+    /// work, including the agent's own edits. Returns null for safe commands (including reverting a
+    /// single named file, which is allowed). This is a hard rail even under --yolo.
+    /// </summary>
+    internal static string? WorktreeWipe(string command)
+    {
+        foreach (var (rx, what) in WorktreeWipes)
+        {
+            if (rx.IsMatch(command))
+                return $"Blocked: `{command.Trim()}` would discard ALL uncommitted changes in the working "
+                     + $"tree ({what}), including work from this session. Do not revert the whole tree. Fix the "
+                     + "specific problem forward with Edit/Write. To undo one file you broke, check out that "
+                     + "single file by name (e.g. `git checkout -- path/to/File.cs`).";
+        }
+        return null;
     }
 
     private static (string fileName, string args) ParseCommand(string command)

@@ -2,6 +2,7 @@ using System.CommandLine;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using Dotsy.Cli;
 using Dotsy.Cli.Tui;
 using Dotsy.Cli.Tui.Colors;
 using Dotsy.Core.Config;
@@ -206,8 +207,10 @@ static async Task RunTui(
         config.Compaction.KeepRecentTokens,
         restoredUsedTokens);
 
-    // End agent turn after one text-only response so the user can reply
-    config.Agent.NudgeLimit = 1;
+    // Interactive sessions yield to the user after a configurable number of stalled responses
+    // (default 3). Auto-continue (agent.auto_continue_on_nudge) can still recover a stall before
+    // the turn ends. Set agent.interactive_nudge_limit = 1 to restore the old yield-immediately UX.
+    config.Agent.NudgeLimit = config.Agent.InteractiveNudgeLimit;
 
     var loop = new AgentLoop(provider, registry, permissions, config, sessionStore: sessionStore, trajectory: trajectory);
 
@@ -371,6 +374,9 @@ static async Task<int> RunHeadless(
         return 1;
     }
 
+    // No interactive user to answer clarifying questions in a headless run.
+    config.Agent.Headless = true;
+
     var sw = Stopwatch.StartNew();
     IProvider provider;
     try
@@ -474,7 +480,7 @@ static async Task<int> RunHeadless(
                     _ => 0
                 };
             }
-            var line = JsonSerializer.Serialize(new { type = ev.GetType().Name, data = ev });
+            var line = HeadlessStreamJson.Format(ev);
             Console.WriteLine(line);
         }
     }
@@ -574,7 +580,7 @@ static async Task<int> RunHeadlessCompact(
         {
             if (ev is CompactionOccurred co)
                 compacted = co;
-            Console.WriteLine(JsonSerializer.Serialize(new { type = ev.GetType().Name, data = ev }));
+            Console.WriteLine(HeadlessStreamJson.Format(ev));
         }
     }
     else
