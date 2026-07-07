@@ -448,6 +448,36 @@ public sealed class ToolsTests
     }
 
     [TestMethod]
+    public async Task TodoTool_CreateSection_BootstrapsMissingFile()
+    {
+        // Regression: create_section used to fail with "todo.md not found" when no file existed,
+        // making it impossible to start a plan in a fresh project.
+        var path = Path.Combine(_tmpDir, TodoTool.FileName);
+        Assert.IsFalse(File.Exists(path), "precondition: no todo.md yet");
+
+        var result = await new TodoTool().ExecuteAsync(
+            Args("""{"action":"create_section","title":"Plan: OAuth login"}"""),
+            Ctx(),
+            CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        Assert.IsTrue(File.Exists(path), "create_section should bootstrap todo.md");
+        StringAssert.Contains(await File.ReadAllTextAsync(path), "## Plan: OAuth login");
+    }
+
+    [TestMethod]
+    public async Task TodoTool_ListSections_NoFile_ReturnsEmptyNotError()
+    {
+        var result = await new TodoTool().ExecuteAsync(
+            Args("""{"action":"list_sections"}"""),
+            Ctx(),
+            CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, "listing with no todo.md should not be an error");
+        StringAssert.Contains(result.Content, "no tasks");
+    }
+
+    [TestMethod]
     public async Task TodoTool_ListTasks_FiltersBySection()
     {
         await File.WriteAllTextAsync(Path.Combine(_tmpDir, TodoTool.FileName), SampleTodo);
@@ -600,13 +630,16 @@ public sealed class ToolsTests
     [TestMethod]
     public async Task TodoTool_MissingFile_ReturnsError()
     {
+        // With no todo.md, a mutation that needs existing content still errors — and now points at
+        // create_section (reads and create_section themselves no longer error; see other tests).
         var result = await new TodoTool().ExecuteAsync(
-            Args("""{"action":"list_tasks"}"""),
+            Args("""{"action":"edit_section","section":"1","title":"x"}"""),
             Ctx(),
             CancellationToken.None);
 
         Assert.IsTrue(result.IsError);
         StringAssert.Contains(result.Content, "not found");
+        StringAssert.Contains(result.Content, "create_section");
     }
 
     [TestMethod]

@@ -31,7 +31,7 @@ public sealed class RequestBuilderTests
         var config = Config(contextWindow: 1_000, reserve: 100);
         var ctx    = new LoopContext
         {
-            TokenBudget = new TokenBudget(1_000, 100, 500, 0)
+            TokenBudget = new TokenBudget(1_000, 100, 500, 0, 0.9f)
         };
 
         var systemPrompt = new string('x', 4_000); // ~1000 tokens (4 chars/token)
@@ -52,7 +52,7 @@ public sealed class RequestBuilderTests
         var config = Config(contextWindow: usable + 1_000, reserve: 1_000);
         var ctx    = new LoopContext
         {
-            TokenBudget = new TokenBudget(usable + 1_000, 1_000, 500, 0)
+            TokenBudget = new TokenBudget(usable + 1_000, 1_000, 500, 0, 0.9f)
         };
 
         // Each message is 2000 chars ≈ 500 tokens

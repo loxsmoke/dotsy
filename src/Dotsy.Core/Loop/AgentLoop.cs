@@ -11,10 +11,11 @@ using Dotsy.Core.Session.Data;
 using Dotsy.Core.Skills;
 using Dotsy.Core.Tools;
 using Dotsy.Core.Tools.Interfaces;
+using Dotsy.Core.Utils;
 
 namespace Dotsy.Core.Loop;
 
-public sealed class AgentLoop
+public sealed partial class AgentLoop
 {
     /// <summary>
     /// The provider used to generate responses and stream events. This is typically an LLM provider.
@@ -90,6 +91,7 @@ public sealed class AgentLoop
 
         while (!ct.IsCancellationRequested)
         {
+            // Check turn limit
             if (config.Agent.MaxTurns > 0 && turn >= config.Agent.MaxTurns)
             {
                 yield return End(cwd, EndReason.TurnLimitReached);
@@ -97,7 +99,7 @@ public sealed class AgentLoop
             }
 
             // Compact before declaring the context full so a large previous turn can recover.
-            if (config.Compaction.Enabled && ShouldCompact(budget))
+            if (config.Compaction.Enabled && budget.ShouldCompact)
             {
                 var compacted = false;
                 await foreach (var ev in CompactAsync(ctx, cwd, ct))
@@ -111,7 +113,7 @@ public sealed class AgentLoop
             }
 
             // Check token budget
-            if (budget.ContextWindow > 0 && budget.UsedTokens > budget.ContextWindow - budget.ReserveTokens)
+            if (budget.ContextWindow > 0 && budget.UsedTokens > budget.Usable)
             {
                 yield return End(cwd, EndReason.ContextTooSmall);
                 yield break;
@@ -328,10 +330,35 @@ public sealed class AgentLoop
             ctx.TurnCount = turn;
 
             if (config.Compaction.ToolPairSummarize)
-                _ = ToolPairSummarizer.SummarizeOldPairsInBackground(ctx);
+                _ = ToolPairSummarizer.SummarizeOldPairsInBackground(
+                    ctx, preserveLatestReads: config.Compaction.PreserveLatestReads);
 
             if (signalCompletion)
             {
+                // Completion guard: weaker models often signal Done while narrating a "build
+                // succeeded" that never happened — the most recent build actually exited non-zero.
+                // Refuse the completion, tell the model the build is red, and retry. Bounded by
+                // AutoContinueMaxAttempts and progress-guarded (a passing build clears the flag),
+                // so a genuine green completion still ends immediately.
+                if (config.Agent.VerifyBuildBeforeComplete
+                    && ctx.LastBuildFailed == true
+                    && ctx.BuildGuardTrips < config.Agent.AutoContinueMaxAttempts)
+                {
+                    ctx.BuildGuardTrips++;
+                    nudgeCount = 0;
+                    autoContinueAttempts = 0;
+                    ctx.Messages.Add(new UserMessage([new TextBlock(
+                        "You signaled completion, but the most recent build/test command exited "
+                        + "non-zero — the build is FAILING. The task is NOT complete; do not claim "
+                        + "success. Re-run the build, read the exact errors, fix them by editing "
+                        + "files, and only signal completion after the build exits 0.")]));
+                    yield return new AutoContinued(
+                        ctx.BuildGuardTrips,
+                        config.Agent.AutoContinueMaxAttempts,
+                        "completion signaled over a failing build");
+                    continue;
+                }
+
                 yield return End(cwd, EndReason.TaskComplete);
                 yield break;
             }
@@ -345,10 +372,10 @@ public sealed class AgentLoop
                 // instead of stopping. Bounded by the shared auto-continue budget and progress-
                 // guarded (a tool call next turn resets it), so a genuine final answer still ends.
                 var endText = textBuilder.ToString();
-                var announced = LooksLikeAnnouncedNextStep(endText);
+                var announced = AgentLoopHeuristics.LooksLikeAnnouncedNextStep(endText);
                 // In a headless run there is no user to answer, so a turn that ends by asking the
                 // user to clarify is a dead end — nudge the model to proceed on its own instead.
-                var askedUser = config.Agent.Headless && LooksLikeQuestionToUser(endText);
+                var askedUser = config.Agent.Headless && AgentLoopHeuristics.LooksLikeQuestionToUser(endText);
                 if (config.Agent.AutoContinueOnEndTurnIntent
                     && autoContinueAttempts < config.Agent.AutoContinueMaxAttempts
                     && (announced || askedUser))
@@ -382,7 +409,7 @@ public sealed class AgentLoop
                 continue;
 
             // --- Compaction check (section 18, done inline here) ---
-            if (config.Compaction.Enabled && ShouldCompact(budget))
+            if (config.Compaction.Enabled && budget.ShouldCompact)
             {
                 await foreach (var ev in CompactAsync(ctx, cwd, ct))
                     yield return ev;
@@ -529,23 +556,6 @@ public sealed class AgentLoop
         });
     }
 
-    private sealed class TurnResponse(int nextToolEventIndex, TokenBudget budget)
-    {
-        public StringBuilder Text { get; } = new();
-        public StringBuilder Thinking { get; } = new();
-        public List<(string Id, string Name, string Args)> ToolCalls { get; } = [];
-        public Dictionary<string, int> PendingToolIndex { get; } = [];
-        public int NextToolEventIndex { get; set; } = nextToolEventIndex;
-        public TokenBudget Budget { get; set; } = budget;
-        public bool HadError { get; set; }
-        public Exception? ContextLengthError { get; set; }
-        public StopReason? StopReason { get; set; }
-        public int InputTokens { get; set; }
-        public int OutputTokens { get; set; }
-        public int CacheReadTokens { get; set; }
-        public int CacheWriteTokens { get; set; }
-    }
-
     private async IAsyncEnumerable<LoopEvent> StreamResponseAsync(
         ChatRequest request,
         LoopContext ctx,
@@ -579,20 +589,12 @@ public sealed class AgentLoop
                 case UsageUpdate usage:
                     response.Budget = response.Budget.WithUsed(usage.InputTokens + usage.OutputTokens);
                     ctx.TokenBudget = response.Budget;
-                    trajectoryRecorder?.RecordUsage(
-                        usage.InputTokens,
-                        usage.OutputTokens,
-                        usage.CacheReadTokens,
-                        usage.CacheWriteTokens);
+                    trajectoryRecorder?.RecordUsage(usage);
                     response.InputTokens = usage.InputTokens;
                     response.OutputTokens = usage.OutputTokens;
                     response.CacheReadTokens = usage.CacheReadTokens;
                     response.CacheWriteTokens = usage.CacheWriteTokens;
-                    yield return new TokenUsageUpdated(
-                        usage.InputTokens,
-                        usage.OutputTokens,
-                        usage.CacheReadTokens,
-                        usage.CacheWriteTokens);
+                    yield return new TokenUsageUpdated(usage);
                     break;
 
                 case StreamEnd streamEnd:
@@ -648,7 +650,7 @@ public sealed class AgentLoop
         if (response.Thinking.Length > 0)
             assistantBlocks.Add(new ThinkingBlock(response.Thinking.ToString()));
         foreach (var (id, name, args) in response.ToolCalls)
-            assistantBlocks.Add(new ToolUseBlock(id, name, TryParseArgs(args)));
+            assistantBlocks.Add(new ToolUseBlock(id, name, ToolArgs.TryParseArgs(args)));
         ctx.Messages.Add(new AssistantMessage(assistantBlocks));
 
         if (sessionStore is null || (response.Text.Length == 0 && response.ToolCalls.Count == 0))
@@ -711,11 +713,6 @@ public sealed class AgentLoop
         return new LoopEnded(reason, message);
     }
 
-    private bool ShouldCompact(TokenBudget budget) =>
-        budget.ContextWindow > 0
-        && config.Compaction.ThresholdPct > 0
-        && budget.UsagePct >= config.Compaction.ThresholdPct;
-
     private string? BuildRepoMap(string cwd, LoopContext ctx)
     {
         if (config.Retrieval.RepoMapTokens <= 0)
@@ -772,101 +769,6 @@ public sealed class AgentLoop
 
     private static bool IsContextLengthError(Exception ex) =>
         ex is ProviderException { Error: ContextLengthError };
-
-    // Phrases a model uses to announce an action it is about to take.
-    private static readonly string[] IntentLeads =
-    [
-        "let me", "let's", "let us", "i'll", "i will", "i am going to", "i'm going to",
-        "i am now going to", "i'm now going to", "now i", "now let me", "next i", "next, i",
-        "going to", "i'll now", "let me now", "i'll go ahead", "let me go ahead",
-        "i'll proceed", "let me proceed", "proceeding to", "time to", "let me start",
-    ];
-
-    // Action verbs that indicate task work (not a closing remark) follows the intent lead.
-    private static readonly string[] IntentActions =
-    [
-        "implement", "add", "fix", "update", "create", "write", "edit", "modify", "change",
-        "start", "begin", "make", "apply", "build", "refactor", "continue", "proceed", "do",
-        "handle", "wire", "set up", "read", "check", "look", "examine", "inspect",
-        "investigate", "explore", "search", "find", "run", "test", "rewrite", "remove",
-        "delete", "rename", "move", "replace", "correct",
-    ];
-
-    /// <summary>
-    /// True when a text-only response reads like the model announced its next action but stopped
-    /// before taking it (e.g. "Let me implement the feature now."). Only the trailing line is
-    /// examined — a genuine final answer rarely *ends* by announcing more work. "Let me know…"
-    /// (a closing pleasantry) is explicitly excluded.
-    /// </summary>
-    internal static bool LooksLikeAnnouncedNextStep(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-            return false;
-
-        var tail = text.TrimEnd();
-        var lastBreak = tail.LastIndexOfAny(['\n', '\r']);
-        if (lastBreak >= 0)
-            tail = tail[(lastBreak + 1)..];
-        var lower = tail.Trim().ToLowerInvariant();
-        if (lower.Length == 0 || lower.Contains("let me know"))
-            return false;
-
-        foreach (var lead in IntentLeads)
-        {
-            var idx = lower.IndexOf(lead, StringComparison.Ordinal);
-            if (idx < 0)
-                continue;
-
-            var after = lower[(idx + lead.Length)..];
-            // "Let me implement this:" — trailing colon is itself an announced-but-unfinished cue.
-            if (after.TrimEnd().EndsWith(':'))
-                return true;
-            foreach (var action in IntentActions)
-                if (System.Text.RegularExpressions.Regex.IsMatch(
-                        after,
-                        $@"\b{System.Text.RegularExpressions.Regex.Escape(action)}\b"))
-                    return true;
-        }
-
-        return false;
-    }
-
-    // Second-person cues that a response is asking the user to clarify or decide, rather than acting.
-    private static readonly string[] QuestionCues =
-    [
-        "could you", "can you", "would you", "do you want", "do you mean", "did you mean",
-        "should i", "shall i", "please clarify", "please confirm", "please specify",
-        "please provide", "let me know", "which ", "what's your", "what is your", "your name",
-        "can you clarify", "can you confirm", "to confirm", "which one",
-    ];
-
-    /// <summary>
-    /// True when a text-only response ends by asking the user to clarify/decide (contains a question
-    /// mark and a second-person clarification cue). In headless runs no user can answer, so this is a
-    /// dead end the loop should recover from rather than treat as completion.
-    /// </summary>
-    internal static bool LooksLikeQuestionToUser(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text) || !text.Contains('?'))
-            return false;
-
-        var tail = text.Length > 600 ? text[^600..] : text;
-        var lower = tail.ToLowerInvariant();
-        foreach (var cue in QuestionCues)
-            if (lower.Contains(cue, StringComparison.Ordinal))
-                return true;
-        return false;
-    }
-
-    private sealed class ExecuteToolsResult
-    {
-        public required ToolRunResult[] Results { get; init; }
-        public bool AnyWriteTools { get; set; }
-        public bool SignalCompletion { get; set; }
-        public List<string> AffectedPaths { get; } = [];
-    }
-
-    private sealed record ToolRunResult(ToolResult Result, long DurationMs, long ApprovalWaitMs);
 
     private async Task<ExecuteToolsResult> ExecuteTools(
         LoopContext ctx,
@@ -926,6 +828,11 @@ public sealed class AgentLoop
             if (toolRegistry.TryGetTool(name, out var completionTool) && completionTool?.IsCompletionSignal == true)
                 signalCompletion = true;
 
+            // Track the outcome of build/test commands so the completion guard can refuse a Done
+            // signal issued over a failing build.
+            if (AgentLoopHeuristics.LooksLikeBuildCommand(name, args))
+                ctx.LastBuildFailed = results[i].Result.IsError;
+
             if (results[i] is { Result.IsError: false } && TryGetPathArgument(name, args) is { } path)
                 affectedPaths.Add(path);
         }
@@ -942,8 +849,63 @@ public sealed class AgentLoop
             && !string.Equals(toolName, MultiEditTool.ToolName, StringComparison.Ordinal))
             return null;
 
-        var input = TryParseArgs(args);
+        var input = ToolArgs.TryParseArgs(args);
         return input.TryGetProperty("path", out var pathEl) ? pathEl.GetString() : null;
+    }
+
+    // Returns a de-dupe stub for a repeat Read whose content is still live in context, else null.
+    private static string? TryReadDedupeStub(LoopContext ctx, string cwd, System.Text.Json.JsonElement args)
+    {
+        if (!TryResolveReadTarget(cwd, args, out var path, out var mtime, out var size, out var offset, out var limit))
+            return null;
+        // Snapshot messages under the same lock the summarizer uses, to read them safely while a
+        // background summarize may be mutating the list.
+        List<Message> snapshot;
+        lock (ctx.Messages) snapshot = new List<Message>(ctx.Messages);
+        return ReadDedup.StubForRepeatRead(ctx.ReadCache, snapshot, path, mtime, size, offset, limit);
+    }
+
+    private static void RememberRead(LoopContext ctx, string cwd, System.Text.Json.JsonElement args, string content)
+    {
+        if (TryResolveReadTarget(cwd, args, out var path, out var mtime, out var size, out var offset, out var limit))
+            ctx.ReadCache[path] = new ReadCacheEntry(mtime, size, offset, limit, content);
+    }
+
+    private static bool TryResolveReadTarget(
+        string cwd, System.Text.Json.JsonElement args,
+        out string path, out long mtime, out long size, out int offset, out int limit)
+    {
+        path = ""; mtime = 0; size = 0; offset = 0; limit = 0;
+        try
+        {
+            path = ReadTool.ResolvePath(args, cwd);
+            var fi = new System.IO.FileInfo(path);
+            if (!fi.Exists) return false;
+            mtime = fi.LastWriteTimeUtc.Ticks;
+            size = fi.Length;
+            (offset, limit) = ParseReadRange(args);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    // Mirrors ReadTool's offset/limit resolution so the cache key matches what was actually read.
+    private static (int Offset, int Limit) ParseReadRange(System.Text.Json.JsonElement input)
+    {
+        int? startLine = FlexInt(input, "start_line");
+        int? endLine = FlexInt(input, "end_line");
+        int offset = FlexInt(input, "offset") ?? (startLine.HasValue ? Math.Max(0, startLine.Value - 1) : 0);
+        int limit = FlexInt(input, "limit")
+            ?? (startLine.HasValue && endLine.HasValue ? Math.Max(1, endLine.Value - startLine.Value + 1) : 2000);
+        return (offset, Math.Min(limit, 2000));
+    }
+
+    private static int? FlexInt(System.Text.Json.JsonElement o, string key)
+    {
+        if (!o.TryGetProperty(key, out var v)) return null;
+        if (v.ValueKind == System.Text.Json.JsonValueKind.Number && v.TryGetInt32(out var n)) return n;
+        if (v.ValueKind == System.Text.Json.JsonValueKind.String && int.TryParse(v.GetString(), out var s)) return s;
+        return null;
     }
 
     private async Task<ToolRunResult> RunSingleTool(
@@ -977,6 +939,9 @@ public sealed class AgentLoop
                         break;
                     case PermissionDecision.AllowForProject:
                         permissions.AllowWriteForProject();
+                        // For a write outside cwd, also remember its project (repo) root so sibling
+                        // files there aren't re-prompted — the in-cwd allowance above never covers them.
+                        permissions.AllowWriteRootForOutside(toolName, args);
                         break;
                     case PermissionDecision.AllowOnce:
                         permissions.AllowForSession(toolName, args);
@@ -990,7 +955,16 @@ public sealed class AgentLoop
         }
 
         var prompter = PermissionPrompter;
-        var argsElement = TryParseArgs(args);
+        var argsElement = ToolArgs.TryParseArgs(args);
+
+        // Read de-duplication: skip re-reading a file whose content is still live in context.
+        if (config.Agent.DedupeReads && string.Equals(toolName, ReadTool.ToolName, StringComparison.Ordinal))
+        {
+            var stub = TryReadDedupeStub(ctx, cwd, argsElement);
+            if (stub is not null)
+                return new ToolRunResult(ToolResult.Ok(stub), 0, 0);
+        }
+
         var toolCtx = new ToolContext
         {
             Cwd = cwd,
@@ -1014,6 +988,9 @@ public sealed class AgentLoop
         {
             var result = await tool.ExecuteAsync(argsElement, toolCtx, ct);
             runSw.Stop();
+            if (config.Agent.DedupeReads && !result.IsError
+                && string.Equals(toolName, ReadTool.ToolName, StringComparison.Ordinal))
+                RememberRead(ctx, cwd, argsElement, result.Content);
             return new ToolRunResult(result, Math.Max(0, runSw.ElapsedMilliseconds - nestedApprovalWaitMs), approvalWaitMs);
         }
         catch (Exception ex)
@@ -1195,31 +1172,6 @@ public sealed class AgentLoop
         return sb.ToString();
     }
 
-    private static System.Text.Json.JsonElement TryParseArgs(string args)
-    {
-        if (string.IsNullOrWhiteSpace(args))
-            return System.Text.Json.JsonDocument.Parse("{}").RootElement;
-        try
-        {
-            var el = System.Text.Json.JsonDocument.Parse(args).RootElement;
-            // Some models double-encode tool arguments as a JSON string (e.g. "{\"path\":...}").
-            // Unwrap one level when the string itself parses as an object/array.
-            if (el.ValueKind == System.Text.Json.JsonValueKind.String
-                && el.GetString() is { Length: > 0 } inner)
-            {
-                try
-                {
-                    var unwrapped = System.Text.Json.JsonDocument.Parse(inner).RootElement;
-                    if (unwrapped.ValueKind is System.Text.Json.JsonValueKind.Object
-                        or System.Text.Json.JsonValueKind.Array)
-                        return unwrapped;
-                }
-                catch { /* not double-encoded JSON; fall through */ }
-            }
-            return el;
-        }
-        catch { return System.Text.Json.JsonDocument.Parse("{}").RootElement; }
-    }
 
     private void GitCheckpoint(string cwd, LoopContext ctx, StringBuilder textBuilder, 
         int turn, IReadOnlyList<string>? affectedPaths)

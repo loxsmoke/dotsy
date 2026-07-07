@@ -1,4 +1,5 @@
 using Dotsy.Cli.Tui.Colors;
+using Dotsy.Cli.Tui.Renderers;
 using Dotsy.Cli.Tui.ToolList;
 using Dotsy.Core.Providers;
 using Dotsy.Core.Session.Data;
@@ -18,16 +19,22 @@ public partial class AgentWindow
         var cwd = loaded.Cwd ?? TuiSessionContext.Cwd;
         var pendingTools = new Dictionary<string, RestoredTool>(StringComparer.Ordinal);
         var currentTurn = 0;
+        var currentGroup = 0;
 
         foreach (var message in loaded.Messages)
         {
             switch (message)
             {
                 case UserMessage user:
+                    // A real user prompt (has text, not just tool results) starts a new tool-call
+                    // group, matching the live path where all of a prompt's calls share one group id
+                    // so the panel draws grouping brackets around them.
+                    if (user.Content.OfType<TextBlock>().Any(b => !string.IsNullOrWhiteSpace(b.Text)))
+                        currentGroup = ++toolCallGroupSeq;
                     RenderRestoredUser(user, pendingTools);
                     break;
                 case AssistantMessage assistant:
-                    RenderRestoredAssistant(assistant, cwd, pendingTools, currentTurn);
+                    RenderRestoredAssistant(assistant, cwd, pendingTools, currentTurn, currentGroup);
                     currentTurn++;
                     break;
             }
@@ -53,7 +60,8 @@ public partial class AgentWindow
         AssistantMessage assistant,
         string cwd,
         Dictionary<string, RestoredTool> pendingTools,
-        int turnNumber)
+        int turnNumber,
+        int group)
     {
         var wroteAgentHeader = false;
         foreach (var block in assistant.Content)
@@ -66,7 +74,8 @@ public partial class AgentWindow
                         AppendConvo("Agent \u203a ", Palette.Bullet);
                         wroteAgentHeader = true;
                     }
-                    AppendConvo(text.Text.TrimEnd() + "\n", Palette.Normal);
+                    RenderRestoredMarkdown(text.Text.TrimEnd());
+                    AppendConvo("\n", Palette.Normal);
                     break;
 
                 case ThinkingBlock thinking when !string.IsNullOrWhiteSpace(thinking.Thinking):
@@ -75,7 +84,7 @@ public partial class AgentWindow
                     break;
 
                 case ToolUseBlock toolUse:
-                    AddRestoredToolUse(toolUse, cwd, pendingTools, turnNumber);
+                    AddRestoredToolUse(toolUse, cwd, pendingTools, turnNumber, group);
                     break;
             }
         }
@@ -84,15 +93,25 @@ public partial class AgentWindow
             AppendConvo("\n", Palette.Normal);
     }
 
+    // Render restored assistant text through the same markdown renderer the live stream uses, so a
+    // resumed session keeps its headings/bold/inline-code/table/syntax highlighting instead of being
+    // flattened to one colour.
+    private void RenderRestoredMarkdown(string markdown)
+    {
+        var renderer = new MarkdownRenderer(convoWrapWidth, (text, attr) => AppendConvo(text, attr));
+        renderer.Write(markdown);
+        renderer.Flush();
+    }
+
     private void AddRestoredToolUse(
         ToolUseBlock toolUse,
         string cwd,
         Dictionary<string, RestoredTool> pendingTools,
-        int turnNumber)
+        int turnNumber,
+        int group)
     {
         var rawArgs = toolUse.Input.GetRawText();
         var displayArg = FormatPanelArgument(toolUse.Name, rawArgs, cwd);
-        var group = ++toolCallGroupSeq;
         var parameters = ExtractToolParameters(rawArgs);
 
         var row = new ToolRow(

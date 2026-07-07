@@ -41,6 +41,42 @@ public sealed class ToolPairSummarizerTests
         Assert.IsInstanceOfType<ToolUseBlock>(((AssistantMessage)ctx.Messages[0]).Content[0]);
     }
 
+    [TestMethod]
+    public void SummarizeOldPairs_PreservesLatestReadOfEachFile()
+    {
+        var ctx = new LoopContext();
+        ctx.Messages.Add(new AssistantMessage([new ToolUseBlock("r1", "Read", Json("""{"path":"foo.cs"}"""))]));
+        ctx.Messages.Add(new UserMessage([new ToolResultBlock("r1", "OLD foo content")]));
+        ctx.Messages.Add(new AssistantMessage([new ToolUseBlock("s1", "Shell", Json("{}"))]));
+        ctx.Messages.Add(new UserMessage([new ToolResultBlock("s1", "build output")]));
+        ctx.Messages.Add(new AssistantMessage([new ToolUseBlock("r2", "Read", Json("""{"path":"foo.cs"}"""))]));
+        ctx.Messages.Add(new UserMessage([new ToolResultBlock("r2", "NEW foo content")]));
+        ctx.Messages.Add(new UserMessage([new TextBlock("recent")]));
+
+        var count = ToolPairSummarizer.SummarizeOldPairs(ctx, keepRecentMessages: 1);
+
+        var results = ctx.Messages.OfType<UserMessage>()
+            .SelectMany(m => m.Content.OfType<ToolResultBlock>()).Select(t => t.Content).ToList();
+        Assert.IsTrue(results.Contains("NEW foo content"), "latest read of foo.cs is preserved verbatim");
+        Assert.IsFalse(results.Any(c => c.Contains("OLD foo content")), "the superseded older read is summarized");
+        Assert.AreEqual(2, count, "the older read pair and the shell pair were summarized, the latest read kept");
+    }
+
+    [TestMethod]
+    public void SummarizeOldPairs_PreserveDisabled_SummarizesLatestRead()
+    {
+        var ctx = new LoopContext();
+        ctx.Messages.Add(new AssistantMessage([new ToolUseBlock("r1", "Read", Json("""{"path":"foo.cs"}"""))]));
+        ctx.Messages.Add(new UserMessage([new ToolResultBlock("r1", "foo content")]));
+        ctx.Messages.Add(new UserMessage([new TextBlock("recent")]));
+
+        var count = ToolPairSummarizer.SummarizeOldPairs(ctx, keepRecentMessages: 1, preserveLatestReads: false);
+
+        Assert.AreEqual(1, count);
+        var results = ctx.Messages.OfType<UserMessage>().SelectMany(m => m.Content.OfType<ToolResultBlock>()).ToList();
+        Assert.AreEqual(0, results.Count, "with preservation off, even the latest read is summarized away");
+    }
+
     private static JsonElement Json(string json) =>
         JsonDocument.Parse(json).RootElement.Clone();
 }

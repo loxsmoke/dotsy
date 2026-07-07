@@ -51,7 +51,7 @@ flowchart TD
 Step notes:
 
 - **Append user message** adds the new user turn to `LoopContext.Messages`. It is also appended to the session log and rendered in the conversation panel, so it appears both in the visible chat and in the next provider request.
-- **Cancellation requested** checks the `CancellationToken` passed into `RunAsync`. The source is external to the loop: TUI interrupt keys such as `Ctrl+C`, process shutdown, headless command cancellation, or any caller-owned cancellation source.
+- **Cancellation requested** checks the `CancellationToken` passed into `RunAsync`. The source is external to the loop: TUI interrupt keys such as `Ctrl+G`, process shutdown, headless command cancellation, or any caller-owned cancellation source.
 - **Initialize turn counter** sets `turns = 0` before entering the loop. **Increment turn counter** is only a loop guard, used to stop runaway sessions at `agent.max_turns`.
 - **Maybe compact context** runs when token usage crosses `compaction.threshold_pct`, when the usable context is nearly exhausted, or after a provider context-length error. It summarises older messages, keeps recent messages verbatim, stores the summary on the context, and rebuilds the next request with that summary.
 - **Build provider request** converts system prompt, compacted prior context, messages, and tool definitions into the provider payload sent to the LLM API.

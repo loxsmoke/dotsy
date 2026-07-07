@@ -205,7 +205,8 @@ static async Task RunTui(
         modelInfo.ContextWindow,
         config.Compaction.ReserveTokens,
         config.Compaction.KeepRecentTokens,
-        restoredUsedTokens);
+        restoredUsedTokens,
+        config.Compaction.ThresholdPct);
 
     // Interactive sessions yield to the user after a configurable number of stalled responses
     // (default 3). Auto-continue (agent.auto_continue_on_nudge) can still recover a stall before
@@ -266,6 +267,9 @@ static async Task RunTui(
             $"warning: unknown tui.theme '{config.Tui.Theme}'; using '{resolvedTheme}'. " +
             $"Valid: {string.Join(", ", Themes.Names)}");
 
+    if (Application.MaximumIterationsPerSecond < 60)
+        Application.MaximumIterationsPerSecond = 60;
+
     var app = Application.Create();
     TuiSessionContext.App = app;
     app.Init();
@@ -302,7 +306,9 @@ static async Task RunTui(
 static void EnsureFullScreenOnStartup(IApplication app)
 {
     const int requiredStableIterations = 3;
+    const int maxCorrectionIterations = 10;
     var stable = 0;
+    var attempts = 0;
 
     // Apply once now, then keep it pinned for the first handful of iterations.
     ApplyConsoleSize(app);
@@ -310,6 +316,12 @@ static void EnsureFullScreenOnStartup(IApplication app)
     EventHandler<EventArgs<IApplication?>>? onIteration = null;
     onIteration = (_, _) =>
     {
+        if (++attempts >= maxCorrectionIterations)
+        {
+            app.Iteration -= onIteration;
+            return;
+        }
+
         if (ApplyConsoleSize(app))
         {
             if (++stable >= requiredStableIterations)
@@ -442,7 +454,8 @@ static async Task<int> RunHeadless(
         modelInfo.ContextWindow,
         config.Compaction.ReserveTokens,
         config.Compaction.KeepRecentTokens,
-        restoredUsedTokens);
+        restoredUsedTokens,
+        config.Compaction.ThresholdPct);
 
     var loop = new AgentLoop(provider, registry, permissions, config, sessionStore: sessionStore, trajectory: trajectory);
     if (prompt.Trim().Equals("/compact", StringComparison.OrdinalIgnoreCase))

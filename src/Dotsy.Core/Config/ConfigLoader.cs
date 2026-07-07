@@ -237,13 +237,13 @@ public static class ConfigLoader
 
     /// <summary>
     /// Determines, for every key in <see cref="ConfigEditor.ParamList"/>, where its effective value
-    /// comes from using the same precedence the loader applies (env &gt; project &gt; global &gt;
-    /// default). API-key secrets are never sourced from the project config, matching <see cref="Load"/>.
+    /// comes from (env &gt; project &gt; default). API-key secrets are never sourced from the
+    /// project config, matching <see cref="Load"/>.
     /// Source values are the literal file path, <c>env:VAR</c>, or <c>default</c>.
+    /// The global config file path/existence is reported separately via <see cref="ConfigSourceInfo"/>.
     /// </summary>
     public static ConfigSourceInfo GetConfigSources(string cwd)
     {
-        var globalKeys = FlattenTomlKeys(GlobalConfigPath);
         var projectPath = FindProjectConfig(cwd);
         var projectKeys = projectPath is null
             ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -252,7 +252,7 @@ public static class ConfigLoader
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var group in ConfigEditor.ParamList)
             foreach (var p in group.Params)
-                map[p.Key] = ResolveKeySource(p.Key, globalKeys, projectKeys, projectPath);
+                map[p.Key] = ResolveKeySource(p.Key, projectKeys, projectPath);
 
         return new ConfigSourceInfo(
             GlobalConfigPath, File.Exists(GlobalConfigPath),
@@ -260,7 +260,7 @@ public static class ConfigLoader
     }
 
     private static string ResolveKeySource(
-        string key, HashSet<string> globalKeys, HashSet<string> projectKeys, string? projectPath)
+        string key, HashSet<string> projectKeys, string? projectPath)
     {
         var secret = key.EndsWith(".api_key", StringComparison.OrdinalIgnoreCase);
 
@@ -274,8 +274,6 @@ public static class ConfigLoader
         // Project config is applied after global, but never carries secrets.
         if (!secret && projectPath is not null && projectKeys.Contains(key))
             return projectPath;
-        if (globalKeys.Contains(key))
-            return GlobalConfigPath;
         return "default";
     }
 

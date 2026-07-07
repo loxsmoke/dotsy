@@ -14,7 +14,7 @@ public partial class AgentWindow
     {
         if (scenarioCts is not null)
         {
-            AppendConvo("[Agent is busy — press Ctrl+C to cancel]\n\n", Palette.Warn);
+            AppendConvo("[Agent is busy — press Ctrl+G to cancel]\n\n", Palette.Warn);
             return;
         }
 

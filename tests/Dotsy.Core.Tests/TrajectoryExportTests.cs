@@ -59,7 +59,7 @@ public sealed class TrajectoryExportTests
         var sessionId = "integration-session";
         var ctx = new LoopContext(sessionId)
         {
-            TokenBudget = new TokenBudget(200_000, 16_384, 20_000, 0)
+            TokenBudget = new TokenBudget(200_000, 16_384, 20_000, 0, 0.9f)
         };
         ctx.Messages.Add(new UserMessage([new TextBlock("hello integration")]));
         var sessionStore = new SessionStore(
@@ -176,7 +176,7 @@ public sealed class TrajectoryExportTests
                 [new ToolDefinition("Read", "Read", schema.RootElement.Clone())],
                 1000);
             recorder.CaptureInitialRequest(request);
-            recorder.RecordUsage(1, 2, 3, 4);
+            recorder.RecordUsage(new UsageUpdate(1, 2, 3, 4));
             var ctx = new LoopContext("abc");
             ctx.Messages.Add(new UserMessage([new TextBlock("hello")]));
 

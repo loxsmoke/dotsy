@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Dotsy.Core.Providers;
 using Dotsy.Core.Tools;
 using Dotsy.Core.Tools.Interfaces;
 
@@ -20,7 +21,12 @@ public record TokenUsageUpdated(
     int InputTokens,
     int OutputTokens,
     int CacheReadTokens,
-    int CacheWriteTokens) : LoopEvent;
+    int CacheWriteTokens) : LoopEvent
+{
+    public TokenUsageUpdated(UsageUpdate usage)
+        : this(usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens)
+    {}
+}
 
 public record CompactionOccurred(int TokensBefore, int TokensAfter, string Summary) : LoopEvent;
 

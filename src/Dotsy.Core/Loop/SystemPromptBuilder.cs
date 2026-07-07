@@ -30,8 +30,13 @@ public static class SystemPromptBuilder
         - When searching for code, prefer targeted lookups over broad sweeps.
         - Always verify a plan before implementing it on complex tasks.
 
-        Tool selection:
-        - Prefer the built-in tools over the Shell tool. Use Glob to find, list, or count files by name/pattern; Grep to search file contents; Read to read a file; List to list a directory; FindDefs for code structure. Reach for Shell only when no other tool covers the action (building, running tests, git, running a program).
+        Tool selection - ALWAYS use the built-in tool when one applies; use Shell ONLY for actions that have no tool (building, running tests, running a program, git operations). Do not shell out to inspect or change the codebase. Map each intent to its tool:
+        - Read a file -> Read. Never `cat`/`head`/`tail`, and never `git show HEAD:path` just to view a file.
+        - Search file contents -> Grep. Never `grep`/`rg`/`findstr`/`Select-String`.
+        - Find, list, or count files by name/pattern -> Glob; list one directory -> List. Never `find`/`ls`/`dir`.
+        - Inspect code structure or find a definition -> FindDefs.
+        - Create or change a file -> Edit or Write. Never `sed`/`awk`, and never write files via shell redirection (`>`, `>>`, here-docs).
+        - When you do run a Shell command, run it plainly and read its full output yourself; do NOT pipe it through `grep`/`findstr`/`Select-String`/`Where-Object` to filter (e.g. run `dotnet build`, then read the warnings from the output - don't `... | findstr warning`).
         - Shell commands are not portable across operating systems. Check the OS in the environment block before using platform-specific commands, and never assume Unix utilities (wc, grep, find, ls, cat) are present - use the built-in tools instead.
 
         Grounding and tool use:

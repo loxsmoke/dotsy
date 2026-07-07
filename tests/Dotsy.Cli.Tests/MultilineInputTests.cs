@@ -80,7 +80,20 @@ public sealed class MultilineInputTests
     }
 
     [TestMethod]
-    public void CtrlCWithoutSelection_RaisesCancelRequested()
+    public void CtrlG_RaisesCancelRequested()
+    {
+        using var input = new MultilineInput();
+        var requested = false;
+        input.CancelRequested += (_, _) => requested = true;
+
+        var handled = InvokeOnKeyDown(input, Key.G.WithCtrl);
+
+        Assert.IsTrue(handled);
+        Assert.IsTrue(requested);
+    }
+
+    [TestMethod]
+    public void CtrlCWithoutSelection_DoesNotRaiseCancelRequested()
     {
         using var input = new MultilineInput();
         var requested = false;
@@ -89,7 +102,7 @@ public sealed class MultilineInputTests
         var handled = InvokeOnKeyDown(input, Key.C.WithCtrl);
 
         Assert.IsTrue(handled);
-        Assert.IsTrue(requested);
+        Assert.IsFalse(requested);
     }
 
     [TestMethod]
@@ -152,6 +165,200 @@ public sealed class MultilineInputTests
         input.InsertText(" world");
 
         Assert.AreEqual("hello world", input.Text.ToString());
+        Assert.AreEqual("hello world".Length, input.CaretOffset);
+    }
+
+    [TestMethod]
+    public void PrintableKey_InsertsImmediately()
+    {
+        using var input = new MultilineInput();
+
+        var handled = InvokeOnKeyDown(input, Key.A);
+
+        Assert.IsTrue(handled);
+        Assert.AreEqual("a", input.Text.ToString());
+        Assert.AreEqual(1, input.CaretOffset);
+    }
+
+    [TestMethod]
+    public void ConsecutivePrintableKeys_InsertInOrder()
+    {
+        using var input = new MultilineInput();
+
+        InvokeOnKeyDown(input, Key.A);
+        InvokeOnKeyDown(input, Key.B);
+
+        Assert.AreEqual("ab", input.Text.ToString());
+        Assert.AreEqual(2, input.CaretOffset);
+    }
+
+    [TestMethod]
+    public void CursorLeft_MovesCaretImmediately()
+    {
+        using var input = new MultilineInput();
+        input.Text = "abc";
+        input.CaretOffset = 2;
+
+        var handled = InvokeOnKeyDown(input, Key.CursorLeft);
+
+        Assert.IsTrue(handled);
+        Assert.AreEqual(1, input.CaretOffset);
+    }
+
+    [TestMethod]
+    public void CursorRight_MovesCaretImmediately()
+    {
+        using var input = new MultilineInput();
+        input.Text = "abc";
+        input.CaretOffset = 1;
+
+        var handled = InvokeOnKeyDown(input, Key.CursorRight);
+
+        Assert.IsTrue(handled);
+        Assert.AreEqual(2, input.CaretOffset);
+    }
+
+    [TestMethod]
+    public void Backspace_RemovesPreviousCharacterImmediately()
+    {
+        using var input = new MultilineInput();
+        input.Text = "abc";
+        input.CaretOffset = 2;
+
+        var handled = InvokeOnKeyDown(input, Key.Backspace);
+
+        Assert.IsTrue(handled);
+        Assert.AreEqual("ac", input.Text.ToString());
+        Assert.AreEqual(1, input.CaretOffset);
+    }
+
+    [TestMethod]
+    public void Delete_RemovesCurrentCharacterImmediately()
+    {
+        using var input = new MultilineInput();
+        input.Text = "abc";
+        input.CaretOffset = 1;
+
+        var handled = InvokeOnKeyDown(input, Key.Delete);
+
+        Assert.IsTrue(handled);
+        Assert.AreEqual("ac", input.Text.ToString());
+        Assert.AreEqual(1, input.CaretOffset);
+    }
+
+    [TestMethod]
+    public void UpInsideMultilineInput_MovesCaretImmediately()
+    {
+        using var input = new MultilineInput();
+        input.Text = "abc\ndef";
+        input.CaretOffset = 6;
+
+        var handled = InvokeOnKeyDown(input, Key.CursorUp);
+
+        Assert.IsTrue(handled);
+        Assert.AreEqual(2, input.CaretOffset);
+    }
+
+    [TestMethod]
+    public void DownInsideMultilineInput_MovesCaretImmediately()
+    {
+        using var input = new MultilineInput();
+        input.Text = "abc\ndef";
+        input.CaretOffset = 2;
+
+        var handled = InvokeOnKeyDown(input, Key.CursorDown);
+
+        Assert.IsTrue(handled);
+        Assert.AreEqual(6, input.CaretOffset);
+    }
+
+    [TestMethod]
+    public void FastSelectionHelper_BindsTerminalGuiCaretExtension()
+    {
+        using var input = new MultilineInput();
+        var field = typeof(MultilineInput).GetField(
+            "extendCaretBy",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+        Assert.IsNotNull(field.GetValue(input));
+    }
+
+    [TestMethod]
+    public void ShiftRight_SelectsNextCharacterImmediately()
+    {
+        using var input = new MultilineInput();
+        input.Text = "abcd";
+        input.CaretOffset = 1;
+
+        var handled = InvokeOnKeyDown(input, Key.CursorRight.WithShift);
+
+        Assert.IsTrue(handled);
+        Assert.IsTrue(input.HasSelection);
+        Assert.AreEqual(1, input.SelectionStart);
+        Assert.AreEqual(2, input.SelectionEnd);
+        Assert.AreEqual(2, input.CaretOffset);
+    }
+
+    [TestMethod]
+    public void ShiftLeft_SelectsPreviousCharacterImmediately()
+    {
+        using var input = new MultilineInput();
+        input.Text = "abcd";
+        input.CaretOffset = 2;
+
+        var handled = InvokeOnKeyDown(input, Key.CursorLeft.WithShift);
+
+        Assert.IsTrue(handled);
+        Assert.IsTrue(input.HasSelection);
+        Assert.AreEqual(1, input.SelectionStart);
+        Assert.AreEqual(2, input.SelectionEnd);
+        Assert.AreEqual(1, input.CaretOffset);
+    }
+
+    [TestMethod]
+    public void ConsecutiveShiftRight_ExtendsSelectionImmediately()
+    {
+        using var input = new MultilineInput();
+        input.Text = "abcd";
+        input.CaretOffset = 1;
+
+        InvokeOnKeyDown(input, Key.CursorRight.WithShift);
+        InvokeOnKeyDown(input, Key.CursorRight.WithShift);
+
+        Assert.IsTrue(input.HasSelection);
+        Assert.AreEqual(1, input.SelectionStart);
+        Assert.AreEqual(3, input.SelectionEnd);
+        Assert.AreEqual(3, input.CaretOffset);
+    }
+
+    [TestMethod]
+    public void ShiftRightThenShiftLeft_ClearsSelectionAtAnchor()
+    {
+        using var input = new MultilineInput();
+        input.Text = "abcd";
+        input.CaretOffset = 1;
+
+        InvokeOnKeyDown(input, Key.CursorRight.WithShift);
+        InvokeOnKeyDown(input, Key.CursorLeft.WithShift);
+
+        Assert.IsFalse(input.HasSelection);
+        Assert.AreEqual(1, input.CaretOffset);
+    }
+
+    [TestMethod]
+    public void ShiftDownInsideMultilineInput_ExtendsSelectionImmediately()
+    {
+        using var input = new MultilineInput();
+        input.Text = "abc\ndef";
+        input.CaretOffset = 2;
+
+        var handled = InvokeOnKeyDown(input, Key.CursorDown.WithShift);
+
+        Assert.IsTrue(handled);
+        Assert.IsTrue(input.HasSelection);
+        Assert.AreEqual(2, input.SelectionStart);
+        Assert.AreEqual(6, input.SelectionEnd);
+        Assert.AreEqual(6, input.CaretOffset);
     }
 
     private static bool InvokeOnKeyDown(MultilineInput input, Key key)

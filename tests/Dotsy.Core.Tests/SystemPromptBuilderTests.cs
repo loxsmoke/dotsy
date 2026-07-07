@@ -9,6 +9,21 @@ namespace Dotsy.Core.Tests;
 public sealed class SystemPromptBuilderTests
 {
     [TestMethod]
+    public void Build_SteersTowardBuiltInToolsOverShell()
+    {
+        var config = DefaultConfig.Create();
+        config.Agent.InjectEnvironment = false;
+        config.Retrieval.RepoMapTokens = 0;
+
+        var prompt = SystemPromptBuilder.Build(config, Environment.CurrentDirectory, new LoopContext());
+
+        StringAssert.Contains(prompt, "use the built-in tool when one applies");
+        StringAssert.Contains(prompt, "Search file contents -> Grep");
+        StringAssert.Contains(prompt, "git show HEAD:path");           // named shell anti-pattern
+        StringAssert.Contains(prompt, "do NOT pipe it through");       // no `| findstr warning`
+    }
+
+    [TestMethod]
     public void Build_IncludesLoadedSkills()
     {
         var config = DefaultConfig.Create();

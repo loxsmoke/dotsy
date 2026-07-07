@@ -16,6 +16,9 @@ internal sealed class MarkdownRenderer
     private bool inCodeBlock;
     private string codeLang = "";
     private bool inBlockComment;
+    // Pipe-table rows are buffered here until the block ends, then emitted aligned — a streaming
+    // renderer can't size columns until it has seen every row.
+    private readonly List<string> tableRows = new();
 
     public MarkdownRenderer(int wrapWidth, Action<string, TGAttribute> append)
     {
@@ -36,6 +39,8 @@ internal sealed class MarkdownRenderer
     {
         if (line.Length > 0)
             CommitLine(addNewline: false);
+        if (tableRows.Count > 0)
+            EmitTable();
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -77,6 +82,16 @@ internal sealed class MarkdownRenderer
             End();
             return;
         }
+
+        // Pipe-table row: buffer it; the whole block is emitted, aligned, when a non-table line
+        // (or Flush) closes it. Deferring is why column widths can be computed at all.
+        if (trimmed.StartsWith('|'))
+        {
+            tableRows.Add(raw);
+            return;
+        }
+        if (tableRows.Count > 0)
+            EmitTable();
 
         // Blank line
         if (trimmed.Length == 0) { End(); return; }
@@ -235,5 +250,89 @@ internal sealed class MarkdownRenderer
         }
 
         Flush();
+    }
+
+    // Emits the buffered pipe-table as aligned columns: header row (before the `---` separator) in
+    // bright, a divider, then body rows, cells padded to each column's widest value and joined by │.
+    private void EmitTable()
+    {
+        if (tableRows.Count == 0)
+            return;
+
+        var rows = tableRows.Select(SplitRow).ToList();
+        tableRows.Clear();
+
+        int sep = rows.FindIndex(cells => cells.Length > 0 && cells.All(IsSeparatorCell));
+        int cols = rows.Max(cells => cells.Length);
+        var width = new int[cols];
+        for (int ri = 0; ri < rows.Count; ri++)
+        {
+            if (ri == sep) continue;
+            for (int ci = 0; ci < rows[ri].Length; ci++)
+                width[ci] = Math.Max(width[ci], rows[ri][ci].Length);
+        }
+
+        for (int ri = 0; ri < rows.Count; ri++)
+        {
+            if (ri == sep)
+            {
+                append(string.Join("─┼─", width.Select(w => new string('─', w))), Palette.Dim);
+                append("\n", Palette.Normal);
+                continue;
+            }
+
+            var attr = sep >= 0 && ri < sep ? Palette.Bright : Palette.Normal;
+            var cells = rows[ri];
+            var sb = new StringBuilder();
+            for (int ci = 0; ci < cols; ci++)
+            {
+                sb.Append((ci < cells.Length ? cells[ci] : "").PadRight(width[ci]));
+                if (ci < cols - 1)
+                    sb.Append(" │ ");
+            }
+            append(sb.ToString(), attr);
+            append("\n", Palette.Normal);
+        }
+    }
+
+    // Splits "| a | b |" into ["a","b"], dropping the outer pipes and stripping inline markup so
+    // column widths measure visible text.
+    private static string[] SplitRow(string row)
+    {
+        var t = row.Trim();
+        if (t.StartsWith('|')) t = t[1..];
+        if (t.EndsWith('|')) t = t[..^1];
+        return t.Split('|').Select(cell => StripInline(cell.Trim())).ToArray();
+    }
+
+    private static bool IsSeparatorCell(string cell) =>
+        cell.Length > 0 && cell.All(ch => ch is '-' or ':' or ' ') && cell.Contains('-');
+
+    // Removes inline markdown markers so cell text measures/renders as its visible form (mirrors
+    // RenderInline: link -> label, drop `code`, **bold**, __bold__, ~~strike~~, *italics*).
+    private static string StripInline(string s)
+    {
+        var sb = new StringBuilder();
+        int i = 0;
+        while (i < s.Length)
+        {
+            char c = s[i];
+            if (c == '[')
+            {
+                int cb = s.IndexOf(']', i + 1);
+                if (cb > 0 && cb + 1 < s.Length && s[cb + 1] == '(')
+                {
+                    int cp = s.IndexOf(')', cb + 2);
+                    if (cp > 0) { sb.Append(s[(i + 1)..cb]); i = cp + 1; continue; }
+                }
+            }
+            if (c == '`') { i++; continue; }
+            if (c == '~' && i + 1 < s.Length && s[i + 1] == '~') { i += 2; continue; }
+            if ((c == '*' || c == '_') && i + 1 < s.Length && s[i + 1] == c) { i += 2; continue; }
+            if (c == '*') { i++; continue; }
+            sb.Append(c);
+            i++;
+        }
+        return sb.ToString();
     }
 }

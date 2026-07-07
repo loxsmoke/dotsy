@@ -11,18 +11,20 @@ namespace Dotsy.Cli.Tui.ToolList;
 internal sealed class ToolListView : ListView
 {
     private int horizontalScrollOffset;
-    private int topItem;
 
     // Lets the bracket renderer read each row's group so consecutive tool calls from the same
     // prompt can be drawn with a half-frame gutter. Set by AgentWindow.
     public Func<int, ToolRow?>? RowGetter { get; set; }
 
+    // Reads/writes the base view's live scroll position (Viewport.Y). Using the base position —
+    // instead of a private copy — keeps the group brackets and scrollbar in sync when the user
+    // scrolls interactively (the private copy went stale, so they never moved).
     public int TopItemCompat
     {
-        get => topItem;
+        get => Viewport.Y;
         set
         {
-            topItem = Math.Max(0, value);
+            Viewport = Viewport with { Y = Math.Max(0, value) };
             SetNeedsDraw();
         }
     }
@@ -85,7 +87,7 @@ internal sealed class ToolListView : ListView
         {
             Rectangle f = Viewport;
             int renderWidth = Math.Max(0, f.Width - 1);
-            int itemIdx = topItem;
+            int itemIdx = Viewport.Y;
 
             for (int row = 0; row < f.Height; row++, itemIdx++)
             {
@@ -116,7 +118,7 @@ internal sealed class ToolListView : ListView
         int count = Source?.Count ?? 0;
         if (count > Viewport.Height)
         {
-            ScrollBar.DrawVertical(this, Viewport.Width - 1, 0, Viewport.Height, count, Viewport.Height, topItem);
+            ScrollBar.DrawVertical(this, Viewport.Width - 1, 0, Viewport.Height, count, Viewport.Height, Viewport.Y);
         }
         return handled;
     }
@@ -133,7 +135,7 @@ internal sealed class ToolListView : ListView
         int height = Viewport.Height;
         for (int row = 0; row < height; row++)
         {
-            int idx = topItem + row;
+            int idx = Viewport.Y + row;
             if (idx < 0 || idx >= count) continue;
 
             var glyph = GroupGlyph(idx, count);

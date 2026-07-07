@@ -12,13 +12,14 @@ internal sealed class ScrollableText : Editor
     private int leftColumn;
     private List<List<Cell>>? snapshot;
     private int[]? rowStartOffsets;
+    private int contentLineCount;
+    private int maxLineWidth;
 
     /// <summary>
     /// When true the view behaves like a read-only text editor: arrow/Page/Home/End keys move a
     /// visible caret (and scroll to keep it in view), Shift+navigation extends a selection, Ctrl+C /
     /// Ctrl+Insert copy the selection and Ctrl+A selects all. When false the same navigation keys
-    /// are remapped to plain viewport scrolling and Ctrl+C keeps its global "cancel the agent"
-    /// meaning (text copying isn't the priority).
+    /// are remapped to plain viewport scrolling.
     /// </summary>
     public bool EnableSelectionCopy { get; set; }
 
@@ -52,8 +53,7 @@ internal sealed class ScrollableText : Editor
         if (key == Key.PageDown) { ScrollByPage(down: true);  return true; }
         if (key == Key.PageUp)   { ScrollByPage(down: false); return true; }
 
-        // Clipboard keys are handled before the scroll bindings (and before the key bubbles up to
-        // the window, which otherwise treats Ctrl+C as "cancel"). Works read-only.
+        // Clipboard keys are handled before the scroll bindings. Works read-only.
         if (EnableSelectionCopy)
         {
             if (key == Key.InsertChar.WithCtrl)            { InvokeCommand(Command.Copy); return true; }
@@ -181,6 +181,9 @@ internal sealed class ScrollableText : Editor
     public void LoadText(List<List<Cell>> lines)
     {
         snapshot = lines;
+        contentLineCount = lines.Count;
+        maxLineWidth = lines.Count == 0 ? 0 : lines.Max(LineDisplayWidth);
+
         // Pre-compute the document offset at which each snapshot row starts.
         // Each row contributes row.Count chars + 1 newline (the last row has no trailing \n, but
         // the +1 makes selection-range checks safe and slightly over-inclusive, which is harmless).
@@ -244,6 +247,9 @@ internal sealed class ScrollableText : Editor
 
     private int GetContentLineCount()
     {
+        if (snapshot is not null)
+            return contentLineCount;
+
         var text = Text?.ToString() ?? "";
         text = text.Replace("\r\n", "\n").TrimEnd('\n');
         return text.Length == 0 ? 0 : text.Count(ch => ch == '\n') + 1;
@@ -251,12 +257,29 @@ internal sealed class ScrollableText : Editor
 
     private int GetMaxLineWidth()
     {
+        if (snapshot is not null)
+            return maxLineWidth;
+
         var text = Text?.ToString() ?? "";
         return text
             .Split('\n')
             .Select(line => CalculateDisplayWidth(line.TrimEnd('\r')))
             .DefaultIfEmpty(0)
             .Max();
+    }
+
+    private static int LineDisplayWidth(List<Cell> line)
+    {
+        int width = 0;
+        foreach (var cell in line)
+            width += Math.Max(1, Glyphs.GetColumns(CellRune(cell)));
+        return width;
+    }
+
+    private static Rune CellRune(Cell cell)
+    {
+        var runes = cell.Grapheme.EnumerateRunes();
+        return runes.MoveNext() ? runes.Current : new Rune(' ');
     }
 
     private static int CalculateDisplayWidth(string text)
@@ -269,13 +292,13 @@ internal sealed class ScrollableText : Editor
 
     protected override bool OnDrawingContent(DrawContext? context)
     {
-        var handled = base.OnDrawingContent(context);
-
         int width = Viewport.Width;
         int height = Viewport.Height;
         int maxLineWidth = GetMaxLineWidth();
         bool vertical = GetContentLineCount() > height;
         bool horizontal = maxLineWidth > width;
+        bool useEditorDraw = snapshot is null || (EnableSelectionCopy && (HasFocus || HasSelection));
+        var handled = useEditorDraw ? base.OnDrawingContent(context) : true;
 
         // Overdraw cell content with per-cell colors from the snapshot. The base Editor renders
         // everything in the scheme's Normal color; here we repaint each visible character with
@@ -291,18 +314,25 @@ internal sealed class ScrollableText : Editor
             for (int row = 0; row < drawHeight; row++)
             {
                 int sRow = vOff + row;
-                if (sRow >= snapshot.Count) break;
-                var snapshotLine = snapshot[sRow];
+                var snapshotLine = sRow < snapshot.Count ? snapshot[sRow] : null;
 
                 for (int col = 0; col < drawWidth; col++)
                 {
                     int sCol = hOff + col;
-                    if (sCol >= snapshotLine.Count) break;
-                    if (IsCellSelected(sRow, sCol)) continue;
+                    if (snapshotLine is not null && sCol < snapshotLine.Count)
+                    {
+                        if (IsCellSelected(sRow, sCol)) continue;
 
-                    SetAttribute(snapshotLine[sCol].Attribute ?? Palette.Normal);
-                    Move(col, row);
-                    AddStr(snapshotLine[sCol].Grapheme);
+                        SetAttribute(snapshotLine[sCol].Attribute ?? Palette.Normal);
+                        Move(col, row);
+                        AddStr(snapshotLine[sCol].Grapheme);
+                    }
+                    else if (!useEditorDraw)
+                    {
+                        SetAttribute(GetScheme().Normal);
+                        Move(col, row);
+                        TuiSessionContext.App.Driver?.AddRune(new Rune(' '));
+                    }
                 }
             }
         }

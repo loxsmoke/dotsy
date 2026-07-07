@@ -25,12 +25,12 @@ public sealed class TrajectoryRecorder
         initialRequest ??= request;
     }
 
-    public void RecordUsage(int inputTokens, int outputTokens, int cacheReadTokens, int cacheWriteTokens)
+    public void RecordUsage(UsageUpdate usage)
     {
-        TokenUsage.InputTokens += inputTokens;
-        TokenUsage.OutputTokens += outputTokens;
-        TokenUsage.CacheReadTokens += cacheReadTokens;
-        TokenUsage.CacheWriteTokens += cacheWriteTokens;
+        TokenUsage.InputTokens += usage.InputTokens;
+        TokenUsage.OutputTokens += usage.OutputTokens;
+        TokenUsage.CacheReadTokens += usage.CacheReadTokens;
+        TokenUsage.CacheWriteTokens += usage.CacheWriteTokens;
     }
 
     public void Export(LoopContext ctx, EndReason reason, string? error = null)

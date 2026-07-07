@@ -76,6 +76,35 @@ public sealed class MarkdownRendererTests
         Assert.IsFalse(segments.Any(segment => segment.Text == "\n"));
     }
 
+    [TestMethod]
+    public void Write_RendersPipeTableAlignedWithHeaderAndDivider()
+    {
+        var segments = Render(
+            "| Name | Qty |\n|------|-----|\n| Apple | 3 |\n| Fig | 12 |\n", flush: true);
+
+        var plain = PlainText(segments);
+        // No raw pipe-and-dash separator row leaks through.
+        Assert.IsFalse(plain.Contains("|------|"), "separator row should not be rendered literally");
+        Assert.IsFalse(plain.Contains('|'), "pipes should be replaced by aligned columns");
+
+        // Header cells are bright; columns are padded to the widest value ("Apple" -> width 5).
+        AssertContains(segments, "Name  │ Qty", Palette.Bright);
+        Assert.IsTrue(segments.Any(s => s.Text.Contains("Apple") && s.Attribute == Palette.Normal));
+        Assert.IsTrue(segments.Any(s => s.Text.StartsWith("Fig  ")), "cells padded to column width");
+        // A divider row of box-drawing characters is emitted for the separator.
+        Assert.IsTrue(segments.Any(s => s.Text.Contains('─') && s.Attribute == Palette.Dim));
+    }
+
+    [TestMethod]
+    public void Write_StripsInlineMarkupInsideTableCells()
+    {
+        var segments = Render("| Col |\n|-----|\n| **bold** `code` |\n", flush: true);
+        var plain = PlainText(segments);
+        Assert.IsTrue(plain.Contains("bold code"), "inline markers stripped inside cells");
+        Assert.IsFalse(plain.Contains('*'));
+        Assert.IsFalse(plain.Contains('`'));
+    }
+
     private static List<Segment> Render(string markdown, int wrapWidth = 80, bool flush = false)
     {
         var segments = new List<Segment>();

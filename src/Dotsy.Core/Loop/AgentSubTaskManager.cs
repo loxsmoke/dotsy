@@ -83,7 +83,8 @@ public sealed class AgentSubTaskManager
                 modelInfo.ContextWindow,
                 config.Compaction.ReserveTokens,
                 config.Compaction.KeepRecentTokens,
-                0);
+                0,
+                config.Compaction.ThresholdPct);
             ctx.Messages.Add(new UserMessage([new TextBlock(state.Prompt)]));
 
             const string SubTaskSystemPrompt =

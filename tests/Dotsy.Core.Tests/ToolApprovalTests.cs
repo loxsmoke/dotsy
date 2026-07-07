@@ -49,7 +49,7 @@ public sealed class ToolApprovalTests
 
     private static LoopContext Ctx() => new()
     {
-        TokenBudget = new TokenBudget(200_000, 16_384, 20_000, 0)
+        TokenBudget = new TokenBudget(200_000, 16_384, 20_000, 0, 0.9f)
     };
 
     private static async Task<List<LoopEvent>> Collect(IAsyncEnumerable<LoopEvent> src)

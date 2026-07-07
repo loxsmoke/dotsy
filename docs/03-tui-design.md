@@ -41,9 +41,9 @@
 
 | Key | Action |
 |-----|--------|
-| `Ctrl+C` | Cancel the current agent turn (any panel focused). If text is selected in the input, copies instead. |
+| `Ctrl+G` | Cancel the current agent turn (any panel focused). |
 | `Ctrl+Q` | Quit the application |
-| `Ctrl+Insert` | Copy selection in the input |
+| `Ctrl+C` / `Ctrl+Insert` | Copy selection in the input |
 | `Tab` | In the input with a `/` prefix: open completion popup. Otherwise: cycle focus conversation → changed files → tools → input |
 | `Esc` | Close the inspection overlay; refocus the approval frame when an approval is pending; otherwise focus the input bar (never exits the app) |
 | `Alt+Left / Alt+Right` | Resize the conversation/tools split and persist `[tui].left-panel-width-percentage` |
@@ -225,7 +225,7 @@ The input bar is a single `MultilineInput` (a `TextView` subclass with word-wrap
 - Standard editing: cursor movement, `Shift`+arrows / `Shift+Home/End` selection, `Ctrl+C` / `Ctrl+Insert` copy when a selection exists, cut/paste via the terminal.
 - **Paste handling:** printable characters are coalesced in a short (5 ms) buffer so a paste flood arrives as a single insert. A newline arriving mid-paste is inserted literally rather than submitting, so multi-line pastes land in the field intact and can be reviewed before `Enter` sends them.
 
-While the agent is running, submitting is rejected with `[Agent is busy — press Ctrl+C to cancel]`.
+While the agent is running, submitting is rejected with `[Agent is busy — press Ctrl+G to cancel]`.
 
 ### 3.6 Confirmation and Decision Prompts
 
@@ -277,7 +277,7 @@ The whole status bar changes colour with context usage: `≤50%` default (white 
 
 **Tool log timer:** each `RUNNING` row shows elapsed seconds; on completion the status changes to `OK`/`ERR` (or `SKIP` for deduplicated calls) and the duration freezes.
 
-**Retry countdown:** the status bar counts down each second; the input stays usable, and `Ctrl+C` cancels the pending retry.
+**Retry countdown:** the status bar counts down each second; the input stays usable, and `Ctrl+G` cancels the pending retry.
 
 **Compaction notice:** inserted into the conversation as a dim divider:
 

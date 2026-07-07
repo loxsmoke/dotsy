@@ -24,6 +24,9 @@ public sealed class PermissionStore
     private readonly string globalPermissionsPath;
     private readonly string cwd;
     private readonly List<PermissionDecisionRecord> recentDecisions = [];
+    // Session-scoped roots (e.g. an out-of-cwd repo the user approved "for project") under which
+    // Write/Edit/MultiEdit are auto-allowed without re-prompting each file.
+    private readonly List<string> allowedWriteRoots = [];
     private bool allowWriteForProject;
 
     public bool Yolo { get; set; }
@@ -47,23 +50,34 @@ public sealed class PermissionStore
         if (Yolo)
             return PermissionVerdict.Allow;
 
-        var key = FormatKey(toolName, argument);
+        // Rules are matched against the raw-args key AND, for Shell, the bare command key
+        // (Shell(dotnet build) rather than Shell({"command":"dotnet build","timeout_ms":...})), so
+        // rules can be written against the command and are stable across timeout/other JSON fields.
+        var keys = MatchKeys(toolName, argument);
 
         // Hard denials are absolute
-        if (MatchesAny(key, HardDenials))
-            return PermissionVerdict.Deny;
-
-        // Write operations outside cwd are permanently denied
-        if (IsWriteOutsideCwd(toolName, argument))
+        if (keys.Any(k => MatchesAny(k, HardDenials)))
             return PermissionVerdict.Deny;
 
         // Config deny list
-        if (MatchesAny(key, configDeny) || MatchesAny(key, sessionDeny))
+        if (keys.Any(k => MatchesAny(k, configDeny) || MatchesAny(k, sessionDeny)))
             return PermissionVerdict.Deny;
 
-        // Config and session allow lists
-        if (MatchesAny(key, configAllow) || MatchesAny(key, sessionAllow))
+        // Config and session allow lists (an explicit "always allow" for a specific path wins,
+        // including for a path outside cwd the user has approved before). A wildcard allow of a
+        // Shell command only applies to a single simple command (no chaining/redirection), so
+        // e.g. Shell(dotnet build*) cannot authorize "dotnet build && rm -rf /".
+        if (IsAllowed(toolName, argument, keys))
             return PermissionVerdict.Allow;
+
+        // Writes outside the project directory are not covered by the project-wide allow. Prompt for
+        // each one - unless the user has already approved "for project" a write under the same
+        // outside root (repo), in which case sibling files there are auto-allowed. When project-wide
+        // approval is active, outside-cwd writes are denied rather than prompted.
+        if (IsWriteOutsideCwd(toolName, argument))
+            return IsUnderAllowedWriteRoot(argument) ? PermissionVerdict.Allow
+                : allowWriteForProject ? PermissionVerdict.Deny
+                : PermissionVerdict.Ask;
 
         // Project-scoped write allowance (excludes .dotsy)
         if (allowWriteForProject && IsWriteInProjectNotDotsy(toolName, argument))
@@ -94,6 +108,62 @@ public sealed class PermissionStore
     {
         allowWriteForProject = true;
         TrackDecision("allow for project", "Write, Edit, and MultiEdit inside the project except .dotsy");
+    }
+
+    // When an out-of-cwd write is approved "for project", remember the project it belongs to (its
+    // git repo root, or its own folder) so sibling files under it are auto-allowed for the session.
+    // No-op for in-cwd writes (those are covered by AllowWriteForProject).
+    public void AllowWriteRootForOutside(string toolName, string argument)
+    {
+        if (!IsWriteOutsideCwd(toolName, argument))
+            return;
+        if (ResolveWriteRoot(argument) is not { } root)
+            return;
+        if (!allowedWriteRoots.Contains(root, StringComparer.OrdinalIgnoreCase))
+            allowedWriteRoots.Add(root);
+        TrackDecision("allow for project", $"Write, Edit, and MultiEdit under {root}");
+    }
+
+    private bool IsUnderAllowedWriteRoot(string argument)
+    {
+        if (allowedWriteRoots.Count == 0)
+            return false;
+        string absPath;
+        try
+        {
+            var path = ExtractPathArgument(argument);
+            absPath = Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Combine(cwd, path));
+        }
+        catch { return false; }
+
+        foreach (var root in allowedWriteRoots)
+        {
+            var rootSlash = root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar;
+            if (absPath.StartsWith(rootSlash, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    // The git repository root that contains the write target, or the file's own directory if it is
+    // not inside a repo. Used as the "project" boundary for an approved out-of-cwd write.
+    private string? ResolveWriteRoot(string argument)
+    {
+        string absPath;
+        try
+        {
+            var path = ExtractPathArgument(argument);
+            absPath = Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Combine(cwd, path));
+        }
+        catch { return null; }
+
+        var dir = Path.GetDirectoryName(absPath);
+        for (var probe = dir; !string.IsNullOrEmpty(probe); probe = Path.GetDirectoryName(probe))
+        {
+            if (Directory.Exists(Path.Combine(probe, ".git")))
+                return probe;
+        }
+        return dir;
     }
 
     public void DenyForSession(string toolName, string argument)
@@ -166,6 +236,68 @@ public sealed class PermissionStore
 
     private static string FormatKey(string toolName, string argument) =>
         $"{toolName}({argument})";
+
+    // Keys a rule may match against. Always the raw-args key; for Shell also the bare-command key
+    // (parsed out of {"command":...}) so rules match the command regardless of timeout_ms etc.
+    private static List<string> MatchKeys(string toolName, string argument)
+    {
+        var keys = new List<string> { FormatKey(toolName, argument) };
+        if (toolName.Equals(ShellTool.ToolName, StringComparison.OrdinalIgnoreCase)
+            && TryGetShellCommand(argument) is { } cmd)
+            keys.Add(FormatKey(toolName, cmd));
+        return keys;
+    }
+
+    private bool IsAllowed(string toolName, string argument, List<string> keys)
+    {
+        var isShell = toolName.Equals(ShellTool.ToolName, StringComparison.OrdinalIgnoreCase);
+        var command = isShell ? TryGetShellCommand(argument) : null;
+        // A parsed shell command is "simple" if it can't chain, pipe, redirect, or subshell.
+        var simpleShell = command is null || IsSimpleShellCommand(command);
+
+        foreach (var pattern in configAllow.Concat(sessionAllow))
+        {
+            var isWildcard = pattern.Contains('*');
+            foreach (var key in keys)
+            {
+                if (!isWildcard)
+                {
+                    // Exact rule: the user opted into this precise command, operators and all.
+                    if (pattern.Equals(key, StringComparison.OrdinalIgnoreCase))
+                        return true;
+                }
+                else if (MatchesGlob(key, pattern))
+                {
+                    // Wildcard rule: for Shell, only auto-allow a single simple command so a broad
+                    // pattern like Shell(dotnet build*) can't be ridden by an appended command.
+                    if (!isShell || simpleShell)
+                        return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static string? TryGetShellCommand(string argument)
+    {
+        if (!argument.TrimStart().StartsWith('{'))
+            return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(argument);
+            if (doc.RootElement.TryGetProperty("command", out var c) && c.GetString() is { Length: > 0 } s)
+                return s;
+        }
+        catch { }
+        return null;
+    }
+
+    // Shell metacharacters that chain, pipe, redirect, background, or subshell. A command free of
+    // these is a single invocation, so allowing it can't be leveraged to run something else.
+    private static readonly char[] ShellControlChars = [';', '|', '&', '`', '>', '<', '\n', '\r'];
+
+    private static bool IsSimpleShellCommand(string command) =>
+        command.IndexOfAny(ShellControlChars) < 0 && !command.Contains("$(");
 
     private void TrackDecision(string kind, string rule)
     {

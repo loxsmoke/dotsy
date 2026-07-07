@@ -70,7 +70,7 @@ public sealed class AgentLoopTests
 
     private static LoopContext EmptyCtx() => new()
     {
-        TokenBudget = new TokenBudget(200_000, 16_384, 20_000, 0)
+        TokenBudget = new TokenBudget(200_000, 16_384, 20_000, 0, 0.9f)
     };
 
     private static IReadOnlyList<ProviderEvent> TextTurn(string text = "hello") =>
@@ -420,6 +420,153 @@ public sealed class AgentLoopTests
         Assert.IsNotNull(ended, "Expected the loop to stop");
         Assert.AreEqual(EndReason.ToolErrorStreak, ended.Reason);
         Assert.IsTrue(provider.CallCount <= 5, $"Loop should bail quickly, made {provider.CallCount} calls");
+    }
+
+    // ── Completion guard: refuse Done over a failing build ────────────────────
+
+    // A Shell-named tool that fails (like a non-zero build) when its command contains "fail",
+    // otherwise succeeds. Named "Shell" so LooksLikeBuildCommand recognizes its "dotnet build".
+    private sealed class FakeShellTool : Dotsy.Core.Tools.Interfaces.ITool
+    {
+        public string Name => ShellTool.ToolName;
+        public string Description => "fake shell";
+        public System.Text.Json.JsonElement InputSchema =>
+            System.Text.Json.JsonSerializer.SerializeToElement(new { type = "object" });
+        public ToolSafety Safety => ToolSafety.Sequential;
+        public bool IsCompletionSignal => false;
+        public Task<ToolResult> ExecuteAsync(System.Text.Json.JsonElement input, ToolContext ctx, CancellationToken ct)
+        {
+            var cmd = input.TryGetProperty("command", out var c) ? c.GetString() ?? "" : "";
+            return Task.FromResult(cmd.Contains("fail", StringComparison.OrdinalIgnoreCase)
+                ? ToolResult.Err("Exit code 1\nbuild failed")
+                : ToolResult.Ok("Build succeeded."));
+        }
+    }
+
+    // A completion-signal tool, like Done.
+    private sealed class FakeDoneTool : Dotsy.Core.Tools.Interfaces.ITool
+    {
+        public string Name => "Done";
+        public string Description => "signals completion";
+        public System.Text.Json.JsonElement InputSchema =>
+            System.Text.Json.JsonSerializer.SerializeToElement(new { type = "object" });
+        public ToolSafety Safety => ToolSafety.Sequential;
+        public bool IsCompletionSignal => true;
+        public Task<ToolResult> ExecuteAsync(System.Text.Json.JsonElement input, ToolContext ctx, CancellationToken ct)
+            => Task.FromResult(ToolResult.Ok("done"));
+    }
+
+    private static IReadOnlyList<ProviderEvent> ShellTurn(string id, string command) =>
+        [new ToolCallDelta(id, ShellTool.ToolName, $$"""{"command":"{{command}}"}"""), new StreamEnd(StopReason.ToolUse)];
+
+    // Args vary per call so identical Done signatures don't trip the exact-duplicate loop trap —
+    // this test isolates the completion guard.
+    private static IReadOnlyList<ProviderEvent> DoneTurn(string id = "d") =>
+        [new ToolCallDelta(id, "Done", $$"""{"n":"{{id}}"}"""), new StreamEnd(StopReason.ToolUse)];
+
+    private static (AgentLoop, FakeProvider) BuildGuardLoop(bool verify, params IReadOnlyList<ProviderEvent>[] turns)
+    {
+        var config = MakeConfig(maxTurns: 100, nudgeLimit: 1000, autoContinueMax: 3);
+        config.Agent.VerifyBuildBeforeComplete = verify;
+        var provider = new FakeProvider(turns);
+        var registry = new ToolRegistry();
+        registry.Register(new FakeShellTool());
+        registry.Register(new FakeDoneTool());
+        return (new AgentLoop(provider, registry, YoloStore(), config), provider);
+    }
+
+    [TestMethod]
+    public async Task CompletionOverFailingBuild_IsRefused_ThenRecovers()
+    {
+        // Done is signalled while the last build failed → guard refuses it and injects a hint.
+        // The model then re-runs a passing build and signals Done again → completes.
+        var (loop, provider) = BuildGuardLoop(verify: true,
+            ShellTurn("s1", "dotnet build # fail"),   // build FAILS
+            DoneTurn("d1"),                            // premature Done -> refused
+            ShellTurn("s2", "dotnet build"),           // build PASSES -> clears flag
+            DoneTurn("d2"));                           // accepted
+
+        var events = await Collect(loop.RunAsync(EmptyCtx(), Path.GetTempPath(), CancellationToken.None));
+
+        var ended = events.OfType<LoopEnded>().Single();
+        Assert.AreEqual(EndReason.TaskComplete, ended.Reason);
+        Assert.AreEqual(1, events.OfType<AutoContinued>().Count(), "Guard fired exactly once");
+        Assert.AreEqual(4, provider.CallCount, "Loop continued past the premature Done");
+
+        var refusalText = string.Join("\n", provider.Requests[2].Messages
+            .OfType<UserMessage>().SelectMany(m => m.Content.OfType<TextBlock>()).Select(t => t.Text));
+        StringAssert.Contains(refusalText, "build is FAILING");
+    }
+
+    [TestMethod]
+    public async Task CompletionOverFailingBuild_Disabled_EndsImmediately()
+    {
+        // Guard off: Done is accepted even though the last build failed (legacy behaviour).
+        var (loop, provider) = BuildGuardLoop(verify: false,
+            ShellTurn("s1", "dotnet build # fail"),
+            DoneTurn("d1"));
+
+        var events = await Collect(loop.RunAsync(EmptyCtx(), Path.GetTempPath(), CancellationToken.None));
+
+        var ended = events.OfType<LoopEnded>().Single();
+        Assert.AreEqual(EndReason.TaskComplete, ended.Reason);
+        Assert.AreEqual(0, events.OfType<AutoContinued>().Count());
+        Assert.AreEqual(2, provider.CallCount);
+    }
+
+    [TestMethod]
+    public async Task CompletionOverFailingBuild_ExhaustsGuard_ThenEnds()
+    {
+        // The model keeps signalling Done over a persistently failing build. The guard is bounded
+        // by AutoContinueMaxAttempts (3), after which the loop accepts completion rather than
+        // looping forever.
+        var (loop, provider) = BuildGuardLoop(verify: true,
+            ShellTurn("s1", "dotnet build # fail"),
+            DoneTurn("d1"), DoneTurn("d2"), DoneTurn("d3"), DoneTurn("d4"), DoneTurn("d5"));
+
+        var events = await Collect(loop.RunAsync(EmptyCtx(), Path.GetTempPath(), CancellationToken.None));
+
+        var ended = events.OfType<LoopEnded>().Single();
+        Assert.AreEqual(EndReason.TaskComplete, ended.Reason);
+        Assert.AreEqual(3, events.OfType<AutoContinued>().Count(), "Guard fires at most max-attempts times");
+    }
+
+    // ── Read de-duplication (end to end) ──────────────────────────────────────
+
+    [TestMethod]
+    public async Task RepeatRead_IsDedupedInLoop_WhenContentLive()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), $"dedup_{System.Guid.NewGuid():N}.cs");
+        await System.IO.File.WriteAllTextAsync(tmp, "public class Foo\n{\n}\n");
+        try
+        {
+            var config = MakeConfig(maxTurns: 100, nudgeLimit: 1000);
+            config.Agent.DedupeReads = true;
+            config.Compaction.ToolPairSummarize = false; // keep the first read's content live in context
+
+            var p = tmp.Replace("\\", "\\\\");
+            // Two reads of the SAME file+range but with cosmetically different args, so the exact-
+            // duplicate loop guard doesn't skip the second — this is the repeat-read dedup targets.
+            var read1 = $$"""{"path":"{{p}}"}""";
+            var read2 = $$"""{"path":"{{p}}","offset":0}""";
+            var provider = new FakeProvider(
+                [new ToolCallDelta("r1", "Read", read1), new StreamEnd(StopReason.ToolUse)],
+                [new ToolCallDelta("r2", "Read", read2), new StreamEnd(StopReason.ToolUse)],
+                TextTurn("done"));
+            var registry = new ToolRegistry();
+            registry.Register(new ReadTool());
+            var loop = new AgentLoop(provider, registry, YoloStore(), config);
+            var ctx = EmptyCtx();
+
+            await Collect(loop.RunAsync(ctx, Path.GetTempPath(), CancellationToken.None));
+
+            var toolResults = ctx.Messages.OfType<UserMessage>()
+                .SelectMany(m => m.Content.OfType<ToolResultBlock>())
+                .Select(t => t.Content).ToList();
+            Assert.IsTrue(toolResults.Any(c => c.Contains("public class Foo")), "first read returns the file content");
+            Assert.IsTrue(toolResults.Any(c => c.Contains("already read")), "second read is de-duped to a stub");
+        }
+        finally { System.IO.File.Delete(tmp); }
     }
 
     // ── Rolling-window cycle guard ────────────────────────────────────────────
@@ -924,7 +1071,7 @@ public sealed class AgentLoopTests
         var loop = new AgentLoop(provider, registry, YoloStore(), config);
         var ctx = new LoopContext
         {
-            TokenBudget = new TokenBudget(1_000, 100, 1, 950)
+            TokenBudget = new TokenBudget(1_000, 100, 1, 950, 0.9f)
         };
 
         ctx.Messages.Add(new UserMessage([new TextBlock("old user")]));
@@ -967,7 +1114,7 @@ public sealed class AgentLoopTests
         var loop = new AgentLoop(provider, new ToolRegistry(), YoloStore(), config);
         var ctx = new LoopContext
         {
-            TokenBudget = new TokenBudget(1_000, 100, 1, 200)
+            TokenBudget = new TokenBudget(1_000, 100, 1, 200, 0.9f)
         };
         ctx.Messages.Add(new UserMessage([new TextBlock("old user")]));
         ctx.Messages.Add(new AssistantMessage([new TextBlock("old assistant")]));
@@ -992,7 +1139,7 @@ public sealed class AgentLoopTests
         var loop = new AgentLoop(provider, new ToolRegistry(), YoloStore(), config);
         var ctx = new LoopContext
         {
-            TokenBudget = new TokenBudget(1_000, 100, 1, 100)
+            TokenBudget = new TokenBudget(1_000, 100, 1, 100, 0.9f)
         };
         ctx.Messages.Add(new UserMessage([new TextBlock("old user")]));
         ctx.Messages.Add(new AssistantMessage([new TextBlock("recent assistant")]));
@@ -1017,7 +1164,7 @@ public sealed class AgentLoopTests
         var loop = new AgentLoop(provider, new ToolRegistry(), YoloStore(), config);
         var ctx = new LoopContext
         {
-            TokenBudget = new TokenBudget(1_000, 100, 1, 100)
+            TokenBudget = new TokenBudget(1_000, 100, 1, 100, 0.9f)
         };
         ctx.Messages.Add(new UserMessage([new TextBlock("old user")]));
         ctx.Messages.Add(new AssistantMessage([new TextBlock("recent assistant")]));

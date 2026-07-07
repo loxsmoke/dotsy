@@ -1,13 +1,12 @@
 using Dotsy.Cli.Tui.Colors;
+using System.Reflection;
 using System.Text;
 using Terminal.Gui.Editor;
 
 namespace Dotsy.Cli.Tui;
 
 // Editable multi-line input that submits on Enter and navigates command history with Up/Down.
-// Printable characters are batched with a short timer so that a paste flood arrives as a
-// single InsertText call.  A newline inside a paste stream is stored literally rather than
-// triggering a submit.
+// Printable characters are inserted synchronously so terminal echo stays responsive.
 //
 // Key design notes for Terminal.Gui v2:
 //   - OnKeyDown override fires before InvokeCommands; return true to stop further processing.
@@ -21,19 +20,19 @@ internal sealed class MultilineInput : Editor
     public event EventHandler?         HistoryPrev;
     public event EventHandler?         HistoryNext;
     public event EventHandler?         QuitRequested;    // Ctrl+Q
-    public event EventHandler?         CancelRequested;  // Ctrl+C
+    public event EventHandler?         CancelRequested;  // Ctrl+G
 
     public Func<Key, bool>? KeyInterceptor { get; set; }
     public Func<string?>? HintProvider { get; set; }
 
-    private readonly StringBuilder pasteBuffer = new();
-    private Timer? flushTimer;
-    private const int PasteFlushMs = 5;
-
     // Pre-built Key objects for modifier combos; avoids allocating on every keypress.
     private static readonly Key CtrlQ = new Key(KeyCode.Q).WithCtrl;
     private static readonly Key CtrlC = new Key(KeyCode.C).WithCtrl;
+    private static readonly Key CtrlG = new Key(KeyCode.G).WithCtrl;
     private static readonly Key CtrlInsert = Key.InsertChar.WithCtrl;
+    private static readonly MethodInfo? ExtendCaretByMethod =
+        typeof(Editor).GetMethod("ExtendCaretBy", BindingFlags.Instance | BindingFlags.NonPublic);
+    private readonly Action<int>? extendCaretBy;
 
     // Fired when content or caret position changes (mirrors TextView.ContentsChanged behaviour).
     public event EventHandler<EventArgs>? ContentsChanged;
@@ -50,6 +49,8 @@ internal sealed class MultilineInput : Editor
         // AgentWindow, which uses it to switch focus between panels instead of inserting a tab.
         KeyBindings.Remove(Key.Tab);
         KeyBindings.Remove(Key.Tab.WithShift);
+
+        extendCaretBy = CreateExtendCaretByDelegate(this);
 
         HasFocusChanged += OnHasFocusChanged;
         ContentChanged  += (_, _) => ContentsChanged?.Invoke(this, EventArgs.Empty);
@@ -68,10 +69,9 @@ internal sealed class MultilineInput : Editor
 
     public void MoveEnd()
     {
-        FlushPasteBuffer();
-        InvokeCommand(Command.End);
+        CaretOffset = Document?.TextLength ?? 0;
         ScrollToBottom();
-        SetNeedsDraw();
+        MarkInputDirty();
     }
 
     /// <summary>
@@ -95,8 +95,10 @@ internal sealed class MultilineInput : Editor
     /// </summary>
     public void InsertText(string text)
     {
-        FlushPasteBuffer();
-        Document?.Insert(CaretOffset, Glyphs.Sanitize(text));
+        text = Glyphs.Sanitize(text);
+        Document?.Insert(CaretOffset, text);
+        CaretOffset += text.Length;
+        MarkInputDirty();
     }
 
     /// <summary>
@@ -105,10 +107,9 @@ internal sealed class MultilineInput : Editor
     /// </summary>
     public void SetTextAndMoveEnd(string text)
     {
-        FlushPasteBuffer();
         Document?.Replace(0, Document.TextLength, text);
-        InvokeCommand(Command.End);
-        SetNeedsDraw();
+        CaretOffset = Document?.TextLength ?? 0;
+        MarkInputDirty();
     }
 
     protected override bool OnKeyDown(Key key)
@@ -119,12 +120,17 @@ internal sealed class MultilineInput : Editor
             return true;
         }
 
+        if (TryHandleFastSelectionKey(key))
+        {
+            key.Handled = true;
+            return true;
+        }
+
         // Shift+navigation extends the selection. Invoke the matching TextView "extend" command
         // directly instead of relying on the bound key being matched; selection then works even
         // where the shift+arrow keybinding lookup misbehaves.
         if (TextViewInteractions.TryGetShiftSelectionCommand(key, out var selectionCommand))
         {
-            FlushPasteBuffer();
             InvokeCommand(selectionCommand);
             key.Handled = true;
             return true;
@@ -134,22 +140,17 @@ internal sealed class MultilineInput : Editor
         // TextView only auto-clears selections it started itself via Shift, so clear it here for
         // selections made by SelectAll or the mouse before letting the cursor move normally.
         if (HasSelection && IsPlainNavigationKey(key))
+        {
             ClearSelection();
+            MarkInputDirty();
+        }
 
-        // Enter: submit, or buffer as a literal newline while mid-paste.
+        // Enter: submit.
         if (key.KeyCode == KeyCode.Enter)
         {
-            if (pasteBuffer.Length > 0)
-            {
-                pasteBuffer.Append('\n');
-                ResetFlushTimer();
-            }
-            else
-            {
-                var text = Text?.ToString().Trim() ?? "";
-                if (!string.IsNullOrEmpty(text))
-                    Submitted?.Invoke(this, text);
-            }
+            var text = Text?.ToString().Trim() ?? "";
+            if (!string.IsNullOrEmpty(text))
+                Submitted?.Invoke(this, text);
             key.Handled = true;
             return true;
         }
@@ -159,14 +160,14 @@ internal sealed class MultilineInput : Editor
         {
             if ((Document?.GetLineByOffset(CaretOffset)?.LineNumber ?? 1) - 1 == 0)
             {
-                FlushPasteBuffer();
                 HistoryPrev?.Invoke(this, EventArgs.Empty);
                 key.Handled = true;
                 return true;
             }
-            // Interior line; let InvokeCommands (Command.Up) move the cursor.
-            FlushPasteBuffer();
-            return base.OnKeyDown(key);
+
+            MoveCaretVertical(-1);
+            key.Handled = true;
+            return true;
         }
 
         // CursorDown: navigate history from the last line; otherwise move cursor normally.
@@ -176,13 +177,14 @@ internal sealed class MultilineInput : Editor
             int lastRow = Math.Max(0, rawText.TrimEnd('\n', '\r').Count(c => c == '\n'));
             if ((Document?.GetLineByOffset(CaretOffset)?.LineNumber ?? 1) - 1 >= lastRow)
             {
-                FlushPasteBuffer();
                 HistoryNext?.Invoke(this, EventArgs.Empty);
                 key.Handled = true;
                 return true;
             }
-            FlushPasteBuffer();
-            return base.OnKeyDown(key);
+
+            MoveCaretVertical(1);
+            key.Handled = true;
+            return true;
         }
 
         // Ctrl+Q: quit.  Must use Key == (not key.IsCtrl && key.KeyCode == KeyCode.Q) because
@@ -194,7 +196,7 @@ internal sealed class MultilineInput : Editor
             return true;
         }
 
-        // Ctrl+C: cancel running agent.
+        // Ctrl+C: copy selection; no-op without a selection so it never cancels the agent.
         if (key == CtrlC)
         {
             if (HasSelection)
@@ -204,6 +206,13 @@ internal sealed class MultilineInput : Editor
                 return true;
             }
 
+            key.Handled = true;
+            return true;
+        }
+
+        // Ctrl+G: cancel running agent.
+        if (key == CtrlG)
+        {
             CancelRequested?.Invoke(this, EventArgs.Empty);
             key.Handled = true;
             return true;
@@ -221,18 +230,23 @@ internal sealed class MultilineInput : Editor
         if (key == Key.Tab || key == Key.Tab.WithShift || key.KeyCode == KeyCode.Esc)
             return false;
 
-        // Printable chars: buffer for paste coalescing. Skip wide characters (emojis, etc).
-        if (!key.IsCtrl && !key.IsAlt && key.AsRune.Value >= 32 && !IsWideCharacter(key.AsRune))
+        if (TryHandleFastEditKey(key))
         {
-            pasteBuffer.Append(key.AsRune.ToString());
-            ResetFlushTimer();
             key.Handled = true;
             return true;
         }
 
-        // Everything else (Backspace, Delete, Left, Right, Ctrl+Z, etc.): flush the buffer
-        // so the view's content is current, then let TextView handle the key normally.
-        FlushPasteBuffer();
+        // Printable chars: insert immediately so terminal echo is tied to the keypress, not a
+        // timer/dispatcher hop. The old paste coalescing path also handled ordinary typing, which
+        // made every character wait for the next Terminal.Gui loop iteration before it appeared.
+        if (!key.IsCtrl && !key.IsAlt && key.AsRune.Value >= 32 && !IsWideCharacter(key.AsRune))
+        {
+            InsertAtCaret(key.AsRune.ToString());
+            key.Handled = true;
+            return true;
+        }
+
+        // Everything else (Ctrl+Z, Ctrl+arrow, etc.): let TextView handle normally.
         return base.OnKeyDown(key);
     }
 
@@ -254,27 +268,294 @@ internal sealed class MultilineInput : Editor
         return base.OnMouseEvent(ev);
     }
 
-    private void ResetFlushTimer()
+    private void InsertAtCaret(string text)
     {
-        flushTimer?.Dispose();
-        flushTimer = new Timer(
-            _ => TuiSessionContext.App.Invoke(FlushPasteBuffer),
-            null, PasteFlushMs, System.Threading.Timeout.Infinite);
-    }
-
-    private void FlushPasteBuffer()
-    {
-        flushTimer?.Dispose();
-        flushTimer = null;
-        if (pasteBuffer.Length == 0) return;
-        // Replace emoji-presentation runes: the terminal renders them 2 columns while TextView's
-        // cursor model counts 1, which desyncs editing (cursor jumps lines, text inserts off-place).
-        var text = Glyphs.Sanitize(pasteBuffer.ToString());
-        pasteBuffer.Clear();
+        text = Glyphs.Sanitize(text);
         if (HasSelection)
             ReplaceSelection(text);
         else
             Document?.Insert(CaretOffset, text);
+
+        MarkInputDirty();
+    }
+
+    private bool TryHandleFastSelectionKey(Key key)
+    {
+        if (key.IsCtrl || key.IsAlt)
+            return false;
+
+        var targetOffset = key == Key.CursorLeft.WithShift
+            ? GetHorizontalOffset(-1)
+            : key == Key.CursorRight.WithShift
+                ? GetHorizontalOffset(1)
+                : key == Key.CursorUp.WithShift
+                    ? GetVerticalOffset(-1)
+                    : key == Key.CursorDown.WithShift
+                        ? GetVerticalOffset(1)
+                        : key == Key.Home.WithShift
+                            ? GetLineBoundaryOffset(moveToEnd: false)
+                            : key == Key.End.WithShift
+                                ? GetLineBoundaryOffset(moveToEnd: true)
+                                : (int?)null;
+
+        if (targetOffset is null)
+            return false;
+
+        ExtendSelectionTo(targetOffset.Value);
+        return true;
+    }
+
+    private bool TryHandleFastEditKey(Key key)
+    {
+        if (key.IsCtrl || key.IsAlt)
+            return false;
+
+        if (key == Key.CursorLeft)
+            return MoveCaretHorizontal(-1);
+
+        if (key == Key.CursorRight)
+            return MoveCaretHorizontal(1);
+
+        if (key == Key.Home)
+            return MoveCaretToLineBoundary(moveToEnd: false);
+
+        if (key == Key.End)
+            return MoveCaretToLineBoundary(moveToEnd: true);
+
+        if (key == Key.Backspace)
+            return DeleteLeft();
+
+        if (key == Key.Delete)
+            return DeleteRight();
+
+        return false;
+    }
+
+    private bool MoveCaretHorizontal(int direction)
+    {
+        var nextOffset = GetHorizontalOffset(direction);
+        if (CaretOffset != nextOffset)
+        {
+            CaretOffset = nextOffset;
+            MarkInputDirty();
+        }
+
+        return true;
+    }
+
+    private bool MoveCaretVertical(int direction)
+    {
+        var nextOffset = GetVerticalOffset(direction);
+        if (CaretOffset != nextOffset)
+        {
+            CaretOffset = nextOffset;
+            MarkInputDirty();
+        }
+        return true;
+    }
+
+    private bool MoveCaretToLineBoundary(bool moveToEnd)
+    {
+        var nextOffset = GetLineBoundaryOffset(moveToEnd);
+        if (CaretOffset != nextOffset)
+        {
+            CaretOffset = nextOffset;
+            MarkInputDirty();
+        }
+
+        return true;
+    }
+
+    private bool DeleteLeft()
+    {
+        if (HasSelection)
+        {
+            ReplaceSelection("");
+            MarkInputDirty();
+            return true;
+        }
+
+        var text = Text?.ToString() ?? "";
+        var offset = Math.Clamp(CaretOffset, 0, text.Length);
+        if (offset <= 0)
+            return true;
+
+        var start = PreviousTextOffset(text, offset);
+        Document?.Remove(start, offset - start);
+        CaretOffset = start;
+        MarkInputDirty();
+        return true;
+    }
+
+    private bool DeleteRight()
+    {
+        if (HasSelection)
+        {
+            ReplaceSelection("");
+            MarkInputDirty();
+            return true;
+        }
+
+        var text = Text?.ToString() ?? "";
+        var offset = Math.Clamp(CaretOffset, 0, text.Length);
+        if (offset >= text.Length)
+            return true;
+
+        var end = NextTextOffset(text, offset);
+        Document?.Remove(offset, end - offset);
+        CaretOffset = offset;
+        MarkInputDirty();
+        return true;
+    }
+
+    private void MarkInputDirty()
+    {
+        SetNeedsDraw();
+        SuperView?.SetNeedsDraw();
+    }
+
+    private int GetHorizontalOffset(int direction)
+    {
+        var text = Text?.ToString() ?? "";
+        return direction < 0
+            ? PreviousTextOffset(text, CaretOffset)
+            : NextTextOffset(text, CaretOffset);
+    }
+
+    private int GetVerticalOffset(int direction)
+    {
+        var text = Text?.ToString() ?? "";
+        var offset = Math.Clamp(CaretOffset, 0, text.Length);
+        GetLineBounds(text, offset, out var lineStart, out var lineEnd);
+        var column = Math.Max(0, offset - lineStart);
+
+        if (direction < 0)
+        {
+            if (lineStart == 0)
+                return CaretOffset;
+
+            var previousLineEnd = lineStart - 1;
+            if (previousLineEnd > 0 && text[previousLineEnd - 1] == '\r')
+                previousLineEnd--;
+
+            var previousLineBreak = previousLineEnd <= 0
+                ? -1
+                : text.LastIndexOf('\n', previousLineEnd - 1);
+            var previousLineStart = previousLineBreak < 0 ? 0 : previousLineBreak + 1;
+            return Math.Min(previousLineStart + column, previousLineEnd);
+        }
+
+        var nextBreak = text.IndexOf('\n', lineEnd);
+        if (nextBreak < 0)
+            return CaretOffset;
+
+        var nextLineStart = nextBreak + 1;
+        var nextLineEnd = text.IndexOf('\n', nextLineStart);
+        if (nextLineEnd < 0)
+            nextLineEnd = text.Length;
+        if (nextLineEnd > nextLineStart && text[nextLineEnd - 1] == '\r')
+            nextLineEnd--;
+
+        return Math.Min(nextLineStart + column, nextLineEnd);
+    }
+
+    private int GetLineBoundaryOffset(bool moveToEnd)
+    {
+        var text = Text?.ToString() ?? "";
+        GetLineBounds(text, CaretOffset, out var lineStart, out var lineEnd);
+        return moveToEnd ? lineEnd : lineStart;
+    }
+
+    private void ExtendSelectionTo(int targetOffset)
+    {
+        var textLength = Document?.TextLength ?? 0;
+        targetOffset = Math.Clamp(targetOffset, 0, textLength);
+
+        while (CaretOffset != targetOffset)
+        {
+            var previousOffset = CaretOffset;
+            ExtendSelectionBy(targetOffset > CaretOffset ? 1 : -1);
+            if (CaretOffset == previousOffset)
+                break;
+        }
+
+        MarkInputDirty();
+    }
+
+    private void ExtendSelectionBy(int direction)
+    {
+        if (extendCaretBy is not null)
+        {
+            extendCaretBy(direction);
+            return;
+        }
+
+        InvokeCommand(direction < 0 ? Command.LeftExtend : Command.RightExtend);
+    }
+
+    private static Action<int>? CreateExtendCaretByDelegate(Editor editor)
+    {
+        try
+        {
+            return ExtendCaretByMethod?.CreateDelegate<Action<int>>(editor);
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+        catch (MethodAccessException)
+        {
+            return null;
+        }
+    }
+
+    private static void GetLineBounds(string text, int offset, out int start, out int end)
+    {
+        offset = Math.Clamp(offset, 0, text.Length);
+
+        var previousBreak = offset == 0 ? -1 : text.LastIndexOf('\n', offset - 1);
+        start = previousBreak < 0 ? 0 : previousBreak + 1;
+
+        var nextBreak = text.IndexOf('\n', offset);
+        end = nextBreak < 0 ? text.Length : nextBreak;
+        if (end > start && text[end - 1] == '\r')
+            end--;
+    }
+
+    private static int PreviousTextOffset(string text, int offset)
+    {
+        offset = Math.Clamp(offset, 0, text.Length);
+        if (offset <= 0)
+            return 0;
+
+        var current = 0;
+        foreach (var rune in text.EnumerateRunes())
+        {
+            var next = current + rune.Utf16SequenceLength;
+            if (next >= offset)
+                return current;
+            current = next;
+        }
+
+        return current;
+    }
+
+    private static int NextTextOffset(string text, int offset)
+    {
+        offset = Math.Clamp(offset, 0, text.Length);
+        if (offset >= text.Length)
+            return text.Length;
+
+        var current = 0;
+        foreach (var rune in text.EnumerateRunes())
+        {
+            var next = current + rune.Utf16SequenceLength;
+            if (next > offset)
+                return next;
+            current = next;
+        }
+
+        return text.Length;
     }
 
     private void DrawHint()
@@ -370,13 +651,4 @@ internal sealed class MultilineInput : Editor
         return false;
     }
 
-    protected override void Dispose(bool disposing)
-    {
-        if (disposing)
-        {
-            flushTimer?.Dispose();
-            flushTimer = null;
-        }
-        base.Dispose(disposing);
-    }
 }

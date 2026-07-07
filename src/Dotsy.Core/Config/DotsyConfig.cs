@@ -133,6 +133,20 @@ public sealed class AgentConfig
     public int RepeatThreshold { get; set; } = 3;
     public bool AutoLint { get; set; } = false;
     public bool AutoTest { get; set; } = false;
+    // Completion guard: if the most recent build/test command in the session failed (non-zero
+    // exit), refuse a completion signal (e.g. the Done tool) and inject a corrective hint so the
+    // model fixes the failure instead of declaring success over a red build. Weaker models often
+    // narrate "build succeeded" while the last build actually exited non-zero. Bounded by
+    // AutoContinueMaxAttempts and progress-guarded (a subsequent passing build clears the flag).
+    // Set false to always trust the completion signal.
+    public bool VerifyBuildBeforeComplete { get; set; } = true;
+    // Read de-duplication: when the model re-reads a file it already read, whose content is STILL
+    // present verbatim in the live context (not yet summarized/compacted away) and which has not
+    // changed on disk, return a short "already read" stub instead of re-injecting the whole file.
+    // This is compaction-safe: if the earlier read has been summarized out of context, the full
+    // file is returned again so the model never loses content it needs. Set false to always
+    // re-read. See ReadDedup.
+    public bool DedupeReads { get; set; } = true;
     public int MaxReflections { get; set; } = 3;
     public bool InjectEnvironment { get; set; } = true;
     public bool InjectGitStatus { get; set; } = true;
@@ -145,11 +159,18 @@ public sealed class CompactionConfig
     public int ReserveTokens { get; set; } = 16_384;
     public int KeepRecentTokens { get; set; } = 20_000;
     public bool ToolPairSummarize { get; set; } = true;
+    // When summarizing old tool pairs, keep the MOST RECENT read of each distinct file verbatim
+    // instead of collapsing it. Weaker models otherwise re-read the same file repeatedly once its
+    // content is summarized away; preserving the latest read keeps it available (and lets read
+    // de-dup catch any repeat). Superseded/older reads of the same file are still summarized.
+    public bool PreserveLatestReads { get; set; } = true;
 }
 
 public sealed class RetrievalConfig
 {
-    public int RepoMapTokens { get; set; } = 1024;
+    // Token budget for the repository map injected at session start. A richer map up front lets
+    // the model orient without a burst of exploratory whole-file reads.
+    public int RepoMapTokens { get; set; } = 4096;
     public int RipgrepMaxMatches { get; set; } = 100;
     public int RipgrepMaxBytes { get; set; } = 51_200;
 }

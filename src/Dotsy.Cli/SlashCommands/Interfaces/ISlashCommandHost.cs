@@ -75,7 +75,7 @@ internal interface ISlashCommandHost
 
     #region Turn lifecycle
     /// <summary>
-    /// Starts a cancellable background operation tied to the window's Ctrl+C cancel mechanism and
+    /// Starts a cancellable background operation tied to the window's Ctrl+G cancel mechanism and
     /// returns its token. Pair with <see cref="EndScenario"/> in a finally block.
     /// </summary>
     CancellationToken BeginScenario();

@@ -367,7 +367,7 @@ public partial class AgentWindow : Window, IDisposable
             ("Tab", "move between panels"),
             ("Alt+Arrows", "resize panels"),
             ("Esc", "focus input or close inspection"),
-            ("Ctrl+C", "cancel the current agent turn"),
+            ("Ctrl+G", "cancel the current agent turn"),
             ("Ctrl+Q", "quit")
         })
         {
@@ -426,11 +426,11 @@ public partial class AgentWindow : Window, IDisposable
 
     protected override bool OnKeyDown(Key key)
     {
-        // Ctrl+C cancels the running agent regardless of which panel is focused.
+        // Ctrl+G cancels the running agent regardless of which panel is focused.
         // Ctrl+Q quit is handled via _input.QuitRequested when the input has focus;
         // also handle it here so it works when focus is on the conversation/tool panels.
         // key.KeyCode for modifier combos includes the mask (Key.Q.WithCtrl not KeyCode.Q).
-        if (key == new Key(KeyCode.C).WithCtrl)
+        if (key == new Key(KeyCode.G).WithCtrl)
         {
             scenarioCts?.Cancel();
             return true;
@@ -494,16 +494,16 @@ public partial class AgentWindow : Window, IDisposable
         }
 
         // Adjust split with Alt+Left/Right when focus is in either panel or the divider (but not the input or approval/inspect overlays)
-        var foc = TuiSessionContext.App.Navigation?.GetFocused();
+        var focused = TuiSessionContext.App.Navigation?.GetFocused();
         if ((key == Key.CursorLeft.WithAlt || key == Key.CursorRight.WithAlt)
-            && TryResizePanelSplit(key, foc))
+            && TryResizePanelSplit(key, focused))
             return true;
 
         if ((key == Key.CursorUp.WithAlt || key == Key.CursorDown.WithAlt)
-            && TryResizeFilePanelSplit(key, foc))
+            && TryResizeFilePanelSplit(key, focused))
             return true;
         // Prevent boundary navigation from stealing focus away from content panels
-        if (foc == convo || foc == toolCallList || foc == fileList)
+        if (focused == convo || focused == toolCallList || focused == fileList)
         {
             switch (key.KeyCode)
             {
@@ -523,8 +523,6 @@ public partial class AgentWindow : Window, IDisposable
         bool shiftTab = key == Key.Tab.WithShift;
         if ((plainTab || shiftTab) && !IsOverlayVisible())
         {
-            var focused = TuiSessionContext.App.Navigation?.GetFocused();
-            
             if (plainTab && focused == promptInput && TryShowCompletionPopup())
                 return true;
 
@@ -536,15 +534,11 @@ public partial class AgentWindow : Window, IDisposable
         // Typing a printable character outside the input redirects focus there.
         // We insert the char directly because returning false after SetFocus does
         // not re-route the key to the newly focused view in TG v2's routing model.
-        if (!IsOverlayVisible() && IsPrintableChar(key))
+        if (!IsOverlayVisible() && IsPrintableChar(key) && focused != promptInput)
         {
-            var focused = TuiSessionContext.App.Navigation?.GetFocused();
-            if (focused != promptInput)
-            {
-                promptInput.SetFocus();
-                promptInput.InsertText(key.AsRune.ToString());
-                return true;
-            }
+            promptInput.SetFocus();
+            promptInput.InsertText(key.AsRune.ToString());
+            return true;
         }
 
         return base.OnKeyDown(key);
@@ -553,9 +547,9 @@ public partial class AgentWindow : Window, IDisposable
     private static bool IsPrintableChar(Key key)
     {
         if (key.IsCtrl || key.IsAlt) return false;
-        // Letters Aâ€“Z carry ShiftMask in KeyCode; strip it before the range check.
+        // Letters A-Z carry ShiftMask in KeyCode; strip it before the range check.
         var kc = (uint)(key.KeyCode & ~KeyCode.ShiftMask);
-        return kc >= 32 && kc <= 126; // ASCII printable range (space â€¦ ~)
+        return kc >= 32 && kc <= 126; // ASCII printable range (space -¦ ~)
     }
 
     #region Split resizing

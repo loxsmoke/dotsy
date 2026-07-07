@@ -58,7 +58,8 @@ internal sealed class ResumeCommand : ISlashCommand
             TokenBudget.Empty.ContextWindow,
             config.Compaction.ReserveTokens,
             config.Compaction.KeepRecentTokens,
-            loaded.UsedTokens);
+            loaded.UsedTokens,
+            config.Compaction.ThresholdPct);
 
         // Seed prompt history with the user messages from the loaded session.
         foreach (var message in loaded.Messages)

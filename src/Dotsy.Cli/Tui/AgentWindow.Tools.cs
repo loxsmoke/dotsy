@@ -282,7 +282,7 @@ public partial class AgentWindow
         }
 
         System.Text.Json.JsonElement input;
-        try { input = System.Text.Json.JsonDocument.Parse(argsJson).RootElement; }
+        try { input = ToolArgs.TryParseArgs(argsJson); }
         catch { return lines; }
 
         var path = input.GetStringPropertyOrEmpty("path");

@@ -1,6 +1,5 @@
 using Dotsy.Cli.SlashCommands;
 using Dotsy.Core.Config;
-using Dotsy.Core.Loop;
 using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Tools;
 
@@ -111,7 +110,8 @@ public sealed class SelfContextBuilderTests
                 ContextWindow: 1_000_000,
                 ReserveTokens: 16_384,
                 KeepRecentTokens: 20_000,
-                UsedTokens: 250_000),
+                UsedTokens: 250_000,
+                CompactionThreshold: 0.9f),
         };
 
         var markdown = await new SelfCommand().BuildMarkdownAsync(new SelfCommand.SelfContextRequest(

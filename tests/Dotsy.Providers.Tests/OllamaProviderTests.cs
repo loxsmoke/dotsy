@@ -299,7 +299,7 @@ public sealed class OllamaProviderTests
         {
             var ctx = new LoopContext
             {
-                TokenBudget = new TokenBudget(200_000, 16_384, 20_000, 0)
+                TokenBudget = new TokenBudget(200_000, 16_384, 20_000, 0, 0.9f)
             };
             ctx.Messages.Add(new UserMessage([new TextBlock("find unfinished todo items")]));
 

@@ -68,14 +68,22 @@ public sealed partial class TodoTool : ITool
             return Task.FromResult(ToolResult.Err("action is required (list_sections, list_tasks, create_section, edit_section, delete_section, create_item, edit_item, delete_item, or set_status)"));
 
         var path = Path.Combine(ctx.Cwd, FileName);
-        if (!File.Exists(path))
-            return Task.FromResult(ToolResult.Err($"{FileName} not found in {ctx.Cwd}"));
+        string raw = "";
+        if (File.Exists(path))
+        {
+            try { raw = File.ReadAllText(path); }
+            catch (Exception ex) { return Task.FromResult(ToolResult.Err($"Could not read {FileName}: {ex.Message}")); }
+        }
+        else if (action is not ("create_section" or "list_sections" or "list_tasks"))
+        {
+            // No todo.md yet. Reads return an empty list and create_section bootstraps the file;
+            // edit/delete/set_status/create_item have nothing to act on, so point the model at the
+            // way to start one instead of a bare "not found".
+            return Task.FromResult(ToolResult.Err(
+                $"{FileName} not found in {ctx.Cwd}. Use the 'create_section' action to start a todo list."));
+        }
 
-        string raw;
-        try { raw = File.ReadAllText(path); }
-        catch (Exception ex) { return Task.FromResult(ToolResult.Err($"Could not read {FileName}: {ex.Message}")); }
-
-        var lines = raw.Split('\n');
+        var lines = raw.Length == 0 ? Array.Empty<string>() : raw.Split('\n');
         var doc = Parse(lines);
 
         return Task.FromResult(action switch
