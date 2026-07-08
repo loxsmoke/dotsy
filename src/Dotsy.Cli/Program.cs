@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Dotsy.Cli;
+using Dotsy.Cli.SlashCommands;
 using Dotsy.Cli.Tui;
 using Dotsy.Cli.Tui.Colors;
 using Dotsy.Core.Config;
@@ -13,6 +14,7 @@ using Dotsy.Core.Session;
 using Dotsy.Core.Session.Data;
 using Dotsy.Core.Skills;
 using Dotsy.Core.Tools;
+using Dotsy.Core.Utils;
 using Dotsy.Mcp;
 using Dotsy.Providers;
 
@@ -458,7 +460,7 @@ static async Task<int> RunHeadless(
         config.Compaction.ThresholdPct);
 
     var loop = new AgentLoop(provider, registry, permissions, config, sessionStore: sessionStore, trajectory: trajectory);
-    if (prompt.Trim().Equals("/compact", StringComparison.OrdinalIgnoreCase))
+    if (prompt.Trim().EqualsNoCase($"/{CompactCommand.CommandName}"))
     {
         var compactExitCode = await RunHeadlessCompact(loop, loopCtx, workingDirectory, outputFormat, sw, ct);
         sessionStore.UpdateIndex("manual compaction", workingDirectory, config.Model.ActiveModel.Id);

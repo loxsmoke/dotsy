@@ -19,14 +19,15 @@ namespace Dotsy.Cli.SlashCommands;
 /// </summary>
 internal sealed class SelfCommand : ISlashCommand
 {
-    public string Name => "self";
+    public const string CommandName = "self";
+    public string Name => CommandName;
 
     public bool RequiresIdle => true;
 
     public IReadOnlyList<SlashCommandUsage> Usages =>
     [
-        new("/self", "Ask the agent to summarize the current Dotsy runtime, configuration, environment, and command usage from a generated self-context prompt."),
-        new("/self <question>", "Ask a question about the current Dotsy runtime or usage with the generated self-context prompt injected as context."),
+        new($"/{Name}", "Ask the agent to summarize the current Dotsy runtime, configuration, environment, and command usage from a generated self-context prompt."),
+        new($"/{Name} <question>", "Ask a question about the current Dotsy runtime or usage with the generated self-context prompt injected as context."),
     ];
 
     private const string Unknown = "unknown";
@@ -40,7 +41,7 @@ internal sealed class SelfCommand : ISlashCommand
             return;
         }
 
-        var display = string.IsNullOrEmpty(args) ? "/self" : "/self " + args;
+        var display = string.IsNullOrEmpty(args) ? $"/{CommandName}" : $"/{CommandName} " + args;
         var commandUsages = host.CommandUsages;
         host.SetState("building self context");
         Task.Run(async () =>

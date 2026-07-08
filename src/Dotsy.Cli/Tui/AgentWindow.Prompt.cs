@@ -5,6 +5,7 @@ using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Providers;
 using Dotsy.Core.Session.Data;
 using Dotsy.Core.Tools;
+using Dotsy.Core.Utils;
 
 namespace Dotsy.Cli.Tui;
 
@@ -208,7 +209,7 @@ public partial class AgentWindow
                                 if (tf.Result.IsError)
                                     TuiSessionContext.App.Invoke(() => AppendConvo(
                                         $"  [✗ {tf.Name}] {tf.Result.Content}\n", Palette.Err));
-                                else if (tf.Name.Equals(DoneTool.ToolName, StringComparison.OrdinalIgnoreCase) &&
+                                else if (tf.Name.EqualsNoCase(DoneTool.ToolName) &&
                                          !string.IsNullOrWhiteSpace(tf.Result.Content))
                                 {
                                     if (!assistantWritten)

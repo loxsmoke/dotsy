@@ -1,3 +1,5 @@
+using Dotsy.Core.Utils;
+
 namespace Dotsy.Core.Skills;
 
 public static class SkillLoader
@@ -47,7 +49,7 @@ public static class SkillLoader
                 case "name": fm.Name = value; break;
                 case "description": fm.Description = value; break;
                 case "disable-model-invocation":
-                    fm.DisableModelInvocation = value.Equals("true", StringComparison.OrdinalIgnoreCase);
+                    fm.DisableModelInvocation = value.EqualsNoCase("true");
                     break;
                 case "allowed-tools":
                     // Handle inline list: [Tool1, Tool2] or comma-separated

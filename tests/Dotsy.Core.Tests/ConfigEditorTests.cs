@@ -1,4 +1,5 @@
 using Dotsy.Core.Config;
+using Dotsy.Core.Utils;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace Dotsy.Core.Tests;
@@ -118,7 +119,7 @@ public sealed class ConfigEditorTests
         Assert.AreEqual(
             "max output tokens per request",
             ConfigEditor.GetValueHint(param));
-        Assert.IsFalse(ConfigEditor.GetValueHint(param).Contains("range:", StringComparison.OrdinalIgnoreCase));
+        Assert.IsFalse(ConfigEditor.GetValueHint(param).ContainsNoCase("range:"));
     }
 
     [TestMethod]

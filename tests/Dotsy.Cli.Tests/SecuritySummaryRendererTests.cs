@@ -70,7 +70,7 @@ public sealed class SecuritySummaryRendererTests
         var config = new DotsyConfig();
         var permissions = new PermissionStore(config.Permissions, _tmpDir) { Yolo = true };
 
-        var summary = new SecuritySummaryRenderer().Render(new SecuritySummaryRequest(
+        var summary = SecuritySummaryRenderer.Render(new SecuritySummaryRequest(
             config,
             permissions,
             _tmpDir,
@@ -118,7 +118,7 @@ public sealed class SecuritySummaryRendererTests
         var ctx = new LoopContext("sec-session");
         ctx.AddedFiles.Add(Path.Combine(_tmpDir, "readme.md"));
 
-        var summary = new SecuritySummaryRenderer().Render(new SecuritySummaryRequest(
+        var summary = SecuritySummaryRenderer.Render(new SecuritySummaryRequest(
             config,
             permissions,
             _tmpDir,
@@ -181,7 +181,7 @@ public sealed class SecuritySummaryRendererTests
     }
 
     private string Render(DotsyConfig config, PermissionStore permissions) =>
-        new SecuritySummaryRenderer().Render(new SecuritySummaryRequest(
+        SecuritySummaryRenderer.Render(new SecuritySummaryRequest(
             config,
             permissions,
             _tmpDir,

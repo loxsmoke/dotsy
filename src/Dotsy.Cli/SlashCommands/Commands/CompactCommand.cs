@@ -10,13 +10,14 @@ namespace Dotsy.Cli.SlashCommands;
 /// </summary>
 internal sealed class CompactCommand : ISlashCommand
 {
-    public string Name => "compact";
+    public const string CommandName = "compact";
+    public string Name => CommandName;
 
     public bool RequiresIdle => true;
 
     public IReadOnlyList<SlashCommandUsage> Usages =>
     [
-        new("/compact", "Run manual conversation compaction for the current session."),
+        new($"/{Name}", "Run manual conversation compaction for the current session."),
     ];
 
     public void Execute(ISlashCommandHost host, string args)

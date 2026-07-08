@@ -4,6 +4,7 @@ using Dotsy.Cli.Tui.Colors;
 using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Providers;
 using Dotsy.Core.Session;
+using Dotsy.Core.Utils;
 using System.Text.Json;
 
 namespace Dotsy.Cli.SlashCommands;
@@ -15,15 +16,17 @@ internal sealed class ResumeCommand : ISlashCommand
 {
     private const int ListLimit = 5;
 
-    public string Name => "resume";
+    public const string CommandName = "resume";
+
+    public string Name => CommandName;
 
     public bool RequiresIdle => true;
 
     public IReadOnlyList<SlashCommandUsage> Usages =>
     [
-        new("/resume", "Resume the most recent saved session for the current working directory."),
-        new("/resume <id>", "Resume a specific saved session ID."),
-        new("/resume list", "List the five most recent saved sessions for the current working directory."),
+        new($"/{Name}", "Resume the most recent saved session for the current working directory."),
+        new($"/{Name} <id>", "Resume a specific saved session ID."),
+        new($"/{Name} list", "List the five most recent saved sessions for the current working directory."),
     ];
 
     public void Execute(ISlashCommandHost host, string args)
@@ -31,7 +34,7 @@ internal sealed class ResumeCommand : ISlashCommand
         var config = TuiSessionContext.Config;
         var cwd = TuiSessionContext.Cwd;
         var sessionDir = SessionStore.ResolveDir(config.Session.LogDir, cwd);
-        if (string.Equals(args.Trim(), "list", StringComparison.OrdinalIgnoreCase))
+        if (args.Trim().EqualsNoCase("list"))
         {
             ListRecentSessions(host, sessionDir, cwd);
             return;
@@ -121,21 +124,21 @@ internal sealed class ResumeCommand : ISlashCommand
         {
             return
             [
-                new("list", "/resume list"),
-                new("select session", "/resume select session "),
+                new("list", $"/{CommandName} list"),
+                new("select session", $"/{CommandName} select session "),
             ];
         }
 
-        if ("list".StartsWith(text, StringComparison.OrdinalIgnoreCase))
-            return [new CompletionItem("list", "/resume list")];
+        if ("list".StartsWithNoCase(text))
+            return [new CompletionItem("list", $"/{CommandName} list")];
 
         const string selectSession = "select session";
-        if (!selectSession.StartsWith(text, StringComparison.OrdinalIgnoreCase) &&
-            !text.StartsWith(selectSession + " ", StringComparison.OrdinalIgnoreCase))
+        if (!selectSession.StartsWithNoCase(text) &&
+            !text.StartsWithNoCase(selectSession + " "))
             return [];
 
-        if (!text.StartsWith(selectSession + " ", StringComparison.OrdinalIgnoreCase))
-            return [new CompletionItem("select session", "/resume select session ")];
+        if (!text.StartsWithNoCase(selectSession + " "))
+            return [new CompletionItem("select session", $"/{CommandName} select session ")];
 
         var rest = text[selectSession.Length..].TrimStart();
         var sessions = GetSessionsForCurrentCwd();
@@ -152,9 +155,9 @@ internal sealed class ResumeCommand : ISlashCommand
             return DayCompletions(sessions, day);
 
         return sessions
-            .Where(s => SessionDay(s).Equals(day, StringComparison.OrdinalIgnoreCase))
+            .Where(s => SessionDay(s).EqualsNoCase(day))
             .OrderByDescending(s => s.UpdatedAt)
-            .Select(s => new CompletionItem(SessionDisplay(s), "/resume " + s.SessionId))
+            .Select(s => new CompletionItem(SessionDisplay(s), $"/{CommandName} " + s.SessionId))
             .ToList();
     }
 
@@ -170,9 +173,9 @@ internal sealed class ResumeCommand : ISlashCommand
         sessions
             .Select(SessionDay)
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Where(day => day.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .Where(day => day.StartsWithNoCase(prefix))
             .OrderByDescending(day => day, StringComparer.OrdinalIgnoreCase)
-            .Select(day => new CompletionItem(day, "/resume select session " + day + " "))
+            .Select(day => new CompletionItem(day, $"/{CommandName} select session " + day + " "))
             .ToList();
 
     private static string SessionDay(Dotsy.Core.Session.Data.SessionIndexEntry session) =>
@@ -232,7 +235,7 @@ internal sealed class ResumeCommand : ISlashCommand
                 using var doc = JsonDocument.Parse(line);
                 var root = doc.RootElement;
                 if (!root.TryGetProperty("type", out var type) ||
-                    !string.Equals(type.GetString(), "user", StringComparison.OrdinalIgnoreCase))
+                    !type.GetString().EqualsNoCase("user"))
                     continue;
 
                 steps++;

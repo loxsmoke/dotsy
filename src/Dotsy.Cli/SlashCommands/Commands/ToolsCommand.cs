@@ -9,11 +9,12 @@ namespace Dotsy.Cli.SlashCommands;
 /// </summary>
 internal sealed class ToolsCommand : ISlashCommand
 {
-    public string Name => "tools";
+    public const string CommandName = "tools";
+    public string Name => CommandName;
 
     public IReadOnlyList<SlashCommandUsage> Usages =>
     [
-        new("/tools", "List all tool definitions currently registered and sent to the LLM, including descriptions."),
+        new($"/{Name}", "List all tool definitions currently registered and sent to the LLM, including descriptions."),
     ];
 
     public void Execute(ISlashCommandHost host, string args)

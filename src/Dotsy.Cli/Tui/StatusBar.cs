@@ -1,4 +1,5 @@
 using Dotsy.Cli.Tui.Colors;
+using Dotsy.Core.Utils;
 
 namespace Dotsy.Cli.Tui;
 
@@ -44,7 +45,7 @@ internal sealed class StatusBar : Label
     {
         foreach (var word in AnimatedWords)
         {
-            if (!currentState.StartsWith(word, StringComparison.OrdinalIgnoreCase))
+            if (!currentState.StartsWithNoCase(word))
                 continue;
 
             var phase = runningPhase % (word.Length * 2);

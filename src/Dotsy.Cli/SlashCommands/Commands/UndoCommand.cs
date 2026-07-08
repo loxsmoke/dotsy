@@ -10,13 +10,14 @@ namespace Dotsy.Cli.SlashCommands;
 /// </summary>
 internal sealed class UndoCommand : ISlashCommand
 {
-    public string Name => "undo";
+    public const string CommandName = "undo";
+    public string Name => CommandName;
 
     public bool RequiresIdle => true;
 
     public IReadOnlyList<SlashCommandUsage> Usages =>
     [
-        new("/undo", "Reset tracked files to the previous git checkpoint for the current session turn, if one exists."),
+        new($"/{Name}", "Reset tracked files to the previous git checkpoint for the current session turn, if one exists."),
     ];
 
     public void Execute(ISlashCommandHost host, string args)

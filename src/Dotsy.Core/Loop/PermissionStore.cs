@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Dotsy.Core.Config;
 using Dotsy.Core.Tools;
+using Dotsy.Core.Utils;
 
 namespace Dotsy.Core.Loop;
 
@@ -139,7 +140,7 @@ public sealed class PermissionStore
         foreach (var root in allowedWriteRoots)
         {
             var rootSlash = root.EndsWith(Path.DirectorySeparatorChar) ? root : root + Path.DirectorySeparatorChar;
-            if (absPath.StartsWith(rootSlash, StringComparison.OrdinalIgnoreCase))
+            if (absPath.StartsWithNoCase(rootSlash))
                 return true;
         }
         return false;
@@ -242,7 +243,7 @@ public sealed class PermissionStore
     private static List<string> MatchKeys(string toolName, string argument)
     {
         var keys = new List<string> { FormatKey(toolName, argument) };
-        if (toolName.Equals(ShellTool.ToolName, StringComparison.OrdinalIgnoreCase)
+        if (toolName.EqualsNoCase(ShellTool.ToolName)
             && TryGetShellCommand(argument) is { } cmd)
             keys.Add(FormatKey(toolName, cmd));
         return keys;
@@ -250,7 +251,7 @@ public sealed class PermissionStore
 
     private bool IsAllowed(string toolName, string argument, List<string> keys)
     {
-        var isShell = toolName.Equals(ShellTool.ToolName, StringComparison.OrdinalIgnoreCase);
+        var isShell = toolName.EqualsNoCase(ShellTool.ToolName);
         var command = isShell ? TryGetShellCommand(argument) : null;
         // A parsed shell command is "simple" if it can't chain, pipe, redirect, or subshell.
         var simpleShell = command is null || IsSimpleShellCommand(command);
@@ -263,7 +264,7 @@ public sealed class PermissionStore
                 if (!isWildcard)
                 {
                     // Exact rule: the user opted into this precise command, operators and all.
-                    if (pattern.Equals(key, StringComparison.OrdinalIgnoreCase))
+                    if (pattern.EqualsNoCase(key))
                         return true;
                 }
                 else if (MatchesGlob(key, pattern))
@@ -302,8 +303,8 @@ public sealed class PermissionStore
     private void TrackDecision(string kind, string rule)
     {
         var record = new PermissionDecisionRecord(kind, rule, DateTimeOffset.Now);
-        if (!recentDecisions.Any(d => d.Kind.Equals(kind, StringComparison.OrdinalIgnoreCase)
-                && d.Rule.Equals(rule, StringComparison.OrdinalIgnoreCase)))
+        if (!recentDecisions.Any(d => d.Kind.EqualsNoCase(kind)
+                && d.Rule.EqualsNoCase(rule)))
             recentDecisions.Add(record);
     }
 
@@ -319,7 +320,7 @@ public sealed class PermissionStore
 
     private static bool MatchesGlob(string key, string pattern)
     {
-        if (pattern.Equals(key, StringComparison.OrdinalIgnoreCase))
+        if (pattern.EqualsNoCase(key))
             return true;
 
         // Simple glob: * matches any sequence
@@ -343,7 +344,7 @@ public sealed class PermissionStore
             pos = idx + part.Length;
         }
 
-        if (parts[^1].Length > 0 && !key.EndsWith(parts[^1], StringComparison.OrdinalIgnoreCase))
+        if (parts[^1].Length > 0 && !key.EndsWithNoCase(parts[^1]))
             return false;
 
         return true;
@@ -351,9 +352,9 @@ public sealed class PermissionStore
 
     private bool IsWriteOutsideCwd(string toolName, string argument)
     {
-        if (!toolName.Equals(WriteTool.ToolName, StringComparison.OrdinalIgnoreCase) &&
-            !toolName.Equals(EditTool.ToolName, StringComparison.OrdinalIgnoreCase) &&
-            !toolName.Equals(MultiEditTool.ToolName, StringComparison.OrdinalIgnoreCase))
+        if (!toolName.EqualsNoCase(WriteTool.ToolName) &&
+            !toolName.EqualsNoCase(EditTool.ToolName) &&
+            !toolName.EqualsNoCase(MultiEditTool.ToolName))
             return false;
 
         var path = ExtractPathArgument(argument);
@@ -362,14 +363,14 @@ public sealed class PermissionStore
             : Path.GetFullPath(Path.Combine(cwd, path));
 
         var cwdFull = Path.GetFullPath(cwd) + Path.DirectorySeparatorChar;
-        return !absPath.StartsWith(cwdFull, StringComparison.OrdinalIgnoreCase);
+        return !absPath.StartsWithNoCase(cwdFull);
     }
 
     private bool IsWriteInProjectNotDotsy(string toolName, string argument)
     {
-        if (!toolName.Equals(WriteTool.ToolName, StringComparison.OrdinalIgnoreCase) &&
-            !toolName.Equals(EditTool.ToolName, StringComparison.OrdinalIgnoreCase) &&
-            !toolName.Equals(MultiEditTool.ToolName, StringComparison.OrdinalIgnoreCase))
+        if (!toolName.EqualsNoCase(WriteTool.ToolName) &&
+            !toolName.EqualsNoCase(EditTool.ToolName) &&
+            !toolName.EqualsNoCase(MultiEditTool.ToolName))
             return false;
 
         string absPath;
@@ -384,11 +385,11 @@ public sealed class PermissionStore
 
         var cwdFull = Path.GetFullPath(cwd);
         var cwdSlash = cwdFull + Path.DirectorySeparatorChar;
-        if (!absPath.StartsWith(cwdSlash, StringComparison.OrdinalIgnoreCase))
+        if (!absPath.StartsWithNoCase(cwdSlash))
             return false;
 
         var dotsySlash = Path.Combine(cwdFull, ".dotsy") + Path.DirectorySeparatorChar;
-        return !absPath.StartsWith(dotsySlash, StringComparison.OrdinalIgnoreCase);
+        return !absPath.StartsWithNoCase(dotsySlash);
     }
 
     private static string ExtractPathArgument(string argument)

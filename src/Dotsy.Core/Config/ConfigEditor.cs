@@ -1,3 +1,4 @@
+using Dotsy.Core.Utils;
 using System.Reflection;
 using System.Text;
 using Tomlyn;
@@ -199,14 +200,14 @@ public static class ConfigEditor
     public static ParamDef? FindParam(string key) =>
         ParamList
             .SelectMany(g => g.Params)
-            .FirstOrDefault(p => p.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(p => p.Key.EqualsNoCase(key));
 
     public static IReadOnlyList<string> GetValidValues(ParamDef param)
     {
         if (param.ValidValues is { Count: > 0 })
             return param.ValidValues;
 
-        if (param.Type.Equals("bool", StringComparison.OrdinalIgnoreCase))
+        if (param.Type.EqualsNoCase("bool"))
             return ["true", "false"];
 
         return [];
@@ -304,7 +305,7 @@ public static class ConfigEditor
     // secrets (allowSecrets: false) and may be committed to source control.
     private static string ResolveTargetFile(string[] parts, string? projectConfigPath)
     {
-        var isSecret = parts[^1].Equals("api_key", StringComparison.OrdinalIgnoreCase);
+        var isSecret = parts[^1].EqualsNoCase("api_key");
         if (!isSecret && projectConfigPath is not null && File.Exists(projectConfigPath))
             return projectConfigPath;
 
@@ -500,8 +501,8 @@ public static class ConfigEditor
 
     private static object ToTomlScalar(string raw)
     {
-        if (raw.Equals("true", StringComparison.OrdinalIgnoreCase))  return true;
-        if (raw.Equals("false", StringComparison.OrdinalIgnoreCase)) return false;
+        if (raw.EqualsNoCase("true"))  return true;
+        if (raw.EqualsNoCase("false")) return false;
         if (TryParseHumanNumeric(raw, out var hn)) return hn;
         if (long.TryParse(raw, out var l)) return l;
         if (double.TryParse(raw, System.Globalization.NumberStyles.Float,

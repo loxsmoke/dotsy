@@ -2,6 +2,7 @@ using Dotsy.Cli.SlashCommands.Interfaces;
 using Dotsy.Cli.Tui;
 using Dotsy.Cli.Tui.Colors;
 using Dotsy.Core.Skills;
+using Dotsy.Core.Utils;
 
 namespace Dotsy.Cli.SlashCommands;
 
@@ -10,12 +11,13 @@ namespace Dotsy.Cli.SlashCommands;
 /// </summary>
 internal sealed class SkillCommand : ISlashCommand
 {
-    public string Name => "skill";
+    public const string CommandName = "skill";
+    public string Name => CommandName;
 
     public IReadOnlyList<SlashCommandUsage> Usages =>
     [
-        new("/skill", "List discovered skills."),
-        new("/skill <name>", "Load the named skill body into the current loop context immediately."),
+        new($"/{Name}", "List discovered skills."),
+        new($"/{Name} <name>", "Load the named skill body into the current loop context immediately."),
     ];
 
     public void Execute(ISlashCommandHost host, string args)
@@ -71,9 +73,9 @@ internal sealed class SkillCommand : ISlashCommand
         var disc = new SkillDiscovery(TuiSessionContext.Config.Skills, TuiSessionContext.Cwd);
         return disc.FindAll()
             .Select(s => s.Name)
-            .Where(name => name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .Where(name => name.StartsWithNoCase(prefix))
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
-            .Select(name => new CompletionItem(name, "/skill " + name))
+            .Select(name => new CompletionItem(name, $"/{CommandName} " + name))
             .ToList();
     }
 }

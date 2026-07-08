@@ -83,9 +83,9 @@ public sealed class WebFetchTool : ITool
         }
 
         var body = Encoding.UTF8.GetString(buf, 0, bytesRead);
-        bool isHtml = contentType.Contains("html", StringComparison.OrdinalIgnoreCase)
-                      || body.TrimStart().StartsWith("<!DOCTYPE html", StringComparison.OrdinalIgnoreCase)
-                      || body.TrimStart().StartsWith("<html", StringComparison.OrdinalIgnoreCase);
+        bool isHtml = contentType.ContainsNoCase("html")
+                      || body.TrimStart().StartsWithNoCase("<!DOCTYPE html")
+                      || body.TrimStart().StartsWithNoCase("<html");
 
         var result = isHtml ? HtmlToMarkdown(body) : body;
 

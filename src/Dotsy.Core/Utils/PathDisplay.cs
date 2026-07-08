@@ -14,14 +14,12 @@ public static class PathDisplay
                 : Path.GetFullPath(Path.Combine(cwd, path));
             var absoluteCwd = Path.GetFullPath(cwd);
 
-            if (absolutePath.StartsWith(
-                    absoluteCwd + Path.DirectorySeparatorChar,
-                    StringComparison.OrdinalIgnoreCase))
+            if (absolutePath.StartsWithNoCase(absoluteCwd + Path.DirectorySeparatorChar))
             {
                 return absolutePath[(absoluteCwd.Length + 1)..];
             }
 
-            if (absolutePath.Equals(absoluteCwd, StringComparison.OrdinalIgnoreCase))
+            if (absolutePath.EqualsNoCase(absoluteCwd))
                 return ".";
         }
         catch

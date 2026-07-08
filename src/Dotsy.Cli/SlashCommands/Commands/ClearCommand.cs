@@ -12,11 +12,12 @@ namespace Dotsy.Cli.SlashCommands;
 /// </summary>
 internal sealed class ClearCommand : ISlashCommand
 {
-    public string Name => "clear";
+    public const string CommandName = "clear";
+    public string Name => CommandName;
 
     public IReadOnlyList<SlashCommandUsage> Usages =>
     [
-        new("/clear", "Clear the visible conversation panel, tool log, and changed-files panel for the current TUI view."),
+        new($"/{Name}", "Clear the visible conversation panel, tool log, and changed-files panel for the current TUI view."),
     ];
 
     public void Execute(ISlashCommandHost host, string args)

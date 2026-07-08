@@ -1,6 +1,7 @@
 using Dotsy.Cli.SlashCommands.Interfaces;
 using Dotsy.Cli.Tui;
 using Dotsy.Cli.Tui.Colors;
+using Dotsy.Core.Utils;
 
 namespace Dotsy.Cli.SlashCommands;
 
@@ -10,18 +11,19 @@ namespace Dotsy.Cli.SlashCommands;
 /// </summary>
 internal sealed class AddCommand : ISlashCommand
 {
-    public string Name => "add";
+    public const string CommandName = "add";
+    public string Name => CommandName;
 
     public IReadOnlyList<SlashCommandUsage> Usages =>
     [
-        new("/add <path>", "Add a file path to read-only context for the current loop."),
+        new($"/{Name} <path>", "Add a file path to read-only context for the current loop."),
     ];
 
     public void Execute(ISlashCommandHost host, string args)
     {
         if (string.IsNullOrEmpty(args))
         {
-            host.Write("usage: /add <path>\n\n", Palette.Warn);
+            host.Write($"usage: /{CommandName} <path>\n\n", Palette.Warn);
             return;
         }
 
@@ -74,7 +76,7 @@ internal sealed class AddCommand : ISlashCommand
 
         static bool StartsWithPrefix(string name, string prefix) =>
             string.IsNullOrEmpty(prefix)
-            || name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+            || name.StartsWithNoCase(prefix);
 
         string BuildReplacement(string name, bool isDir)
         {
@@ -83,7 +85,7 @@ internal sealed class AddCommand : ISlashCommand
                 : Path.Combine(typedDir, name);
             if (isDir && !completed.EndsWith(Path.DirectorySeparatorChar))
                 completed += Path.DirectorySeparatorChar;
-            return "/add " + completed;
+            return $"/{CommandName} " + completed;
         }
 
         var dirs = Directory.EnumerateDirectories(searchDir)

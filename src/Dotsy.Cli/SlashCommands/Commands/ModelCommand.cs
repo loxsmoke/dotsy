@@ -3,6 +3,7 @@ using Dotsy.Cli.Tui;
 using Dotsy.Cli.Tui.Colors;
 using Dotsy.Core.Config;
 using Dotsy.Core.Providers;
+using Dotsy.Core.Utils;
 
 namespace Dotsy.Cli.SlashCommands;
 
@@ -14,12 +15,13 @@ internal sealed class ModelCommand : ISlashCommand
     private static readonly object CacheLock = new();
     private static readonly Dictionary<(string Provider, object Lookup), Task<IReadOnlyList<ModelInfo>>> ModelCache = [];
 
-    public string Name => "model";
+    public const string CommandName = "model";
+    public string Name => CommandName;
 
     public IReadOnlyList<SlashCommandUsage> Usages =>
     [
-        new("/model", "Show current provider, model ID, and API-key source."),
-        new("/model <id>", "Switch the in-memory model ID for the active session and update the status bar."),
+        new($"/{Name}", "Show current provider, model ID, and API-key source."),
+        new($"/{Name} <id>", "Switch the in-memory model ID for the active session and update the status bar."),
     ];
 
     public void Execute(ISlashCommandHost host, string args)
@@ -92,16 +94,16 @@ internal sealed class ModelCommand : ISlashCommand
         var models = TryGetCachedModels(provider, host);
 
         if (models is null)
-            return [new CompletionItem("loading...", "/model ")];
+            return [new CompletionItem("loading...", $"/{CommandName} ")];
 
         var ids = models
             .Select(m => m.Id)
             .Append(currentModel)
             .Where(id => !string.IsNullOrWhiteSpace(id))
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Where(id => id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .Where(id => id.StartsWithNoCase(prefix))
             .OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
-            .Select(id => new CompletionItem(id, "/model " + id))
+            .Select(id => new CompletionItem(id, $"/{CommandName} " + id))
             .ToList();
 
         return ids;

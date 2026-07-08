@@ -1,3 +1,4 @@
+using Dotsy.Core.Utils;
 using System.Reflection;
 using Tomlyn;
 using Tomlyn.Model;
@@ -262,7 +263,7 @@ public static class ConfigLoader
     private static string ResolveKeySource(
         string key, HashSet<string> projectKeys, string? projectPath)
     {
-        var secret = key.EndsWith(".api_key", StringComparison.OrdinalIgnoreCase);
+        var secret = key.EndsWithNoCase(".api_key");
 
         // Env overrides everything; check both the generic DOTSY_ overlay and the well-known key vars.
         var envVar = EnvVarForKey(key);
@@ -302,12 +303,12 @@ public static class ConfigLoader
     }
 
     public static bool IsSecretKey(string key) =>
-        key.EndsWith(".api_key", StringComparison.OrdinalIgnoreCase)
-        || key.Contains("secret", StringComparison.OrdinalIgnoreCase)
-        || key.Contains("auth_token", StringComparison.OrdinalIgnoreCase)
-        || key.Contains("access_token", StringComparison.OrdinalIgnoreCase)
-        || key.Contains("bearer", StringComparison.OrdinalIgnoreCase)
-        || key.Contains("password", StringComparison.OrdinalIgnoreCase);
+        key.EndsWithNoCase(".api_key")
+        || key.ContainsNoCase("secret")
+        || key.ContainsNoCase("auth_token")
+        || key.ContainsNoCase("access_token")
+        || key.ContainsNoCase("bearer")
+        || key.ContainsNoCase("password");
 
     // Flattens a TOML file into the set of dotted leaf keys it sets (e.g. "model.anthropic.api_key").
     private static HashSet<string> FlattenTomlKeys(string path)

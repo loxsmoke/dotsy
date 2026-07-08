@@ -3,6 +3,7 @@ using Dotsy.Cli.Tui.Approval;
 using Dotsy.Cli.Tui.Colors;
 using Dotsy.Cli.Tui.ToolList;
 using Dotsy.Core.Config;
+using Dotsy.Core.Utils;
 
 namespace Dotsy.Cli.Tui;
 
@@ -23,7 +24,7 @@ public partial class AgentWindow
 
         if (SlashCommands.Find(cmd) is not { } command)
         {
-            AppendConvo($"unknown command: /{cmd}  (try /help)\n\n", Palette.Warn);
+            AppendConvo($"unknown command: /{cmd}  (try /{HelpCommand.CommandName})\n\n", Palette.Warn);
             return;
         }
 
@@ -118,7 +119,7 @@ public partial class AgentWindow
         {
             var prefix = body;
             return SlashCommands.Names
-                .Where(c => c.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                .Where(c => c.StartsWithNoCase(prefix))
                 .Select(c => new CompletionItem("/" + c, CommandReplacement(c)))
                 .ToList();
         }
@@ -135,8 +136,8 @@ public partial class AgentWindow
         if (text.Contains('\n') || !text.EndsWith(' '))
             return null;
 
-        const string prefix = "/config ";
-        if (!text.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        const string prefix = $"/{ConfigCommand.CommandName} ";
+        if (!text.StartsWithNoCase(prefix))
             return null;
 
         var args = text[prefix.Length..].Trim();

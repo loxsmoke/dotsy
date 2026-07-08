@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Dotsy.Core.Config;
+using Dotsy.Core.Utils;
 
 namespace Dotsy.Core.Session;
 
@@ -75,11 +76,11 @@ public static partial class TrajectoryRedactor
             var value = entry.Value?.ToString() ?? "";
             if (value.Length < 8)
                 continue;
-            if (key.Contains("KEY", StringComparison.OrdinalIgnoreCase)
-                || key.Contains("TOKEN", StringComparison.OrdinalIgnoreCase)
-                || key.Contains("SECRET", StringComparison.OrdinalIgnoreCase)
-                || key.Contains("PASSWORD", StringComparison.OrdinalIgnoreCase)
-                || key.Contains("AUTH", StringComparison.OrdinalIgnoreCase))
+            if (key.ContainsNoCase("KEY")
+                || key.ContainsNoCase("TOKEN")
+                || key.ContainsNoCase("SECRET")
+                || key.ContainsNoCase("PASSWORD")
+                || key.ContainsNoCase("AUTH"))
             {
                 secrets.Add(value);
             }

@@ -199,8 +199,6 @@ public sealed class ReadTool : ITool
     }
 
     private static bool PathsEqual(string left, string right) =>
-        string.Equals(
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)),
-            StringComparison.OrdinalIgnoreCase);
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)).EqualsNoCase(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)));
 }

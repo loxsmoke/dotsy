@@ -2,12 +2,13 @@ using System.Text;
 using System.Text.Json;
 using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Tools;
+using Dotsy.Core.Utils;
 
 namespace Dotsy.Core.Loop;
 
 public sealed class SecuritySummaryRenderer
 {
-    public string Render(SecuritySummaryRequest request)
+    public static string Render(SecuritySummaryRequest request)
     {
         var snapshot = request.Permissions.Snapshot();
         var sb = new StringBuilder();
@@ -146,11 +147,11 @@ public sealed class SecuritySummaryRenderer
     {
         if (tool.IsWriteTool || tool.Name is WriteTool.ToolName or  EditTool.ToolName or MultiEditTool.ToolName)
             return "write";
-        if (tool.Name.Equals(ShellTool.ToolName, StringComparison.OrdinalIgnoreCase))
+        if (tool.Name.EqualsNoCase(ShellTool.ToolName))
             return "shell";
-        if (tool.Name.Equals(TaskTool.ToolName, StringComparison.OrdinalIgnoreCase))
+        if (tool.Name.EqualsNoCase(TaskTool.ToolName))
             return "task subagent";
-        if (tool.Name.Equals(SkillTool.ToolName, StringComparison.OrdinalIgnoreCase))
+        if (tool.Name.EqualsNoCase(SkillTool.ToolName))
             return "skills";
         if (!ToolRegistry.BuiltInNames.Contains(tool.Name))
             return "mcp";
@@ -197,41 +198,41 @@ public sealed class SecuritySummaryRenderer
             using var doc = JsonDocument.Parse(trimmed);
             var root = doc.RootElement;
 
-            if (toolName.Equals(WriteTool.ToolName, StringComparison.OrdinalIgnoreCase) ||
-                toolName.Equals(EditTool.ToolName, StringComparison.OrdinalIgnoreCase) ||
-                toolName.Equals(MultiEditTool.ToolName, StringComparison.OrdinalIgnoreCase) ||
-                toolName.Equals(ReadTool.ToolName, StringComparison.OrdinalIgnoreCase))
+            if (toolName.EqualsNoCase(WriteTool.ToolName) ||
+                toolName.EqualsNoCase(EditTool.ToolName) ||
+                toolName.EqualsNoCase(MultiEditTool.ToolName) ||
+                toolName.EqualsNoCase(ReadTool.ToolName))
             {
                 return SummarizeJsonProperty(root, "path", "path");
             }
 
-            if (toolName.Equals(ShellTool.ToolName, StringComparison.OrdinalIgnoreCase))
+            if (toolName.EqualsNoCase(ShellTool.ToolName))
             {
                 return SummarizeJsonProperty(root, "command", "command");
             }
 
-            if (toolName.Equals(GrepTool.ToolName, StringComparison.OrdinalIgnoreCase) ||
-                toolName.Equals(WebSearchTool.ToolName, StringComparison.OrdinalIgnoreCase))
+            if (toolName.EqualsNoCase(GrepTool.ToolName) ||
+                toolName.EqualsNoCase(WebSearchTool.ToolName))
             {
                 return SummarizeJsonProperty(root, "query", "query");
             }
 
-            if (toolName.Equals(GlobTool.ToolName, StringComparison.OrdinalIgnoreCase))
+            if (toolName.EqualsNoCase(GlobTool.ToolName))
             {
                 return SummarizeJsonProperty(root, "pattern", "pattern");
             }
 
-            if (toolName.Equals(WebFetchTool.ToolName, StringComparison.OrdinalIgnoreCase))
+            if (toolName.EqualsNoCase(WebFetchTool.ToolName))
             {
                 return SummarizeJsonProperty(root, "url", "url");
             }
 
-            if (toolName.Equals(SkillTool.ToolName, StringComparison.OrdinalIgnoreCase))
+            if (toolName.EqualsNoCase(SkillTool.ToolName))
             {
                 return SummarizeJsonProperty(root, "name", "name");
             }
 
-            if (toolName.Equals(TaskTool.ToolName, StringComparison.OrdinalIgnoreCase))
+            if (toolName.EqualsNoCase(TaskTool.ToolName))
             {
                 return root.TryGetProperty("task_id", out var taskId)
                     ? $"task id {ClipSingleLine(taskId.GetString() ?? "", 80)}"

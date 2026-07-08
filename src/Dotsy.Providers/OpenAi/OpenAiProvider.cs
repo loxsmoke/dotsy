@@ -381,8 +381,8 @@ public class OpenAiProvider : IProvider
         {
             var (errType, errMsg, reqId) = ParseErrorBody(body, resp);
             if (!string.IsNullOrEmpty(errMsg)
-                && errMsg.Contains("context", StringComparison.OrdinalIgnoreCase)
-                && errMsg.Contains("length", StringComparison.OrdinalIgnoreCase))
+                && errMsg.ContainsNoCase("context")
+                && errMsg.ContainsNoCase("length"))
             {
                 error = new ContextLengthError();
             }
@@ -412,8 +412,8 @@ public class OpenAiProvider : IProvider
 
     private static bool IsModelUnknownError(string value) =>
         !string.IsNullOrEmpty(value)
-        && value.Contains("model", StringComparison.OrdinalIgnoreCase)
-        && (value.Contains("unknown", StringComparison.OrdinalIgnoreCase)
-            || value.Contains("not found", StringComparison.OrdinalIgnoreCase)
-            || value.Contains("invalid", StringComparison.OrdinalIgnoreCase));
+        && value.ContainsNoCase("model")
+        && (value.ContainsNoCase("unknown")
+            || value.ContainsNoCase("not found")
+            || value.ContainsNoCase("invalid"));
 }

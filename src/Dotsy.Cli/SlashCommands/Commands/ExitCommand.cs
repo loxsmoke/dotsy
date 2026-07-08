@@ -12,10 +12,7 @@ internal sealed class ExitCommand : ISlashCommand
     public IReadOnlyList<string> Aliases => ["quit"];
 
     public IReadOnlyList<SlashCommandUsage> Usages =>
-    [
-        new("/exit", "Quit the TUI."),
-        new("/quit", "Alias for /exit."),
-    ];
+        [new($"/{Name}", "Quit the TUI."), ..Aliases.Select(a => new SlashCommandUsage($"/{a}", $"Alias for /{Name}."))];
 
     public void Execute(ISlashCommandHost host, string args) => host.RequestStop();
 }

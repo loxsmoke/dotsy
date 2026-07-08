@@ -299,9 +299,9 @@ public sealed class AnthropicProvider : IProvider
                             "authentication_error" => new AuthError(msg),
                             "rate_limit_error" => new RateLimitError(null),
                             "overloaded_error" => new ServerError(529),
-                            _ when msg.Contains("context", StringComparison.OrdinalIgnoreCase) => new ContextLengthError(),
-                            _ when msg.Contains("model unknown", StringComparison.OrdinalIgnoreCase) || 
-                                   msg.Contains("not found", StringComparison.OrdinalIgnoreCase) && msg.Contains("model", StringComparison.OrdinalIgnoreCase) => new ModelUnknownError(msg),
+                            _ when msg.ContainsNoCase("context") => new ContextLengthError(),
+                            _ when msg.ContainsNoCase("model unknown") || 
+                                   msg.ContainsNoCase("not found") && msg.ContainsNoCase("model") => new ModelUnknownError(msg),
                             _ => new RequestError(400, string.IsNullOrEmpty(msg) ? (errType ?? "") : msg)
                         };
                         yield return new StreamError(new ProviderException(provErr));
@@ -346,8 +346,8 @@ public sealed class AnthropicProvider : IProvider
         }
         else if (ProviderHttp.TryClassifyCommonError(resp, out var commonError))
             error = commonError!;
-        else if (body.Contains("context", StringComparison.OrdinalIgnoreCase) &&
-                 body.Contains("length", StringComparison.OrdinalIgnoreCase))
+        else if (body.ContainsNoCase("context") &&
+                 body.ContainsNoCase("length"))
         {
             error = new ContextLengthError();
         }
@@ -359,8 +359,8 @@ public sealed class AnthropicProvider : IProvider
                        : body.Trim();
             if (!string.IsNullOrEmpty(reqId))
                 detail += $" (request {reqId})";
-            if (detail.Contains("model unknown", StringComparison.OrdinalIgnoreCase) ||
-                (detail.Contains("model", StringComparison.OrdinalIgnoreCase) && detail.Contains("not found", StringComparison.OrdinalIgnoreCase)))
+            if (detail.ContainsNoCase("model unknown") ||
+                (detail.ContainsNoCase("model") && detail.ContainsNoCase("not found")))
             {
                 error = new ModelUnknownError(detail);
             }

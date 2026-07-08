@@ -401,7 +401,7 @@ public sealed partial class TodoTool : ITool
     private static bool MatchesSection(string section, string filter)
     {
         filter = filter.Trim();
-        if (section.Contains(filter, StringComparison.OrdinalIgnoreCase))
+        if (section.ContainsNoCase(filter))
             return true;
         // Match by leading number, e.g. filter "2" against "2. Bug fixes".
         var num = LeadingNumberRegex().Match(section);

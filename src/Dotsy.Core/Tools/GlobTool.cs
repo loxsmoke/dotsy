@@ -117,7 +117,7 @@ public sealed class GlobTool : ITool
                 {
                     var rel = Path.GetRelativePath(root, sd);
                     // Prune a directory by exact name (e.g. "extern") or glob match on its path.
-                    if (name.Equals(exclude, StringComparison.OrdinalIgnoreCase)
+                    if (name.EqualsNoCase(exclude)
                         || excludeMatcher(rel))
                         continue;
                 }

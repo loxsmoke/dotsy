@@ -1,4 +1,5 @@
 using Dotsy.Core.Config;
+using Dotsy.Core.Utils;
 
 namespace Dotsy.Core.Skills;
 
@@ -126,10 +127,10 @@ public sealed class SkillDiscovery
     private static IReadOnlyList<string> FindCompanions(string skillFile)
     {
         var dir = Path.GetDirectoryName(skillFile) ?? "";
-        if (Path.GetFileName(skillFile).Equals(DefaultSkillFileName, StringComparison.OrdinalIgnoreCase))
+        if (Path.GetFileName(skillFile).EqualsNoCase(DefaultSkillFileName))
         {
             return Directory.GetFiles(dir, "*", SearchOption.AllDirectories)
-                .Where(f => !string.Equals(f, skillFile, StringComparison.OrdinalIgnoreCase))
+                .Where(f => !f.EqualsNoCase(skillFile))
                 .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
                 .ToList();
         }
@@ -141,8 +142,8 @@ public sealed class SkillDiscovery
         {
             if (f == skillFile) continue;
             var fn = Path.GetFileNameWithoutExtension(f);
-            if (fn.StartsWith(baseName, StringComparison.OrdinalIgnoreCase) ||
-                fn.Equals(baseName, StringComparison.OrdinalIgnoreCase))
+            if (fn.StartsWithNoCase(baseName) ||
+                fn.EqualsNoCase(baseName))
             {
                 companions.Add(f);
             }
@@ -161,7 +162,7 @@ public sealed class SkillDiscovery
             yield return dirSkill;
 
         foreach (var file in EnumerateSkillFiles(root)
-            .Where(f => SkillNameFromPath(f).Equals(name, StringComparison.OrdinalIgnoreCase)))
+            .Where(f => SkillNameFromPath(f).EqualsNoCase(name)))
             yield return file;
     }
 
@@ -187,7 +188,7 @@ public sealed class SkillDiscovery
     /// <returns>The skill name</returns>
     private static string SkillNameFromPath(string file)
     {
-        if (Path.GetFileName(file).Equals(DefaultSkillFileName, StringComparison.OrdinalIgnoreCase))
+        if (Path.GetFileName(file).EqualsNoCase(DefaultSkillFileName))
             return new DirectoryInfo(Path.GetDirectoryName(file) ?? "").Name;
         return Path.GetFileNameWithoutExtension(file);
     }

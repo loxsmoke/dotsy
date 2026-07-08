@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Dotsy.Core.Utils;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -69,9 +70,7 @@ public sealed class RoslynIndex : IDisposable
     private static bool HasBinOrObjSegment(string path)
     {
         var segments = path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        return segments.Any(s =>
-            s.Equals("obj", StringComparison.OrdinalIgnoreCase)
-            || s.Equals("bin", StringComparison.OrdinalIgnoreCase));
+        return segments.Any(s => s.EqualsNoCase("obj") || s.EqualsNoCase("bin"));
     }
 
     private FileOutline? GetOrBuild(string filePath, string repoRoot)

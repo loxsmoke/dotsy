@@ -11,11 +11,12 @@ namespace Dotsy.Cli.SlashCommands;
 /// </summary>
 internal sealed class SecCommand : ISlashCommand
 {
-    public string Name => "sec";
+    public const string CommandName = "sec";
+    public string Name => CommandName;
 
     public IReadOnlyList<SlashCommandUsage> Usages =>
     [
-        new("/sec", "Show a security summary of the tool permissions currently in effect."),
+        new($"/{Name}", "Show a security summary of the tool permissions currently in effect."),
     ];
 
     public void Execute(ISlashCommandHost host, string args)
@@ -27,7 +28,7 @@ internal sealed class SecCommand : ISlashCommand
             return;
         }
 
-        var summary = new SecuritySummaryRenderer().Render(new SecuritySummaryRequest(
+        var summary = SecuritySummaryRenderer.Render(new SecuritySummaryRequest(
             TuiSessionContext.Config,
             permissions,
             TuiSessionContext.Cwd,

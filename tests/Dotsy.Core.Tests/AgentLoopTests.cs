@@ -8,6 +8,7 @@ using Dotsy.Core.Providers;
 using Dotsy.Core.Session;
 using Dotsy.Core.Tests.Helpers;
 using Dotsy.Core.Tools;
+using Dotsy.Core.Utils;
 
 namespace Dotsy.Core.Tests;
 
@@ -437,7 +438,7 @@ public sealed class AgentLoopTests
         public Task<ToolResult> ExecuteAsync(System.Text.Json.JsonElement input, ToolContext ctx, CancellationToken ct)
         {
             var cmd = input.TryGetProperty("command", out var c) ? c.GetString() ?? "" : "";
-            return Task.FromResult(cmd.Contains("fail", StringComparison.OrdinalIgnoreCase)
+            return Task.FromResult(cmd.ContainsNoCase("fail")
                 ? ToolResult.Err("Exit code 1\nbuild failed")
                 : ToolResult.Ok("Build succeeded."));
         }

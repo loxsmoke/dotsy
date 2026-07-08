@@ -1,3 +1,4 @@
+using Dotsy.Cli.SlashCommands;
 using Dotsy.Cli.Tui.Approval;
 using Dotsy.Cli.Tui.Colors;
 using Dotsy.Cli.Tui.FileList;
@@ -6,6 +7,7 @@ using Dotsy.Cli.Tui.ToolList;
 using Dotsy.Core.Config;
 using Dotsy.Core.Git;
 using Dotsy.Core.Loop.Data;
+using Dotsy.Core.Utils;
 using LibGit2Sharp;
 using System.Collections.ObjectModel;
 using System.Globalization;
@@ -359,7 +361,7 @@ public partial class AgentWindow : Window, IDisposable
         AppendConvo(@"  _ | (_| | (_) | |_\__ \ || |" + Environment.NewLine, Palette.Running);
         AppendConvo(@" (_) \__,_|\___/ \__|___/\_, |" + Environment.NewLine, Palette.Running);
         AppendConvo(@"                         |__/" + Environment.NewLine, Palette.Running);
-        AppendConvo("Type a message to start, or /help for commands.\n\n", Palette.Dim);
+        AppendConvo($"Type a message to start, or /{HelpCommand.CommandName} for commands.\n\n", Palette.Dim);
         AppendConvo("Keyboard commands:\n", Palette.Dim);
 
         int padding = 12;
@@ -732,7 +734,7 @@ public partial class AgentWindow : Window, IDisposable
             int added = 0, deleted = 0;
             List<List<Cell>> diff = [];
 
-            var entry = patch?.FirstOrDefault(c => c.Path.Equals(f.Path, StringComparison.OrdinalIgnoreCase));
+            var entry = patch?.FirstOrDefault(c => c.Path.EqualsNoCase(f.Path));
             if (entry is not null)
             {
                 added = entry.LinesAdded;

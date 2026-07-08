@@ -4,6 +4,7 @@ using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Providers;
 using Dotsy.Core.Tests.Helpers;
 using Dotsy.Core.Tools;
+using Dotsy.Core.Utils;
 
 namespace Dotsy.Core.Tests;
 
@@ -108,8 +109,7 @@ public sealed class ToolApprovalTests
 
         var events = await Collect(loop.RunAsync(Ctx(), _tmpDir, CancellationToken.None));
 
-        var finished = events.OfType<ToolFinished>().FirstOrDefault(tf =>
-            string.Equals(tf.Name, toolName, StringComparison.OrdinalIgnoreCase));
+        var finished = events.OfType<ToolFinished>().FirstOrDefault(tf => tf.Name.EqualsNoCase(toolName));
         Assert.IsNotNull(finished, $"No ToolFinished event for {toolName}");
         Assert.IsTrue(finished.Result.IsError, $"{toolName}: expected error result");
         StringAssert.Contains(finished.Result.Content, "Permission required",
@@ -132,8 +132,7 @@ public sealed class ToolApprovalTests
 
         var events = await Collect(loop.RunAsync(Ctx(), _tmpDir, CancellationToken.None));
 
-        var finished = events.OfType<ToolFinished>().FirstOrDefault(tf =>
-            string.Equals(tf.Name, toolName, StringComparison.OrdinalIgnoreCase));
+        var finished = events.OfType<ToolFinished>().FirstOrDefault(tf => tf.Name.EqualsNoCase(toolName));
         Assert.IsNotNull(finished, $"No ToolFinished event for {toolName}");
         Assert.IsTrue(finished.Result.IsError, $"{toolName}: expected error result");
         StringAssert.Contains(finished.Result.Content, "Permission denied",

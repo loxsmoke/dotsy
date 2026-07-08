@@ -8,15 +8,14 @@ namespace Dotsy.Cli.SlashCommands;
 /// </summary>
 internal sealed class HelpCommand : ISlashCommand
 {
-    public string Name => "help";
+    public const string CommandName = "help";
+    public string Name => CommandName;
 
     public IReadOnlyList<string> Aliases => ["?"];
 
     public IReadOnlyList<SlashCommandUsage> Usages =>
-    [
-        new("/help", "Print the slash-command help text in the conversation panel."),
-        new("/?", "Alias for /help."),
-    ];
+        [new($"/{Name}", "Print the slash-command help text in the conversation panel."), 
+        .. Aliases.Select(a => new SlashCommandUsage($"/{a}", $"Alias for /{Name}."))];
 
     public void Execute(ISlashCommandHost host, string args)
     {

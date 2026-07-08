@@ -1,6 +1,7 @@
 using Dotsy.Cli.SlashCommands.Interfaces;
 using Dotsy.Cli.Tui;
 using Dotsy.Cli.Tui.Colors;
+using Dotsy.Core.Utils;
 
 namespace Dotsy.Cli.SlashCommands;
 
@@ -9,11 +10,12 @@ namespace Dotsy.Cli.SlashCommands;
 /// </summary>
 internal sealed class VerboseCommand : ISlashCommand
 {
-    public string Name => "verbose";
+    public const string CommandName = "verbose";
+    public string Name => CommandName;
 
     public IReadOnlyList<SlashCommandUsage> Usages =>
     [
-        new("/verbose [true|false]", "Turn inline verbose mode on or off; omit the value to toggle it."),
+        new($"/{Name} [true|false]", "Turn inline verbose mode on or off; omit the value to toggle it."),
     ];
 
     public void Execute(ISlashCommandHost host, string args)
@@ -30,7 +32,7 @@ internal sealed class VerboseCommand : ISlashCommand
         }
         else
         {
-            host.Write("  usage: /verbose [true|false]\n\n", Palette.Warn);
+            host.Write($"  usage: /{CommandName} [true|false]\n\n", Palette.Warn);
             return;
         }
 
@@ -44,8 +46,8 @@ internal sealed class VerboseCommand : ISlashCommand
     {
         var prefix = partial.TrimStart();
         return new[] { "true", "false" }
-            .Where(value => value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            .Select(value => new CompletionItem(value, "/verbose " + value))
+            .Where(value => value.StartsWithNoCase(prefix))
+            .Select(value => new CompletionItem(value, $"/{CommandName} " + value))
             .ToList();
     }
 }

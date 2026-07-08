@@ -73,7 +73,7 @@ public sealed class FindDefsTool : ITool
                 // Not an existing file/dir. If it's a bare *.cs name, search for it under the cwd
                 // before giving up (the file likely lives in a subdirectory).
                 var name = Path.GetFileName(path);
-                var found = name.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+                var found = name.EndsWithNoCase(".cs")
                     ? Directory.EnumerateFiles(ctx.Cwd, name, SearchOption.AllDirectories).Take(MaxFiles).ToList()
                     : [];
                 if (found.Count == 0)

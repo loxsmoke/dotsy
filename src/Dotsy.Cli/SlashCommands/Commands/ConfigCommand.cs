@@ -2,6 +2,7 @@ using Dotsy.Cli.SlashCommands.Interfaces;
 using Dotsy.Cli.Tui;
 using Dotsy.Cli.Tui.Colors;
 using Dotsy.Core.Config;
+using Dotsy.Core.Utils;
 
 namespace Dotsy.Cli.SlashCommands;
 
@@ -11,13 +12,14 @@ namespace Dotsy.Cli.SlashCommands;
 /// </summary>
 internal sealed class ConfigCommand : ISlashCommand
 {
-    public string Name => "config";
+    public const string CommandName = "config";
+    public string Name => CommandName;
 
     public IReadOnlyList<SlashCommandUsage> Usages =>
     [
-        new("/config", "Show the active config file path and current configuration values grouped by section."),
-        new("/config list", "List every settable configuration key, type, and description."),
-        new("/config <key> <value>", "Update a config value via ConfigEditor.Set."),
+        new($"/{Name}", "Show the active config file path and current configuration values grouped by section."),
+        new($"/{Name} list", "List every settable configuration key, type, and description."),
+        new($"/{Name} <key> <value>", "Update a config value via ConfigEditor.Set."),
     ];
 
     public void Execute(ISlashCommandHost host, string args)
@@ -41,14 +43,14 @@ internal sealed class ConfigCommand : ISlashCommand
     {
         var text = partial.TrimStart();
         if (string.IsNullOrEmpty(text))
-            return TopLevelCompletions("").ToList();
+            return [.. TopLevelCompletions("")];
 
         var firstSpace = text.IndexOf(' ');
         if (firstSpace < 0)
         {
             var keyMatches = AllParams()
-                .Where(p => p.Key.StartsWith(text, StringComparison.OrdinalIgnoreCase))
-                .Select(p => new CompletionItem(p.Key, "/config " + p.Key + " "));
+                .Where(p => p.Key.StartsWithNoCase(text))
+                .Select(p => new CompletionItem(p.Key, $"/{Name} " + p.Key + " "));
 
             return TopLevelCompletions(text)
                 .Concat(keyMatches)
@@ -62,9 +64,9 @@ internal sealed class ConfigCommand : ISlashCommand
         if (FindGroup(first) is { } group)
         {
             return group.Params
-                .Where(p => p.Key.StartsWith(rest.TrimStart(), StringComparison.OrdinalIgnoreCase)
-                    || p.Key[(group.Section.Length + 1)..].StartsWith(rest.TrimStart(), StringComparison.OrdinalIgnoreCase))
-                .Select(p => new CompletionItem(p.Key, "/config " + p.Key + " "))
+                .Where(p => p.Key.StartsWithNoCase(rest.TrimStart())
+                    || p.Key[(group.Section.Length + 1)..].StartsWithNoCase(rest.TrimStart()))
+                .Select(p => new CompletionItem(p.Key, $"/{Name} " + p.Key + " "))
                 .ToList();
         }
 
@@ -72,8 +74,8 @@ internal sealed class ConfigCommand : ISlashCommand
         {
             var prefix = rest.TrimStart();
             return ConfigEditor.GetValidValues(param)
-                .Where(v => v.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                .Select(v => new CompletionItem(v, "/config " + param.Key + " " + v))
+                .Where(v => v.StartsWithNoCase(prefix))
+                .Select(v => new CompletionItem(v, $"/{Name} " + param.Key + " " + v))
                 .ToList();
         }
 
@@ -82,12 +84,12 @@ internal sealed class ConfigCommand : ISlashCommand
 
     private static IEnumerable<CompletionItem> TopLevelCompletions(string prefix)
     {
-        if ("list".StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            yield return new CompletionItem("list", "/config list");
+        if ("list".StartsWithNoCase(prefix))
+            yield return new CompletionItem("list", $"/{CommandName} list");
 
         foreach (var group in ConfigEditor.ParamList
-            .Where(g => g.Section.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
-            yield return new CompletionItem(group.Section, "/config " + group.Section + " ");
+            .Where(g => g.Section.StartsWithNoCase(prefix)))
+            yield return new CompletionItem(group.Section, $"/{CommandName} " + group.Section + " ");
     }
 
     private static IEnumerable<ConfigEditor.ParamDef> AllParams() =>
@@ -95,10 +97,10 @@ internal sealed class ConfigCommand : ISlashCommand
 
     private static ConfigEditor.ParamGroup? FindGroup(string section) =>
         ConfigEditor.ParamList.FirstOrDefault(g =>
-            g.Section.Equals(section, StringComparison.OrdinalIgnoreCase));
+            g.Section.StartsWithNoCase(section));
 
     private static ConfigEditor.ParamDef? FindParam(string key) =>
-        AllParams().FirstOrDefault(p => p.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
+        AllParams().FirstOrDefault(p => p.Key.StartsWithNoCase(key));
 
     private static void ShowAll(ISlashCommandHost host, DotsyConfig cfg)
     {
@@ -113,7 +115,7 @@ internal sealed class ConfigCommand : ISlashCommand
         host.Write($"  {ConfigEditor.ConfigFilePath}\n\n", Palette.Dim);
         foreach (var section in ConfigEditor.GetSections(cfg))
         {
-            var headerColor = section.Header.Equals(activeSection, StringComparison.OrdinalIgnoreCase)
+            var headerColor = section.Header.StartsWithNoCase(activeSection)
                 ? Palette.ActiveSection
                 : Palette.Bright;
             host.Write($"[{section.Header}]\n", headerColor);
@@ -124,8 +126,8 @@ internal sealed class ConfigCommand : ISlashCommand
             }
             host.Write("\n", Palette.Normal);
         }
-        host.Write("/config <key> <value> to change  ", Palette.Dim);
-        host.Write("e.g. /config model.provider ollama\n\n", Palette.Normal);
+        host.Write($"/{CommandName} <key> <value> to change  ", Palette.Dim);
+        host.Write($"e.g. /{CommandName} model.provider ollama\n\n", Palette.Normal);
     }
 
     private static void ShowKeyList(ISlashCommandHost host)
@@ -186,7 +188,7 @@ internal sealed class ConfigCommand : ISlashCommand
     private static string DisplayKey(string section, string key)
     {
         var prefix = section + ".";
-        return key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+        return key.StartsWithNoCase(prefix)
             ? key[prefix.Length..]
             : key;
     }
@@ -196,7 +198,7 @@ internal sealed class ConfigCommand : ISlashCommand
         var spaceIdx = args.IndexOf(' ');
         if (spaceIdx < 0)
         {
-            host.Write("  usage: /config <key> <value>  e.g. /config model.provider ollama\n\n", Palette.Warn);
+            host.Write($"  usage: /{CommandName} <key> <value>  e.g. /{CommandName} model.provider ollama\n\n", Palette.Warn);
             return;
         }
         var key = args[..spaceIdx].Trim();
@@ -207,8 +209,8 @@ internal sealed class ConfigCommand : ISlashCommand
         if (!key.Contains('.'))
         {
             host.Write($"  '{args}' isn't a config command.\n", Palette.Warn);
-            host.Write("  To chat with the agent, send your message without the leading /config.\n", Palette.Dim);
-            host.Write("  To change a setting, use /config <section.key> <value> (try /config list).\n\n", Palette.Dim);
+            host.Write($"  To chat with the agent, send your message without the leading /{CommandName}.\n", Palette.Dim);
+            host.Write($"  To change a setting, use /{CommandName} <section.key> <value> (try /{CommandName} list).\n\n", Palette.Dim);
             return;
         }
 
@@ -239,7 +241,7 @@ internal sealed class ConfigCommand : ISlashCommand
         host.Write($"  Saved → {msg}\n", Palette.Dim);
 
         // Rebuild provider + loop whenever any model setting changes.
-        if (key.StartsWith("model.", StringComparison.OrdinalIgnoreCase) &&
+        if (key.StartsWithNoCase("model.") &&
             TuiSessionContext.LoopFactory is { } factory)
         {
             if (host.IsBusy)
@@ -261,7 +263,7 @@ internal sealed class ConfigCommand : ISlashCommand
         }
 
         // Live re-theme: re-resolve the palette, recolor existing cells, repaint.
-        if (key.Equals("tui.theme", StringComparison.OrdinalIgnoreCase))
+        if (key.StartsWithNoCase("tui.theme"))
         {
             var (resolved, fellBack) = host.ApplyTheme(value);
             if (fellBack)
