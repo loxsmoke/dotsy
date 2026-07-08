@@ -145,8 +145,35 @@ public sealed class McpClient : IDisposable
             await stdin.WriteLineAsync(json);
             await stdin.FlushAsync(ct);
 
-            var response = await stdout.ReadLineAsync(ct);
-            return response is null ? null : ParseResponse(response);
+            // An MCP stdio server may interleave JSON-RPC notifications (startup banners,
+            // log messages, progress) with responses, and is not required to answer in
+            // request order. Read until the line whose "id" matches this request; skip
+            // notifications (which carry no "id"), unrelated responses, and non-JSON lines.
+            while (true)
+            {
+                var line = await stdout.ReadLineAsync(ct);
+                if (line is null)
+                    return null;
+                if (IsResponseForId(line, id))
+                    return ParseResponse(line);
+            }
+        }
+    }
+
+    private static bool IsResponseForId(string json, int id)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            // Responses carry a matching "id"; notifications do not have one at all.
+            return doc.RootElement.TryGetProperty("id", out var idEl)
+                && idEl.ValueKind == JsonValueKind.Number
+                && idEl.TryGetInt32(out var respId)
+                && respId == id;
+        }
+        catch
+        {
+            return false; // stray non-JSON output on stdout — ignore it
         }
     }
 
