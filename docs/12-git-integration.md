@@ -15,14 +15,14 @@ Branch: main (a3f21bc)
 
 ### 12.2 Diff Context
 
-The `read` tool, when given a path of `.` or a known git root, can optionally return the current `git diff --stat` as a summary. This is controlled by `--include-diff` flag.
+The `Read` tool, when given a directory path, can optionally include a git diff summary alongside the listing. This is controlled by the tool's `include_diff` input parameter (not a CLI flag).
 
 ### 12.3 Auto-Commit (opt-in)
 
 When `agent.auto_commit = true`:
-- After every successful `edit` or `write` tool call, the affected files are staged (`git add`).
-- After each agent turn that produced file changes, a commit is created with message: `agent: <first line of assistant reply>`.
-- Auto-commit uses LibGit2Sharp's `Commit()` with the user's configured git identity (read from `.git/config`).
+- The affected files from an `Edit`/`Write`/`MultiEdit` turn are staged (`git add`); if no paths are supplied, everything is staged (`git add *`).
+- After each agent turn that produced file changes, a commit is created with message: `agent: <first line of assistant reply>` (truncated to 72 chars).
+- Auto-commit uses LibGit2Sharp's `Commit()` with the user's configured git identity (`user.name` / `user.email`), falling back to `dotsy <dotsy@localhost>` when either is unset.
 - If the repo has uncommitted changes at session start and auto-commit is enabled, warn the user before proceeding.
 
 ### 12.4 Checkpoint / Undo

@@ -4,7 +4,7 @@
 
 - A single self-contained binary (`dotsy.exe`) that runs in any terminal.
 - Advanced TUI: panels, real-time streaming output, tool-call display, context-usage meter — not plain `Console.WriteLine`.
-- Multi-provider AI support: Anthropic, OpenAI, Azure OpenAI, Ollama (local), OpenRouter, and any OpenAI-compatible endpoint.
+- Multi-provider AI support: Anthropic, OpenAI, Azure OpenAI, Gemini, Ollama (local), OpenRouter, and any OpenAI-compatible endpoint.
 - Full agentic loop: tool use, reflection, parallel tool execution, subagent delegation.
 - Skills system compatible with the cross-tool `SKILL.md` convention (shared with **opencode**, **cline**, **pi**, **goose**, **continue**).
 - Proactive context-window management: token tracking, automatic summarisation, hard-error recovery.

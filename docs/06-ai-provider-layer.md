@@ -8,10 +8,15 @@ public interface IProvider
 {
     string Name { get; }
     Task<ModelInfo> GetModelInfoAsync(string modelId, CancellationToken ct);
+    Task<IReadOnlyList<ModelInfo>> GetModelsAsync(CancellationToken ct);   // model picker for /model
     IAsyncEnumerable<ProviderEvent> StreamAsync(ChatRequest request, CancellationToken ct);
 }
 
-public record ModelInfo(string Id, int ContextWindow, int MaxOutputTokens);
+// Source records where the context-window / output limits came from:
+// Api (live), Advertised (capability ceiling), Catalog (bundled ModelCatalog), Default (fallback).
+public enum ModelInfoSource { Api, Advertised, Catalog, Default }
+public record ModelInfo(string Id, int ContextWindow, int MaxOutputTokens,
+    ModelInfoSource Source = ModelInfoSource.Default);
 
 // Events emitted by StreamAsync
 public abstract record ProviderEvent;
@@ -53,8 +58,13 @@ Always use the `UsageUpdate` event from the API response (exact token counts). F
 | Anthropic | API key | Claude 3.x + Claude 4.x; extended thinking support |
 | OpenAI | API key | GPT-4o, GPT-4.1, o-series |
 | Azure OpenAI | API key + endpoint | Per-deployment |
+| Gemini | API key | Google Gemini models (e.g. `gemini-2.5-flash-lite`) |
 | Ollama | No auth | Local models via `POST /api/chat` |
 | OpenAI-compatible | API key + base URL | OpenRouter, Together, DeepSeek, Mistral, etc. |
+
+Provider keys used in config (`model.provider`): `anthropic`, `openai`, `azure_openai`, `gemini`,
+`ollama`, `compatible`. Each provider is `Resolve`d by `ProviderRegistry` and wrapped in a
+`RetryingProvider` (§17) before use.
 
 ---
 

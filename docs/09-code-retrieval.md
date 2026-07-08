@@ -4,19 +4,19 @@ Strategy: **tool-mediated by default** (simpler, no pre-indexing required). An o
 
 ### 9.1 Tool-Mediated Retrieval
 
-The LLM uses `grep`, `glob`, `find_definitions`, and `read` to locate relevant code. This is the same approach as **opencode**, **cline**, and **pi**. No background indexing; the model decides what to look up.
+The LLM uses `Grep`, `Glob`, `FindDefs`, and `Read` to locate relevant code. This is the same approach as **opencode**, **cline**, and **pi**. No background indexing; the model decides what to look up.
 
-**`grep` limits:** 100 matches, 50 KB, 2 000 lines (whichever is first). Long lines are truncated at 500 characters.
+**`Grep` limits:** 100 matches, 50 KB, 2 000 lines (whichever is first). Long lines are truncated at 500 characters.
 
-**`find_definitions`** uses Roslyn's `CSharpSyntaxTree` to extract top-level type names and member signatures from a directory (max 50 files). Returns a compact outline (file path + declarations) without full method bodies. Equivalent to **cline**'s `list_code_definition_names` for C#.
+**`FindDefs`** uses Roslyn's `CSharpSyntaxTree` to extract top-level type names and member signatures from a directory (max 50 files). Returns a compact outline (file path + declarations) without full method bodies. Equivalent to **cline**'s `list_code_definition_names` for C#.
 
 ### 9.2 Proactive Repo Map (Optional)
 
 Enabled when `retrieval.repo_map_tokens > 0`.
 
-**Indexing** (background, lazy):
-1. Roslyn parses each tracked `.cs` file and extracts definitions (types, methods) and references (call sites, using directives).
-2. Tags are cached in SQLite keyed by `(file_path, last_write_utc)` — unchanged files are not re-parsed.
+**Indexing** (lazy, per-build):
+1. `RoslynIndex` parses each `.cs` file under the cwd and extracts an outline (types, member signatures) plus referenced type names.
+2. Outlines are cached in a JSON file at `.dotsy/cache/roslyn-index-v2.json`, keyed by file path with the last-write timestamp — unchanged files are not re-parsed. (No SQLite; the cache is a plain serialized dictionary.)
 
 **Graph**:
 - Nodes = source files

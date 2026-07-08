@@ -2,38 +2,40 @@
 
 ### 15.1 Structure and Block Order
 
-The system prompt is assembled fresh before every LLM call by `SystemPromptBuilder`. Blocks are concatenated in this fixed order:
+The system prompt is assembled fresh before every LLM call by the static
+`SystemPromptBuilder.Build(...)`. Blocks are appended in this order:
 
-1. **Identity and principles** — who the agent is; conciseness rules; action-care policy (reversibility, blast radius)
-2. **Tool-use policy** — prefer native tools over shell for observability; parallel tool execution guidance; file-search preferences (part of the base prompt)
-3. **Environment preamble** — see §20
-4. **Project context** — `<project_context>` block holding the repo-root `AGENTS.md`, auto-loaded every turn (see §9.3)
-5. **Available skills** — `<available_skills>` XML block listing names and descriptions (see §10)
-6. **Repo map** — `<repo_map>` block (if enabled, see §9.2)
-7. **Read-only files** — files added via `/add` with a "do not edit these" header
-8. **Mode fragment** — injected when plan mode is active
+1. **Base prompt** — identity, conciseness rules, tool-selection policy, grounding/tool-use rules (`SystemPromptBuilder.DefaultBase`, overridable via the `basePrompt` argument)
+2. **Environment preamble** — `<env>` block (see §20)
+3. **Project context** — `<project_context>` block holding the repo-root `AGENTS.md`, auto-loaded every turn (see §9.3)
+4. **Task-file guidance** — `<task_file>` block, only when a `todo.md` exists in the repo root; steers the model to the `Todo` tool
+5. **Available skills** — `<available_skills>` XML block listing names and descriptions of model-invocable skills (skills with `disable-model-invocation` are excluded; see §10)
+6. **Loaded skills** — `<loaded_skills>` block holding the bodies of skills already loaded into the context (e.g. via `/skill`)
+7. **Added files** — `<added_files>` block: files added via `/add` with a "read-only, do not edit" header (CDATA-wrapped)
+8. **Repo map** — `<repo_map>` block (if `retrieval.repo_map_tokens > 0`, see §9.2)
+9. **Plan mode** — `<plan_mode>` block, injected when `ctx.IsPlanMode` is set
+10. **Prior context** — `<prior_context>` block holding the compaction summary plus a continuation instruction, when a summary exists
 
 Tool definitions are **not** embedded in the system string. They are sent as the separate `tools` array in the `ChatRequest` (§6.2), keeping the cacheable system prefix stable.
 
 ### 15.2 Static vs Dynamic Content
 
-The **static prefix** — identity, principles, tool policy — is identical across all sessions using the same binary version. It is placed first so Anthropic's prompt cache can serve a cache hit for every turn. The **dynamic suffix** — environment preamble, skills, project files, repo map, mode fragment — is rebuilt each turn. A `SystemPromptBuilder` object is created per session; the static portion is computed once and stored; dynamic blocks are appended on each `Build()` call.
+The **static prefix** — `DefaultBase` identity, principles, tool policy — is identical across all sessions using the same binary version, so Anthropic's prompt cache can serve a cache hit for every turn. The **dynamic suffix** — environment preamble, project/task files, skills, added files, repo map, plan mode, prior context — is rebuilt each turn. `SystemPromptBuilder` is a **static** helper: `Build(...)` re-concatenates the whole prompt on every call (the static prefix is a compile-time `const` string, not cached in a per-session instance).
 
 ```csharp
-public class SystemPromptBuilder
+public static class SystemPromptBuilder
 {
-    private readonly string _staticPrefix;   // computed once in ctor
+    public const string ProjectContextFile = "AGENTS.md";
+    public const string DefaultBase = "...identity, principles, tool policy...";
 
-    public string Build(SessionContext ctx)
-    {
-        var sb = new StringBuilder(_staticPrefix);
-        sb.Append(BuildEnvironmentBlock(ctx));
-        sb.Append(BuildProjectContextBlock(ctx));   // repo-root AGENTS.md
-        sb.Append(BuildSkillsBlock(ctx));
-        sb.Append(BuildRepoMapBlock(ctx));
-        if (ctx.IsPlanMode) sb.Append(PlanModeFragment);
-        return sb.ToString();
-    }
+    public static string Build(
+        DotsyConfig config,
+        string cwd,
+        LoopContext ctx,
+        string? basePrompt = null,          // defaults to DefaultBase
+        GitContext? git = null,
+        SkillDiscovery? skillDiscovery = null,
+        string? repoMap = null);
 }
 ```
 

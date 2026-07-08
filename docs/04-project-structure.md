@@ -2,31 +2,46 @@
 
 ```
 Dotsy/
-├── Dotsy.sln
+├── Dotsy.slnx
 ├── src/
 │   ├── Dotsy.Cli/               # Entry point, CLI parsing, TUI bootstrap
-│   │   ├── Program.cs
-│   │   ├── Commands/            # run, config, skills, sessions subcommands
-│   │   └── Tui/                 # Terminal.Gui layout, panels, input handler
+│   │   ├── Program.cs           # RootCommand + `run`/`skills` subcommands, headless + TUI hosts
+│   │   ├── HeadlessStreamJson.cs
+│   │   ├── SlashCommands/       # ISlashCommand registry + /help, /config, /model, /resume, …
+│   │   └── Tui/                 # Terminal.Gui layout, panels, renderers, approval overlay
 │   ├── Dotsy.Core/              # Provider-agnostic agent logic
-│   │   ├── Loop/                # AgentLoop, LoopContext, LoopEvent
-│   │   ├── Tools/               # ITool, ToolRegistry, built-in tools
-│   │   ├── Skills/              # SkillDiscovery, SkillLoader
-│   │   ├── Compaction/          # TokenCounter, CompactionPolicy, Summariser
-│   │   ├── Retrieval/           # RepoMap, RipgrepSearch, RoslynIndex
-│   │   ├── Session/             # SessionStore, MessageHistory
-│   │   └── Git/                 # GitContext, AutoCommit
+│   │   ├── Loop/                # AgentLoop, RequestBuilder, compaction (ToolPairSummarizer),
+│   │   │                        #   RetryPolicy, PermissionStore, SystemPromptBuilder, Data/
+│   │   ├── Tools/               # ITool, ToolRegistry, built-in tools, RipgrepBinary
+│   │   ├── Skills/              # SkillDiscovery, SkillLoader, ParsedSkill
+│   │   ├── Retrieval/           # RepoMap (PageRank), RoslynIndex
+│   │   ├── Session/             # SessionStore, SessionLoader, TrajectoryRecorder
+│   │   ├── Config/              # ConfigLoader, ConfigEditor, DotsyConfig, ProviderConfig
+│   │   ├── Providers/           # IProvider, ChatRequest, ProviderEvents (abstractions only)
+│   │   └── Git/                 # GitContext, GitIntegration
 │   ├── Dotsy.Providers/         # AI provider implementations
 │   │   ├── Anthropic/
 │   │   ├── OpenAi/
 │   │   ├── AzureOpenAi/
+│   │   ├── Gemini/
 │   │   ├── Ollama/
-│   │   └── OpenAiCompatible/    # Generic fallback
-│   └── Dotsy.Mcp/               # MCP client, server discovery
+│   │   ├── OpenAiCompatible/    # Generic fallback (OpenRouter, Together, DeepSeek, …)
+│   │   ├── ModelCatalog.cs
+│   │   ├── ProviderRegistry.cs
+│   │   └── RetryingProvider.cs
+│   └── Dotsy.Mcp/               # MCP client, server discovery (McpClient, McpManager, McpTool)
 └── tests/
     ├── Dotsy.Core.Tests/
-    └── Dotsy.Providers.Tests/
+    ├── Dotsy.Cli.Tests/
+    ├── Dotsy.Providers.Tests/
+    └── Dotsy.Mcp.Tests/
 ```
+
+The provider *abstractions* (`IProvider`, `ChatRequest`, `ProviderEvent`, `ModelInfo`) live in
+`Dotsy.Core/Providers/`; the concrete provider implementations live in the `Dotsy.Providers` project.
+Compaction is not a separate folder — it lives in `Dotsy.Core/Loop/` (`AgentLoop` compaction steps,
+`ToolPairSummarizer`, `RequestBuilder`) with token accounting under `Loop/Data/` (`TokenBudget`,
+`TokenUsageTracker`).
 
 ---
 

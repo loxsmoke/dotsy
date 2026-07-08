@@ -7,10 +7,18 @@ The loop is an explicit `while` driven by `CancellationToken` and turn counter, 
 ```csharp
 public class AgentLoop
 {
-    // Returns an IAsyncEnumerable<LoopEvent> so the TUI can render in real time
+    // Returns an IAsyncEnumerable<LoopEvent> so the TUI can render in real time.
+    // The new user turn is appended to ctx.Messages by the caller before RunAsync;
+    // it is not passed as a parameter.
     public IAsyncEnumerable<LoopEvent> RunAsync(
-        string userMessage,
         LoopContext ctx,
+        string workingDirectory,
+        CancellationToken ct);
+
+    // Manual /compact entry point (also used by headless `run -p /compact`).
+    public IAsyncEnumerable<LoopEvent> CompactAsync(
+        LoopContext ctx,
+        string cwd,
         CancellationToken ct);
 }
 ```
@@ -59,9 +67,19 @@ Step notes:
 - **Nudge limit** is the configured maximum number of consecutive non-terminal no-tool turns before the loop stops requesting continuation. The historical name remains, but the loop does not add a hidden user message between those requests.
 - **Assistant final response** is model-generated text from the LLM stream. It becomes final when the model returns no tool calls and the loop is allowed to stop for the current user turn, or when a completion signal such as the `done` tool is observed.
 - **Announced-next-step recovery** guards against weaker models that end a turn cleanly (`EndTurn`) while only *announcing* the next action ("Let me implement this now.") without calling a tool — leaving the task untouched. When `agent.auto_continue_on_end_turn_intent` is enabled, such a response is treated as a recoverable stall: a hint is injected and the model is retried instead of stopping. It shares the `agent.auto_continue_max_attempts` budget and is progress-guarded (any tool call resets the counter), so a genuine final answer — one that does not end by announcing more work — still stops immediately. In **headless** runs (`run` with no interactive user) the same recovery also fires when a text-only turn ends by *asking the user to clarify* — since nobody can answer, the model is nudged to make reasonable assumptions and proceed instead of dead-ending. Interactive sessions still yield to the user on a question.
-- **Repetition-guard recovery** handles the related read-loop stall: a weak model re-reads the same files turn after turn without ever editing. The rolling-window guard skips the repeated calls and injects an **escalating** hint (a gentle nudge first, then an imperative "your next action MUST be an Edit"). When `agent.auto_continue_on_nudge` is enabled it allows a few budgeted retries (`1 + auto_continue_max_attempts`) before ending with `Repetition`, instead of bailing after the first repeat, so the model gets a real chance to break out and act. A single non-repeating (progress) turn resets the counter.
+- **Repetition-guard recovery** handles the related read-loop stall: a weak model re-reads the same files turn after turn without ever editing. The rolling-window guard skips the repeated calls and injects an **escalating** hint (a gentle nudge first, then an imperative "your next action MUST be an Edit"). When `agent.auto_continue_on_nudge` is enabled it allows a few budgeted retries (`1 + auto_continue_max_attempts`) before ending with `Repetition`, instead of bailing after the first repeat, so the model gets a real chance to break out and act. A single non-repeating (progress) turn resets the counter. Adjacent-turn duplicates and rolling-window cycles (`A,B,C,A,B,C…`, controlled by `agent.repeat_window_turns` / `agent.repeat_threshold`) are both caught.
+- **Truncated-output continuation** shares the no-tool nudge counter but gets its own hint. When a turn ends with `StopReason.MaxTokens` (the provider cut the response at the output-token limit) rather than a clean `EndTurn`, the injected hint is *"Your previous response was cut off by the output length limit. Continue from exactly where you left off; do not restart."* If truncation keeps recurring without tool-call progress and the auto-continue budget is exhausted, the loop ends with `MaxTokens` (distinct from `NoProgress`, which is the plain no-progress no-tool case).
+- **Tool-error-streak recovery** watches turns where *every* tool call returned an error. On the **2nd** consecutive all-error turn it injects a corrective hint (*"Every recent tool call failed. Stop guessing paths — use Grep or Glob to locate files before reading them…"*); if failures continue, after **4** consecutive all-error turns the loop ends with `ToolErrorStreak`. A single turn with any successful tool result resets the counter.
+- **Completion / build-verification guard** intercepts the completion signal itself. When the model calls `Done` but the most recent build/test command (`dotnet build`/`test`, `npm`/`cargo`/`go`/`make`, …) exited non-zero, and `agent.verify_build_before_complete` is enabled, the completion is **refused**: a hint (*"…the build is FAILING. The task is NOT complete…re-run the build, read the exact errors, fix them…"*) is injected and the model is retried. It is bounded by `agent.auto_continue_max_attempts` and progress-guarded — a subsequent green build clears `LastBuildFailed`, so a genuine passing completion ends immediately with `TaskComplete`.
+
+**End reasons.** Every terminal path yields `LoopEnded(EndReason, message?)`. The reasons are: `TaskComplete` (a `Done`/completion tool fired), `ResponseComplete` (clean text-only final answer), `TurnLimitReached` (`agent.max_turns`), `NoProgress` (nudge limit hit, no tool progress), `MaxTokens` (repeated output truncation), `Repetition` (duplicate/cycling tool calls), `ToolErrorStreak` (persistent tool failures), `ContextTooSmall` (context exhausted, compaction couldn't recover), `Cancelled` (token cancelled), and `Error` (provider request failed). The legacy `NudgeLimitReached` is retained only for reading old session logs and is no longer emitted.
 
 ### 7.2 Loop Pseudocode
+
+This is a **simplified** sketch of the main flow. It shows the no-tool nudge and completion paths but
+omits several guards described in §7.1 for readability — the truncated-output hint, the tool-error
+streak, the repetition/rolling-window guard, and the build-verification completion guard all live in
+`AgentLoop.RunAsync` around these same branches.
 
 ```
 function RunLoop(userMessage, ctx, ct):
@@ -128,14 +146,20 @@ function RunLoop(userMessage, ctx, ct):
 
 ```csharp
 public abstract record LoopEvent;
-public record TextChunk(string Text)             : LoopEvent;
-public record ThinkingChunk(string Text)         : LoopEvent;
-public record ToolStarted(string Name, string Arg) : LoopEvent;
-public record ToolFinished(string Name, ToolResult Result) : LoopEvent;
-public record TurnComplete(int TotalTokens)      : LoopEvent;
-public record CompactionOccurred(string Summary) : LoopEvent;
+public record TextChunk(string Text)                         : LoopEvent;
+public record ThinkingChunk(string Text)                     : LoopEvent;
+public record ToolStarted(int Index, string Name, string Arg)          : LoopEvent;
+public record ToolFinished(int Index, string Name, ToolResult Result)  : LoopEvent;
+public record TurnComplete(int TotalTokens, bool AnyWriteTools = false) : LoopEvent;
+public record TokenUsageUpdated(int InputTokens, int OutputTokens,
+    int CacheReadTokens, int CacheWriteTokens)               : LoopEvent;
+public record CompactionOccurred(int TokensBefore, int TokensAfter, string Summary) : LoopEvent;
+public record LoopEnded(EndReason Reason, string? Message = null)       : LoopEvent;
+public record PermissionRequired(ITool Tool, string ToolName, string DisplayArgument,
+    TaskCompletionSource<PermissionDecision> Decision)       : LoopEvent;
+public record RetryScheduled(int AttemptNumber, int MaxAttempts, int DelaySeconds)  : LoopEvent;
+public record ReflectionOccurred(string Error)               : LoopEvent;
 public record AutoContinued(int Attempt, int MaxAttempts, string Reason) : LoopEvent; // recovery hint injected instead of stopping
-public record LoopEnded(EndReason Reason)        : LoopEvent;
 ```
 
 ### 7.4 Parallel Tool Execution

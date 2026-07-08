@@ -1,3 +1,4 @@
+using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Retrieval;
 
 namespace Dotsy.Core.Tests;
@@ -8,66 +9,90 @@ public sealed class RepoMapTests
     [TestMethod]
     public void Build_ScalesBudget_WhenNoFilesAreExplicitlyMentioned()
     {
-        var outlines = new[]
+        var dir = CreateTempDir();
+        try
         {
-            Outline("A.cs", new string('a', 80)),
-            Outline("B.cs", new string('b', 80))
-        };
+            File.WriteAllText(Path.Combine(dir, "A.cs"),
+                "public class A { public void Method1() { } public void Method2() { } }");
+            File.WriteAllText(Path.Combine(dir, "B.cs"),
+                "public class B { public void Method1() { } public void Method2() { } }");
 
-        var withoutExplicitContext = RepoMap.Build(outlines, tokenBudget: 30, mentionedFiles: []);
-        var withExplicitContext = RepoMap.Build(outlines, tokenBudget: 30, mentionedFiles: ["A.cs"]);
+            var withoutExplicitContext = RepoMap.Build(dir, tokenBudget: 30, ctx: new LoopContext());
 
-        StringAssert.Contains(withoutExplicitContext, "A.cs");
-        StringAssert.Contains(withoutExplicitContext, "B.cs");
-        StringAssert.Contains(withExplicitContext, "A.cs");
-        Assert.IsFalse(withExplicitContext.Contains("B.cs", StringComparison.Ordinal));
+            var ctxWithA = new LoopContext();
+            ctxWithA.AddedFiles.Add("A.cs");
+            var withExplicitContext = RepoMap.Build(dir, tokenBudget: 30, ctx: ctxWithA);
+
+            Assert.IsNotNull(withoutExplicitContext);
+            StringAssert.Contains(withoutExplicitContext, "A.cs");
+            StringAssert.Contains(withoutExplicitContext, "B.cs");
+            Assert.IsNotNull(withExplicitContext);
+            StringAssert.Contains(withExplicitContext, "A.cs");
+            Assert.IsFalse(withExplicitContext.Contains("B.cs", StringComparison.Ordinal));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
     }
 
     [TestMethod]
     public void Build_DownWeightsGeneratedFiles()
     {
-        var outlines = new[]
+        var dir = CreateTempDir();
+        try
         {
-            Outline("Widget.g.cs", "  public class WidgetGenerated\n    public string Name\n"),
-            Outline("WidgetService.cs", "  public class WidgetService\n    public void Run(...)\n")
-        };
+            File.WriteAllText(Path.Combine(dir, "Widget.g.cs"),
+                "public class WidgetGenerated { public string Name { get; set; } }");
+            File.WriteAllText(Path.Combine(dir, "WidgetService.cs"),
+                "public class WidgetService { public void Run() { } }");
 
-        var map = RepoMap.Build(outlines, tokenBudget: 20, mentionedFiles: ["unrelated.cs"]);
+            var ctx = new LoopContext();
+            ctx.AddedFiles.Add("unrelated.cs");
+            var map = RepoMap.Build(dir, tokenBudget: 20, ctx: ctx);
 
-        StringAssert.Contains(map, "WidgetService.cs");
-        Assert.IsFalse(map.Contains("Widget.g.cs", StringComparison.Ordinal));
+            Assert.IsNotNull(map);
+            StringAssert.Contains(map, "WidgetService.cs");
+            Assert.IsFalse(map.Contains("Widget.g.cs", StringComparison.Ordinal));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
     }
 
     [TestMethod]
     public void Build_DownWeightsPropertyHeavyOutlines()
     {
-        var outlines = new[]
+        var dir = CreateTempDir();
+        try
         {
-            Outline("WidgetModel.cs", """
-                  public class WidgetModel
-                    public string Name
-                    public string Title
-                    public int Count
-                    public bool Enabled
-                """),
-            Outline("WidgetRunner.cs", """
-                  public class WidgetRunner
-                    public void Run(...)
-                    public void Stop(...)
-                """)
-        };
+            File.WriteAllText(Path.Combine(dir, "WidgetModel.cs"), """
+                public class WidgetModel
+                {
+                    public string Name { get; set; }
+                    public string Title { get; set; }
+                    public int Count { get; set; }
+                    public bool Enabled { get; set; }
+                }
+                """);
+            File.WriteAllText(Path.Combine(dir, "WidgetRunner.cs"), """
+                public class WidgetRunner
+                {
+                    public void Run() { }
+                    public void Stop() { }
+                }
+                """);
 
-        var map = RepoMap.Build(outlines, tokenBudget: 30, mentionedFiles: ["unrelated.cs"]);
+            var ctx = new LoopContext();
+            ctx.AddedFiles.Add("unrelated.cs");
+            var map = RepoMap.Build(dir, tokenBudget: 30, ctx: ctx);
 
-        StringAssert.Contains(map, "WidgetRunner.cs");
-        Assert.IsFalse(map.Contains("WidgetModel.cs", StringComparison.Ordinal));
+            Assert.IsNotNull(map);
+            StringAssert.Contains(map, "WidgetRunner.cs");
+            Assert.IsFalse(map.Contains("WidgetModel.cs", StringComparison.Ordinal));
+        }
+        finally { Directory.Delete(dir, recursive: true); }
     }
 
-    private static FileOutline Outline(string fileName, string body) => new()
+    private static string CreateTempDir()
     {
-        FilePath = fileName,
-        Outline = $"// {fileName}\n{body}\n",
-        ReferencedFiles = [],
-        LastWrite = DateTimeOffset.UtcNow
-    };
+        var dir = Path.Combine(Path.GetTempPath(), "RepoMapTests", Guid.NewGuid().ToString());
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
 }

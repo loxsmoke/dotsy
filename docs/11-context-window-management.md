@@ -4,24 +4,31 @@
 
 ```csharp
 public record TokenBudget(
-    int ContextWindow,      // from ModelInfo
-    int ReserveTokens,      // from config (default 16384)
-    int KeepRecentTokens,   // from config (default 20000)
-    int UsedTokens          // from last API UsageUpdate
+    int ContextWindow,          // from ModelInfo
+    int ReserveTokens,          // from config (default 16384)
+    int KeepRecentTokens,       // from config (default 20000)
+    int UsedTokens,             // from last API UsageUpdate
+    float CompactionThreshold   // from config compaction.threshold_pct (default 0.80)
 )
 {
-    int Usable => ContextWindow - ReserveTokens;
-    float UsagePct => UsedTokens / (float)ContextWindow;
-    bool ShouldCompact => UsedTokens > Usable;
-    bool ShouldWarn => UsagePct >= 0.60f;
+    int   Usable     => ContextWindow - ReserveTokens;
+    float UsagePct   => ContextWindow > 0 ? UsedTokens / (float)ContextWindow : 0f;
+    float UsablePct  => Usable > 0 ? UsedTokens / (float)Usable : 0f;   // fraction of the *usable* budget
+    bool  ShouldCompact => Usable > 0 && CompactionThreshold > 0 && UsablePct >= CompactionThreshold;
+    bool  ShouldWarn    => UsagePct >= 0.60f;
 }
 ```
+
+`ShouldCompact` measures against the **usable** budget (window minus the output reserve), not the
+full window: with a large reserve the usable budget is exhausted well before `UsagePct` reaches the
+threshold, so measuring against the full window could let a run hit `ContextTooSmall` before
+compaction ever fires.
 
 Token counts come from the provider's `UsageUpdate` event. The fallback estimator (`text.Length / 4`) is used only when the provider does not report usage.
 
 ### 11.2 Proactive Compaction
 
-**Threshold:** `UsedTokens > ContextWindow - ReserveTokens` (absolute, not percentage). Checked between turns via the `MaybeCompact` step at the top of the loop — never mid-stream.
+**Threshold:** `UsedTokens / Usable >= compaction.threshold_pct` (a fraction of the usable budget, default 0.80). Checked between turns via the `MaybeCompact` step at the top of the loop — never mid-stream.
 
 **Algorithm** (**opencode** + **pi** hybrid):
 1. Walk messages backwards from most recent, accumulate token estimates.

@@ -2,13 +2,18 @@
 
 ### 13.1 Session Store
 
-One JSONL file per session, modelled on **pi**/**Claude Code**. Files live at:
+One JSONL file per session, modelled on **pi**/**Claude Code**. Files live under the configured
+session log directory (`session.log_dir`, default project-local `.dotsy/sessions`; absolute paths are
+honored as-is):
 
 ```
-~/.config/dotsy/projects/{encoded-cwd}/{session-uuid}.jsonl
+{cwd}/.dotsy/sessions/{session-id}.jsonl
 ```
 
-The working directory is encoded by replacing path separators with `-`, so `C:\dev\myapp` becomes `-C--dev-myapp`. Each session is a single flat file — no per-session directories, no separate metadata file.
+The **session ID** is `YYYYMMDD.N` (date plus a per-day counter, e.g. `20260707.1`), assigned by
+`SessionStore.NextId`, which scans existing files for that day — not a random UUID. (Each *record*
+inside the file still carries its own `uuid`/`parentUuid` Guids; see below.) Each session is a single
+flat file — no per-session directories, no separate metadata file.
 
 **Per-line schema** (one JSON object per line, append-only):
 
@@ -16,8 +21,8 @@ The working directory is encoded by replacing path separators with `-`, so `C:\d
 {
   "uuid": "a1b2c3d4-...",
   "parentUuid": "prev-uuid-or-null",
-  "sessionId": "session-uuid",
-  "type": "user | assistant | summary",
+  "sessionId": "20260707.1",
+  "type": "user | assistant | tool_result | summary",
   "timestamp": "2026-05-20T10:00:00.000Z",
   "cwd": "C:\\dev\\myapp",
   "gitBranch": "main",
@@ -26,7 +31,7 @@ The working directory is encoded by replacing path separators with `-`, so `C:\d
     "role": "user | assistant",
     "content": [
       { "type": "text", "text": "..." },
-      { "type": "tool_use", "id": "tu_1", "name": "read", "input": { "path": "Foo.cs" } },
+      { "type": "tool_use", "id": "tu_1", "name": "Read", "input": { "path": "Foo.cs" } },
       { "type": "tool_result", "tool_use_id": "tu_1", "content": "..." },
       { "type": "thinking", "thinking": "..." }
     ]
@@ -48,46 +53,52 @@ All content is stored: user prompts, assistant responses, tool calls (`tool_use`
 
 ### 13.2 Session Index
 
-A global index at `~/.config/dotsy/sessions.json` tracks metadata for all sessions:
+An index file named `sessions.json` sits next to the session directory (i.e. `.dotsy/sessions.json`
+when the default log dir is used) and tracks metadata for the sessions in that directory. The
+sessions are held under a top-level `sessions` key (not a bare array):
 
 ```json
-[
-  {
-    "sessionId": "...",
-    "title": "first user message truncated to 80 chars",
-    "cwd": "C:\\dev\\myapp",
-    "model": "claude-opus-4-7",
-    "createdAt": "2026-05-20T10:00:00Z",
-    "updatedAt": "2026-05-20T10:30:00Z",
-    "messageCount": 42
-  }
-]
+{
+  "sessions": [
+    {
+      "sessionId": "20260707.1",
+      "title": "first user message truncated to ~50 chars",
+      "cwd": "C:\\dev\\myapp",
+      "model": "claude-opus-4-7",
+      "createdAt": "2026-05-20T10:00:00Z",
+      "updatedAt": "2026-05-20T10:30:00Z",
+      "messageCount": 42
+    }
+  ]
+}
 ```
 
-The index is updated at the end of each turn. It is used only for listing — the JSONL file is the authoritative store.
+The index is updated at the end of a run (`SessionStore.UpdateIndex`). It is used only for
+listing/cleanup — the JSONL file is the authoritative store.
 
 ### 13.3 Session Resume
 
 ```
-dotsy run --resume <session-uuid>
-dotsy run --resume          # resumes most recent session for current cwd
+dotsy run --resume <session-id>   # e.g. --resume 20260707.1
+dotsy run --resume                # value omitted → resume most recent session for current cwd
 ```
 
-The loader reads the JSONL file, follows `parentUuid` links to reconstruct the active message chain, and picks up from the last line. If a `summary` entry exists, messages before it are excluded from the LLM context (but remain in the file for audit).
+`--resume` works in both TUI and headless (`-p`) modes; the TUI also exposes `/resume`,
+`/resume <id>`, and `/resume list`. The loader (`SessionLoader`) reads the JSONL file, reconstructs
+the active message chain, and restores the compaction summary and used-token count. If a `summary`
+entry exists, messages before it are excluded from the LLM context (but remain in the file for audit).
 
-### 13.4 Session List and Cleanup
+### 13.4 Cleanup
 
-```
-dotsy sessions list                   # tabular list: date, title, cwd, message count
-dotsy sessions list --cwd .           # filter by current project
-dotsy sessions clean --older-than 30d # delete JSONL files older than N days (default 30)
-```
-
-Purge respects a `session.cleanup_days` config key (default 30, minimum 1, 0 = disabled). Cleanup runs at startup on the project directory matching the current cwd. Transcript writing can be disabled via `DOTSY_NO_HISTORY=1`.
+There is no `dotsy sessions` subcommand. Old sessions are pruned **automatically at startup** of a
+`run`: when `session.cleanup_days > 0` and logging is enabled, `SessionStore.CleanOldSessions`
+deletes JSONL files (and their index entries) whose `updatedAt` is older than the cutoff, scoped to
+the current session directory. The `session.cleanup_days` config key defaults to 30 (0 disables
+cleanup). Transcript writing can be disabled with `--no-history` or `DOTSY_NO_HISTORY=1`.
 
 ### 13.5 Multi-Session
 
-Each `dotsy run` creates a new session UUID and a new JSONL file. Sessions are isolated — concurrent runs write to different files with no shared state.
+Each `dotsy run` creates a new session ID and a new JSONL file. Sessions are isolated — concurrent runs write to different files with no shared state.
 
 ### 13.6 OpenCode-Compatible Trajectory Export
 
@@ -104,8 +115,12 @@ dir     = ".dotsy/trajectories"
 When `trajectory.enabled = true`, Dotsy writes exactly one UTF-8 JSON file for the entire session after the session ends or is cleanly checkpointed. It must not write Parquet files and must not shard a single session across multiple files. The file path is:
 
 ```
-{trajectory.dir}/{session-uuid}.json
+{trajectory.dir}/{session-id}.json
 ```
+
+The `{session-id}` is Dotsy's session ID (`YYYYMMDD.N`), the same value used for the JSONL filename.
+The trajectory JSON's `uuid` / `metadata.uuid` fields also carry this session ID (the OpenCode schema
+names the field `uuid`, but Dotsy populates it with the session ID).
 
 The top-level JSON object uses the same field names as the OpenCode trajectory rows:
 
@@ -115,9 +130,9 @@ The top-level JSON object uses the same field names as the OpenCode trajectory r
   "complexity_level": "unknown",
   "question": "First user request, verbatim",
   "agent_prompt": "Full initial system prompt sent to the model",
-  "enabled_tools": ["read", "grep", "edit", "shell", "todo"],
+  "enabled_tools": ["Read", "Grep", "Edit", "Shell", "Todo"],
   "skills_path": ".dotsy/skills",
-  "uuid": "session-uuid",
+  "uuid": "20260707.1",
   "messages": [
     { "role": "system", "content": "..." },
     { "role": "user", "content": "..." },
@@ -128,15 +143,15 @@ The top-level JSON object uses the same field names as the OpenCode trajectory r
         {
           "id": "tu_1",
           "type": "function",
-          "function": { "name": "read", "arguments": "{\"path\":\"Foo.cs\"}" }
+          "function": { "name": "Read", "arguments": "{\"path\":\"Foo.cs\"}" }
         }
       ]
     },
-    { "role": "tool", "tool_call_id": "tu_1", "name": "read", "content": "..." }
+    { "role": "tool", "tool_call_id": "tu_1", "name": "Read", "content": "..." }
   ],
   "tools": [
     {
-      "id": "read",
+      "id": "Read",
       "description": "Read a file from the workspace.",
       "inputSchema": {
         "jsonSchema": {
@@ -148,7 +163,7 @@ The top-level JSON object uses the same field names as the OpenCode trajectory r
     }
   ],
   "metadata": {
-    "uuid": "session-uuid",
+    "uuid": "20260707.1",
     "dotsy_version": "1.0.0",
     "cwd": "C:\\dev\\myapp",
     "git_branch": "main",
@@ -179,7 +194,7 @@ Field requirements:
 - `agent_prompt`: the full initial system prompt, including enabled Dotsy instructions, environment block, repo context, and available skill list exactly as sent to the provider.
 - `enabled_tools`: tool names available to the model at session start, including built-ins, loaded skills exposed as tools, and MCP tools.
 - `skills_path`: the effective skill search path string used for the session, or `""` when skills are disabled/unavailable.
-- `uuid`: Dotsy's session UUID. It must match `metadata.uuid`.
+- `uuid`: Dotsy's session ID (`YYYYMMDD.N`). It must match `metadata.uuid`.
 - `messages`: the complete provider-facing conversation in OpenAI-compatible chat shape. Preserve system, user, assistant, and tool messages in chronological order; include assistant tool calls and tool outputs; include hidden nudges and compaction summaries only if they were actually sent to the provider.
 - `tools`: the full tool schema list available at session start, converted to the OpenCode-compatible `id`, `description`, `inputSchema.jsonSchema` shape.
 - `metadata`: Dotsy-specific run metadata. It may contain additional keys, but must include the keys shown above so downstream tooling can filter by repo, model, timing, outcome, and usage.

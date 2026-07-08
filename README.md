@@ -1,7 +1,7 @@
 # Dotsy
 
 [![CI](https://github.com/loxsmoke/dotsy/actions/workflows/ci.yml/badge.svg)](https://github.com/loxsmoke/dotsy/actions/workflows/ci.yml)
-[![Coverage](https://img.shields.io/badge/coverage-61.29%25-yellowgreen)](https://github.com/loxsmoke/dotsy/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/badge/coverage-60.85%25-yellowgreen)](https://github.com/loxsmoke/dotsy/actions/workflows/ci.yml)
 
 ```text
          _       _
@@ -67,8 +67,10 @@ extern\terminal.gui
 ```
 
 The checkout is tracked as a git submodule and is pinned to the
-`v2.0.0-develop.4376` Terminal.Gui tag because that source layout matches the
-`Terminal.Gui` `2.0.0` NuGet package API that Dotsy currently targets.
+`v2.0.0-develop.4376` Terminal.Gui tag. Normal and package builds instead consume
+the `Terminal.Gui` NuGet package (currently `2.4.10`, referenced by
+`src/Dotsy.Cli`); the source checkout is only used for the `Debug No Nugets`
+configuration below when you want to step into Terminal.Gui.
 
 Use the `Debug No Nugets` configuration when you want to step into Terminal.Gui
 while developing Dotsy:

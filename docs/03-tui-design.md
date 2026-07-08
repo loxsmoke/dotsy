@@ -159,7 +159,7 @@ Generated: 2026-06-07T18:42:10-07:00
 
 | Key | Type | Value | Source | Description |
 |-----|------|-------|--------|-------------|
-| model.provider | string | anthropic | default | active provider: anthropic, openai, ollama, azure_openai, compatible |
+| model.provider | string | anthropic | default | active provider: anthropic, openai, ollama, azure_openai, compatible, gemini |
 | model.anthropic.api_key | string | set:redacted | env:ANTHROPIC_API_KEY | Anthropic API key |
 | model.openai.api_key | string | not set | default | OpenAI API key |
 

@@ -6,7 +6,7 @@
 ---
 name: aspnet-conventions
 description: ASP.NET Core coding conventions and patterns. Use when writing controllers, middleware, or DI configuration.
-allowed-tools: read,edit,write,shell
+allowed-tools: Read,Edit,Write,Shell
 ---
 
 # Skill instructions in Markdown
@@ -16,19 +16,23 @@ Required frontmatter: `name`, `description`. Optional: `allowed-tools` (comma-se
 
 ### 10.2 Discovery
 
-At session start, `SkillDiscovery` scans in order (first-found wins on name collision; collision warnings emitted to tool log):
+At session start, `SkillDiscovery` scans in this order (first-found wins on name collision; later duplicates are suppressed):
 
-1. CLI `--skill <path>` arguments
-2. Project: `.dotsy/skills/<name>/`, `.agents/skills/<name>/`
-3. Global: `~/.config/dotsy/skills/<name>/`
-4. Cross-tool (when `skills.cross_tool = true`): `~/.agents/skills/<name>/`, `~/.claude/skills/<name>/`
-5. Config `skills.paths[]` array entries
+1. Config `skills.paths[]` array entries (absolute, or relative to cwd)
+2. Project: `.dotsy/skills/` and `.agents/skills/` in **every ancestor directory**, walking up from the cwd to the filesystem root
+3. Global: `~/.config/dotsy/skills/`
+4. Cross-tool (when `skills.cross_tool = true`): `~/.agents/skills/`, `~/.claude/skills/`
 
-Each skill directory must contain `SKILL.md`. Additional files in the directory are companion files accessible via the `read` tool.
+There is no `--skill` CLI flag; extra directories are added through `skills.paths`.
+
+Within each search directory a skill may be either a flat Markdown file (`{name}.md`) or a
+sub-directory with an entry-point `SKILL.md` (`{name}/SKILL.md`). For a `SKILL.md` skill the skill
+name is the directory name; for a flat file it is the filename stem. Other files in a `SKILL.md`
+skill's directory are companion files accessible via the `Read` tool.
 
 ### 10.3 Selection
 
-Available skill names and descriptions are injected into the system prompt as an `<available_skills>` XML block. The model calls the `skill` tool with the skill name when a task matches. Permission is requested once per skill per session; subsequent calls are auto-allowed.
+Available skill names and descriptions are injected into the system prompt as an `<available_skills>` XML block. The model calls the `Skill` tool with the skill name when a task matches. Permission is requested once per skill per session; subsequent calls are auto-allowed.
 
 Slash command `/skill <name>` in the input bar bypasses the LLM and loads the skill immediately.
 

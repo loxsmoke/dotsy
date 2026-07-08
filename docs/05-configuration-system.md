@@ -62,6 +62,8 @@ repeat_threshold     = 3               # 0 disables repeated tool-call nudging
 auto_lint            = false           # run dotnet build after writes and reflect on errors
 auto_test            = false           # run dotnet test after writes and reflect on failures
 max_reflections      = 3               # max lint/test reflection cycles per turn
+verify_build_before_complete = true    # refuse a Done signal while the last build/test exited non-zero
+dedupe_reads         = true            # skip re-reading a file whose content is still live in context
 inject_environment   = true            # include <env> block in requests
 inject_git_status    = true            # include git branch/status in the env block
 
@@ -71,6 +73,7 @@ threshold_pct        = 0.80            # proactive summarisation trigger
 reserve_tokens       = 16384           # buffer subtracted from context window
 keep_recent_tokens   = 20000           # recent tokens to preserve verbatim after compaction
 tool_pair_summarize  = true            # collapse old tool call/result pairs into short notes
+preserve_latest_reads = true           # keep the most recent read of each file when summarizing tool pairs
 
 [retrieval]
 repo_map_tokens      = 1024            # repo-map budget; 0 = disabled

@@ -6,27 +6,31 @@ The environment block is assembled by `EnvironmentBlock.Build(SessionContext)` a
 
 ```
 <env>
-OS: Windows 11 (10.0.26200)
-Shell: PowerShell 7.4
-.NET: 10.0.0
-Working directory: C:\dev\myapp
-Date: 2026-05-20
-Git branch: main
-Git status: 2 modified, 1 untracked
+  os: Microsoft Windows 10.0.26200
+  shell: C:\WINDOWS\system32\cmd.exe
+  dotnet: 10.0.0
+  cwd: C:\dev\myapp
+  date: 2026-05-20
+  git_branch: main (a3f21bc)
+  git_status: 2 modified, 1 untracked
 </env>
 ```
 
+Keys are lowercase and 2-space indented. `os`, `shell`, `dotnet`, `cwd`, and `date` are always
+present; the `git_*` lines are conditional.
+
 | Field | Source | Notes |
 |-------|--------|-------|
-| OS | `Environment.OSVersion` | Platform + version string |
-| Shell | `COMSPEC` (Windows) or `SHELL` (Unix); fallback `cmd.exe` / `sh` | Executable name only, not full path |
-| .NET runtime | `Environment.Version` | Helps the model understand C# idioms |
-| Working directory | `Directory.GetCurrentDirectory()` | Refreshed per turn |
-| Date | `DateTimeOffset.UtcNow.ToString("yyyy-MM-dd")` | Rounded to day for cache stability |
-| Git branch | `LibGit2Sharp.Repository.Head.FriendlyName` | Empty string if not a git repo |
-| Git status | `repo.RetrieveStatus()` -- modified + untracked counts | Omitted if repo is clean |
+| `os` | `RuntimeInformation.OSDescription` | Full OS description string |
+| `shell` | `COMSPEC` (Windows) or `SHELL` (Unix); fallback `cmd.exe` / `/bin/sh` | The raw value (usually a full path) |
+| `dotnet` | `Environment.Version` | Helps the model understand C# idioms |
+| `cwd` | The session working directory passed to `Build` | Refreshed per turn |
+| `date` | `DateTime.UtcNow.ToString("yyyy-MM-dd")` | Rounded to day for cache stability |
+| `git_branch` | `GitContext.Branch` + short SHA | Line omitted if branch is empty / not a git repo |
+| `git_status` | `GitContext` modified + untracked counts | Line omitted when there are no changes |
 
-The block does **not** include full git diff (available via the `read` tool with `--include-diff`), environment variable values (security risk), or user-specific paths beyond cwd.
+The block does **not** include full git diff (the `Read` tool exposes an `include_diff` parameter for
+that), environment variable values (security risk), or user-specific paths beyond cwd.
 
 ### 20.2 Update Frequency
 

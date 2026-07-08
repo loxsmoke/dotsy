@@ -1,16 +1,26 @@
+using Dotsy.Core.Loop.Data;
+using Dotsy.Core.Providers;
 using System.Text;
 
 namespace Dotsy.Core.Retrieval;
 
 public static class RepoMap
 {
-    public static string Build(
-        IReadOnlyList<FileOutline> outlines,
+    public static string? Build(
+        string cwd,
         int tokenBudget,
-        IReadOnlyList<string>? mentionedFiles = null)
+        LoopContext ctx)
     {
-        if (outlines.Count == 0 || tokenBudget <= 0)
-            return "";
+        if (tokenBudget <= 0)
+            return null;
+
+        using var index = new RoslynIndex(Path.Combine(cwd, ".dotsy", "cache"));
+        index.Open();
+        var outlines = index.ScanDirectory(cwd);
+        var mentionedFiles = GetRepoMapPersonalizationInputs(ctx);
+
+        if (outlines.Count == 0)
+            return null;
 
         var scores = ComputePageRank(outlines, mentionedFiles);
 
@@ -159,5 +169,41 @@ public static class RepoMap
 
         var propertyLines = memberLines.Count(l => !l.Contains('('));
         return propertyLines / (double)memberLines.Count >= 0.75;
+    }
+
+    private static IReadOnlyList<string> GetRepoMapPersonalizationInputs(LoopContext ctx)
+    {
+        var files = new HashSet<string>(ctx.AddedFiles, StringComparer.OrdinalIgnoreCase);
+
+        var latestUserText = ctx.Messages
+            .OfType<UserMessage>()
+            .LastOrDefault()?
+            .Content
+            .OfType<TextBlock>()
+            .Select(b => b.Text)
+            .LastOrDefault();
+
+        if (!string.IsNullOrWhiteSpace(latestUserText))
+        {
+            foreach (var file in ExtractMentionedFiles(latestUserText))
+                files.Add(file);
+        }
+
+        return files.ToList();
+    }
+
+    private static IEnumerable<string> ExtractMentionedFiles(string text)
+    {
+        const string FileChars = @"[A-Za-z0-9_\-./\\]";
+        var pattern = $@"(?<!{FileChars}){FileChars}+\.(?:cs|csproj|sln|slnx|props|targets|json|toml|md|txt|xml|yaml|yml)(?!{FileChars})";
+
+        foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(
+            text,
+            pattern,
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase,
+            TimeSpan.FromMilliseconds(100)))
+        {
+            yield return match.Value.Trim('\'', '"', '`', ',', '.', ':', ';', ')', ']', '}');
+        }
     }
 }

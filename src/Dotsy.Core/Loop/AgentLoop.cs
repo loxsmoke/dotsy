@@ -715,55 +715,13 @@ public sealed partial class AgentLoop
 
     private string? BuildRepoMap(string cwd, LoopContext ctx)
     {
-        if (config.Retrieval.RepoMapTokens <= 0)
-            return null;
-
         try
         {
-            using var index = new RoslynIndex(Path.Combine(cwd, ".dotsy", "cache"));
-            index.Open();
-            var outlines = index.ScanDirectory(cwd);
-            return RepoMap.Build(outlines, config.Retrieval.RepoMapTokens, GetRepoMapPersonalizationInputs(ctx));
+            return RepoMap.Build(cwd, config.Retrieval.RepoMapTokens, ctx);
         }
         catch
         {
             return null;
-        }
-    }
-
-    private static IReadOnlyList<string> GetRepoMapPersonalizationInputs(LoopContext ctx)
-    {
-        var files = new HashSet<string>(ctx.AddedFiles, StringComparer.OrdinalIgnoreCase);
-
-        var latestUserText = ctx.Messages
-            .OfType<UserMessage>()
-            .LastOrDefault()?
-            .Content
-            .OfType<TextBlock>()
-            .Select(b => b.Text)
-            .LastOrDefault();
-
-        if (!string.IsNullOrWhiteSpace(latestUserText))
-        {
-            foreach (var file in ExtractMentionedFiles(latestUserText))
-                files.Add(file);
-        }
-
-        return files.ToList();
-    }
-
-    private static IEnumerable<string> ExtractMentionedFiles(string text)
-    {
-        const string FileChars = @"[A-Za-z0-9_\-./\\]";
-        var pattern = $@"(?<!{FileChars}){FileChars}+\.(?:cs|csproj|sln|slnx|props|targets|json|toml|md|txt|xml|yaml|yml)(?!{FileChars})";
-
-        foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(
-            text,
-            pattern,
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase,
-            TimeSpan.FromMilliseconds(100)))
-        {
-            yield return match.Value.Trim('\'', '"', '`', ',', '.', ':', ';', ')', ']', '}');
         }
     }
 

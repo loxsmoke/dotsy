@@ -8,9 +8,9 @@ Every `ITool` declares a `ToolSafety` value. Safety drives parallel execution de
 
 | Safety level | Examples | Default execution behavior |
 |---|---|---|
-| `ReadOnly` | `read`, `glob`, `grep`, `list`, `find_definitions`, `todo`, `ask`, `done` | Allowed without prompting. |
-| `Sequential` | `edit`, `multi_edit`, `webfetch`, `websearch`, `task`, MCP tools with sequential safety | Evaluated through `PermissionStore`; prompt when verdict is `Ask`. |
-| `Destructive` | `write`, `shell` | Evaluated through `PermissionStore`; prompt when verdict is `Ask`, deny when verdict is `Deny`. |
+| `ReadOnly` | `Read`, `Glob`, `Grep`, `List`, `FindDefs`, `Todo`, `Ask`, `Done`, `Skill` | Allowed without prompting. |
+| `Sequential` | `Edit`, `MultiEdit`, `WebFetch`, `WebSearch`, `Task`, MCP tools (registered as `Sequential`) | Evaluated through `PermissionStore`; prompt when verdict is `Ask`. |
+| `Destructive` | `Write`, `Shell` | Evaluated through `PermissionStore`; prompt when verdict is `Ask`, deny when verdict is `Deny`. |
 
 Tool grouping in `/sec` is more user-oriented than the raw enum:
 
@@ -23,7 +23,7 @@ Tool grouping in `/sec` is more user-oriented than the raw enum:
 | skills | `Skill` | `allow as read-only tool; skill-specific permission details not yet detailed` |
 | mcp | Tools not in the built-in registry | Depends on exposed tool safety; external server trust is not yet detailed |
 
-When `--yolo` / `--dangerously-skip-permissions` is active, the displayed behavior becomes `allow` for all categories because `PermissionStore.Evaluate` returns `Allow` immediately.
+When `--yolo` is active, the displayed behavior becomes `allow` for all categories because `PermissionStore.Evaluate` returns `Allow` immediately.
 
 ### 16.2 Permission State Sources
 

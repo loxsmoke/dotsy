@@ -5,11 +5,13 @@
 ```
 dotsy run -p "prompt"                        # single-shot, print result and exit
 dotsy run -p "prompt" --resume <session-id>  # continue a prior session headlessly
-echo "prompt" | dotsy run -p                 # piped stdin
-dotsy run -p -f instructions.md             # prompt from file
+dotsy run -f instructions.md                 # prompt from file (-f is read when -p is absent)
+dotsy run -p "/compact" --resume <id>        # headless manual compaction of a session
 ```
 
-TTY detection (`Console.IsInputRedirected`) automatically switches to headless output when stdin is piped, even without `-p`.
+TTY detection (`Console.IsInputRedirected`) switches to headless mode when stdin is redirected even
+without `-p`, but the prompt itself must still be supplied via `-p` or `-f` — piped stdin is not read
+as the prompt. A run with no prompt exits 1 with "No prompt provided. Use -p or -f."
 
 ### 18.2 Output Format
 
@@ -25,28 +27,33 @@ TTY detection (`Console.IsInputRedirected`) automatically switches to headless o
 
 ### 18.3 Exit Codes
 
-| Code | Meaning |
-|------|---------|
-| 0 | Task completed successfully (`done` tool called or loop ended normally) |
-| 1 | Task failed (agent returned error, reflection limit exceeded, model stuck) |
-| 2 | Configuration error (bad API key, unknown model, missing required config) |
-| 3 | Permission denied (tool blocked and no-tty — cannot prompt for approval) |
-| 4 | Context limit exceeded after compaction retry |
-| 130 | Interrupted by Ctrl+C |
+| Code | Meaning | Source |
+|------|---------|--------|
+| 0 | Loop ended normally (`Done` tool, completed, or other non-error `EndReason`) | `LoopEnded` |
+| 1 | Empty prompt, or the loop ended with `EndReason.Error` | validation / `LoopEnded` |
+| 2 | Configuration error (provider could not be resolved — bad/missing key, unknown provider) | `ProviderRegistry.Resolve` throw |
+| 4 | Context limit exceeded (`EndReason.ContextTooSmall`) | `LoopEnded` |
+| 130 | Cancelled (`EndReason.Cancelled`) | `LoopEnded` |
 
-In headless mode, tools requiring approval that cannot be auto-approved (no matching `allow` rule) return exit code 3 rather than blocking. `--yolo` / `--dangerously-skip-permissions` disables all permission checks.
+In headless mode, `--yolo` disables all permission checks. A tool that still needs approval and has
+no matching `allow` rule fails with a permission-denied **tool result** (the model receives the error
+and may adapt); it does not currently map to a dedicated process exit code.
 
 ### 18.4 CI Integration
 
-**Flags for clean CI runs:**
+**Flags for clean CI runs** (implemented on `dotsy run`):
 
 ```
---bare                    # skip AGENTS.md, .dotsy/config.toml project overrides, hooks
+--bare                    # parsed as "skip project config and hooks" (see note below)
 --no-history              # don't write JSONL session file (equivalent to DOTSY_NO_HISTORY=1)
 --yolo                    # skip all permission prompts
---allowed-tools read,grep # restrict the tool set to a safe subset
---max-turns 50            # hard cap to prevent runaway sessions
+--max-turns 50            # hard cap to prevent runaway sessions (root option)
 ```
+
+`--max-turns`, `--model`, and `--provider` are root options (accepted before or via `run`).
+`--bare` is currently parsed but not yet wired through to config/AGENTS loading (see §9.3). There is
+no `--allowed-tools` or `--dangerously-skip-permissions` flag today; restrict tools/permissions via
+config (`[permissions]`) or `--yolo`.
 
 **GitHub Actions example:**
 

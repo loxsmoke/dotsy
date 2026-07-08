@@ -28,13 +28,11 @@ The static prefix is placed first so that all users sharing the same binary vers
 Cache read and write tokens are returned by the `UsageUpdate` provider event (§6.4) and tracked separately from regular input/output tokens:
 
 ```csharp
-public record TokenBudget(
+public record UsageUpdate(
     int InputTokens,
     int OutputTokens,
     int CacheReadTokens,    // cheap: ~0.1× input price
-    int CacheWriteTokens,   // slight premium: ~1.25× input price
-    ...
-)
+    int CacheWriteTokens);  // slight premium: ~1.25× input price
 ```
 
-Cache read and write tokens are stored per-line in the session JSONL `usage` object (§13.1).
+The loop republishes these as `TokenUsageUpdated` loop events (§7.3). Cache read and write tokens are stored per-line in the session JSONL `usage` object (§13.1).
