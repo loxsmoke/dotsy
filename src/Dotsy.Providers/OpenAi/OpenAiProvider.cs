@@ -14,16 +14,40 @@ public class OpenAiProvider : IProvider
     protected readonly string ApiKey;
 
     public virtual string Name => ProviderConfig.OpenAi;
-    protected virtual string ChatEndpoint => "/v1/chat/completions";
+    protected virtual string ChatEndpoint => "chat/completions";
 
-    public OpenAiProvider(string apiKey, string baseUrl = "https://api.openai.com", HttpClient? http = null)
+    public OpenAiProvider(
+        string apiKey,
+        string baseUrl = "https://api.openai.com",
+        HttpClient? http = null,
+        bool normalizeOpenAiBaseUrl = true)
     {
         ApiKey = apiKey;
         Http = http ?? new HttpClient();
-        Http.BaseAddress = new Uri(baseUrl);
+        Http.BaseAddress = NormalizeBaseAddress(baseUrl, normalizeOpenAiBaseUrl);
         Http.DefaultRequestHeaders.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", ApiKey);
     }
+
+    private static Uri NormalizeBaseAddress(string baseUrl, bool normalizeOpenAiBaseUrl)
+    {
+        var trimmed = string.IsNullOrWhiteSpace(baseUrl)
+            ? "https://api.openai.com"
+            : baseUrl.Trim();
+
+        if (!normalizeOpenAiBaseUrl)
+            return EnsureTrailingSlash(trimmed);
+
+        var uri = EnsureTrailingSlash(trimmed);
+        var path = uri.AbsolutePath.TrimEnd('/');
+        if (path.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+            return uri;
+
+        return new Uri(uri, "v1/");
+    }
+
+    private static Uri EnsureTrailingSlash(string value) =>
+        new(value.EndsWith('/') ? value : value + "/");
 
     // HARDCODED limits. The OpenAI-shaped /v1/models endpoint (used by OpenAI, Azure, and
     // OpenAI-compatible providers) does NOT report context-window or max-output token limits,
@@ -37,7 +61,7 @@ public class OpenAiProvider : IProvider
 
         try
         {
-            var resp = await Http.GetAsync("/v1/models", ct);
+            var resp = await Http.GetAsync("models", ct);
             if (resp.IsSuccessStatusCode)
             {
                 var json = await resp.Content.ReadAsStringAsync(ct);
@@ -63,7 +87,7 @@ public class OpenAiProvider : IProvider
     {
         try
         {
-            var resp = await Http.GetAsync("/v1/models", ct);
+            var resp = await Http.GetAsync("models", ct);
             if (resp.IsSuccessStatusCode)
             {
                 var json = await resp.Content.ReadAsStringAsync(ct);
@@ -384,7 +408,7 @@ public class OpenAiProvider : IProvider
                 && errMsg.ContainsNoCase("context")
                 && errMsg.ContainsNoCase("length"))
             {
-                error = new ContextLengthError();
+                error = new ContextLengthError(BuildDetail(errMsg, errType, body, reqId));
             }
             else if (IsModelUnknownError(errMsg) || IsModelUnknownError(errType))
             {

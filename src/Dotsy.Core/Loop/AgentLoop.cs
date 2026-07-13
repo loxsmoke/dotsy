@@ -104,7 +104,7 @@ public sealed partial class AgentLoop
                 var compacted = false;
                 await foreach (var ev in CompactAsync(ctx, cwd, ct))
                 {
-                    compacted = true;
+                    if (ev is CompactionOccurred) compacted = true;
                     yield return ev;
                 }
 
@@ -145,12 +145,12 @@ public sealed partial class AgentLoop
 
             if (ctxError is not null)
             {
-                if (config.Compaction.Enabled)
+                if (config.Compaction.Enabled && HasCompactableHistory(ctx))
                 {
                     var compacted = false;
                     await foreach (var ev in CompactAsync(ctx, cwd, ct))
                     {
-                        compacted = true;
+                        if (ev is CompactionOccurred) compacted = true;
                         yield return ev;
                     }
 
@@ -175,12 +175,12 @@ public sealed partial class AgentLoop
 
             if (response.ContextLengthError is not null)
             {
-                if (config.Compaction.Enabled && !retriedContextLengthError)
+                if (config.Compaction.Enabled && !retriedContextLengthError && HasCompactableHistory(ctx))
                 {
                     var compacted = false;
                     await foreach (var ev in CompactAsync(ctx, cwd, ct))
                     {
-                        compacted = true;
+                        if (ev is CompactionOccurred) compacted = true;
                         yield return ev;
                     }
 
@@ -258,7 +258,7 @@ public sealed partial class AgentLoop
             if (toolCalls.Count > 0)
             {
                 // Detect exact duplicate tool calls from the previous turn (loop trap)
-                var repetition = DetectToolCallRepetition(toolCalls, prevToolSigs, recentTurnSigs);
+                var repetition = DetectToolCallRepetition(cwd, toolCalls, prevToolSigs, recentTurnSigs);
 
                 // Rolling-window guard: catch multi-turn cycles (A,B,C,A,B,C…) the adjacent check
                 // misses. Trips when every distinct call this turn has already recurred enough times
@@ -266,8 +266,14 @@ public sealed partial class AgentLoop
                 if (repetition.IsDuplicate || repetition.IsRepeating)
                 {
                     consecutiveDuplicates++;
-                    foreach (var ev in ApplyToolLoopGuard(ctx, response, repetition.IsDuplicate, consecutiveDuplicates))
+                    var guardHint = LoopGuardHint(repetition.IsDuplicate, consecutiveDuplicates);
+                    foreach (var ev in ApplyToolLoopGuard(ctx, response, guardHint))
                         yield return ev;
+
+                    // Persist the skipped calls' results so the session log has no dangling
+                    // tool_use entries (they broke session analysis and would desync a resume
+                    // replay from ctx.Messages, which does receive the hint blocks).
+                    AppendSkippedToolSession(cwd, response.ToolCalls, guardHint);
 
                     // Weak models can get stuck re-reading the same files without ever editing.
                     // Rather than bail after the first repeat, give a few escalating, progress-guarded
@@ -421,21 +427,19 @@ public sealed partial class AgentLoop
         yield return End(cwd, EndReason.Cancelled);
     }
 
+    private bool HasCompactableHistory(LoopContext ctx) =>
+        ctx.Messages.Count - EstimateTokensToKeep(ctx) > 0;
+
     private sealed record ToolCallRepetition(
         List<string> SignatureList,
         HashSet<string> Signatures,
         bool IsDuplicate,
         bool IsRepeating);
 
-    private static List<LoopEvent> ApplyToolLoopGuard(
-        LoopContext ctx,
-        TurnResponse response,
-        bool isDuplicate,
-        int attempt)
-    {
-        // Escalate: the first hint nudges, later ones become an imperative demand to act, since a
-        // weak model that ignored the gentle hint needs a firmer push before the loop gives up.
-        var hint = attempt >= 2
+    // Escalate: the first hint nudges, later ones become an imperative demand to act, since a
+    // weak model that ignored the gentle hint needs a firmer push before the loop gives up.
+    private static string LoopGuardHint(bool isDuplicate, int attempt) =>
+        attempt >= 2
             ? "You are STILL repeating the same reads/searches and have made no edits. "
               + "Stop reading immediately. Your very next action MUST be an Edit or Write tool call "
               + "that changes a file. Do NOT call Read, Glob, Grep, or List again."
@@ -445,6 +449,12 @@ public sealed partial class AgentLoop
                 : "You keep repeating the same reads and searches without making progress. "
                   + "Stop gathering information. Either make a concrete change with Edit or Write, "
                   + "or respond in plain text with what you found or why you are blocked.";
+
+    private static List<LoopEvent> ApplyToolLoopGuard(
+        LoopContext ctx,
+        TurnResponse response,
+        string hint)
+    {
         var events = new List<LoopEvent>(response.ToolCalls.Count);
         var blocks = new List<ContentBlock>(response.ToolCalls.Count);
         for (var i = 0; i < response.ToolCalls.Count; i++)
@@ -479,6 +489,11 @@ public sealed partial class AgentLoop
         }
         ctx.Messages.Add(new UserMessage(resultBlocks));
 
+        // Stale-build heuristic: consecutive failed builds with shifting errors -> tell the model
+        // to clean-rebuild before trusting (and "fixing") any more phantom errors.
+        if (result.StaleBuildHint is { } staleBuildHint)
+            ctx.Messages.Add(new UserMessage([new TextBlock(staleBuildHint)]));
+
         if (result.Results.Length > 0 && result.Results.All(run => run.Result.IsError))
         {
             consecutiveErrorTurns++;
@@ -498,11 +513,16 @@ public sealed partial class AgentLoop
     }
 
     private ToolCallRepetition DetectToolCallRepetition(
+        string cwd,
         List<(string Id, string Name, string Args)> toolCalls,
         HashSet<string>? previousSignatures,
         Queue<List<string>> recentTurnSignatures)
     {
-        var signatureList = toolCalls.Select(call => $"{call.Name}:{call.Args.Trim()}").ToList();
+        // Read signatures are mtime-aware (see AgentLoopHeuristics.ToolCallSignature): a re-read
+        // of a file that changed on disk is fresh information, not a loop.
+        var signatureList = toolCalls
+            .Select(call => AgentLoopHeuristics.ToolCallSignature(cwd, call.Name, call.Args))
+            .ToList();
         var signatures = new HashSet<string>(signatureList, StringComparer.Ordinal);
         var isDuplicate = previousSignatures is not null
             && signatures.Count > 0
@@ -545,6 +565,39 @@ public sealed partial class AgentLoop
                 is_error = result.Result.IsError,
                 duration_ms = result.DurationMs,
                 approval_wait_ms = result.ApprovalWaitMs
+            });
+        }
+
+        sessionStore.Append(new SessionRecord
+        {
+            Type = SessionRecordType.ToolResult,
+            Cwd = cwd,
+            Message = new { content = parts }
+        });
+    }
+
+    // Mirrors AppendToolResultSession for calls the loop guard skipped: every tool_use in the
+    // session log gets a result (the guard hint), matching what ctx.Messages received.
+    private void AppendSkippedToolSession(
+        string cwd,
+        List<(string Id, string Name, string Args)> toolCalls,
+        string hint)
+    {
+        if (sessionStore is null)
+            return;
+
+        var parts = new List<object>(toolCalls.Count);
+        foreach (var (id, name, _) in toolCalls)
+        {
+            parts.Add(new
+            {
+                type = "tool_result",
+                tool_use_id = id,
+                name,
+                content = hint,
+                is_error = false,
+                duration_ms = 0L,
+                approval_wait_ms = 0L
             });
         }
 
@@ -780,6 +833,7 @@ public sealed partial class AgentLoop
 
         // Check for completion signals across all executed tools
         var affectedPaths = new List<string>();
+        string? staleBuildHint = null;
         foreach (var i in readOnlyIndices.Concat(serialIndices))
         {
             var (_, name, args) = toolCalls[i];
@@ -787,9 +841,14 @@ public sealed partial class AgentLoop
                 signalCompletion = true;
 
             // Track the outcome of build/test commands so the completion guard can refuse a Done
-            // signal issued over a failing build.
+            // signal issued over a failing build, and so the stale-build heuristic can suggest a
+            // clean rebuild when consecutive failures keep changing their error.
             if (AgentLoopHeuristics.LooksLikeBuildCommand(name, args))
+            {
                 ctx.LastBuildFailed = results[i].Result.IsError;
+                staleBuildHint ??= AgentLoopHeuristics.ObserveBuildOutcome(
+                    ctx, results[i].Result.IsError, results[i].Result.Content);
+            }
 
             if (results[i] is { Result.IsError: false } && TryGetPathArgument(name, args) is { } path)
                 affectedPaths.Add(path);
@@ -797,6 +856,7 @@ public sealed partial class AgentLoop
 
         var execResult = new ExecuteToolsResult { Results = results, AnyWriteTools = anyWriteTools, SignalCompletion = signalCompletion };
         execResult.AffectedPaths.AddRange(affectedPaths.Distinct(StringComparer.OrdinalIgnoreCase));
+        execResult.StaleBuildHint = staleBuildHint;
         return execResult;
     }
 
@@ -872,6 +932,14 @@ public sealed partial class AgentLoop
         if (!toolRegistry.TryGetTool(toolName, out var tool) || tool is null)
             return new ToolRunResult(ToolResult.Err($"Unknown tool: {toolName}"), 0, 0);
 
+        var argsElement = ToolArgs.TryParseArgs(args);
+
+        // Read-before-edit guard: reject an edit of a file the model has not read this session
+        // (or whose on-disk state went stale since), before the user is asked to approve it.
+        if (config.Agent.RequireReadBeforeEdit
+            && ReadBeforeEdit.Check(ctx, cwd, toolName, argsElement) is { } staleEdit)
+            return new ToolRunResult(staleEdit, 0, 0);
+
         // Permission check
         var verdict = permissions.Evaluate(toolName, args);
         if (verdict == PermissionVerdict.Deny)
@@ -913,14 +981,17 @@ public sealed partial class AgentLoop
         }
 
         var prompter = PermissionPrompter;
-        var argsElement = ToolArgs.TryParseArgs(args);
 
         // Read de-duplication: skip re-reading a file whose content is still live in context.
         if (config.Agent.DedupeReads && string.Equals(toolName, ReadTool.ToolName, StringComparison.Ordinal))
         {
             var stub = TryReadDedupeStub(ctx, cwd, argsElement);
             if (stub is not null)
+            {
+                // A stubbed read still proves the file is unchanged and known — count it as read.
+                ReadBeforeEdit.RecordRead(ctx, cwd, argsElement);
                 return new ToolRunResult(ToolResult.Ok(stub), 0, 0);
+            }
         }
 
         var toolCtx = new ToolContext
@@ -946,9 +1017,21 @@ public sealed partial class AgentLoop
         {
             var result = await tool.ExecuteAsync(argsElement, toolCtx, ct);
             runSw.Stop();
-            if (config.Agent.DedupeReads && !result.IsError
-                && string.Equals(toolName, ReadTool.ToolName, StringComparison.Ordinal))
-                RememberRead(ctx, cwd, argsElement, result.Content);
+            if (!result.IsError)
+            {
+                if (string.Equals(toolName, ReadTool.ToolName, StringComparison.Ordinal))
+                {
+                    if (config.Agent.DedupeReads)
+                        RememberRead(ctx, cwd, argsElement, result.Content);
+                    ReadBeforeEdit.RecordRead(ctx, cwd, argsElement);
+                }
+                else if (string.Equals(toolName, EditTool.ToolName, StringComparison.Ordinal)
+                    || string.Equals(toolName, MultiEditTool.ToolName, StringComparison.Ordinal)
+                    || string.Equals(toolName, WriteTool.ToolName, StringComparison.Ordinal))
+                {
+                    ReadBeforeEdit.RecordWrite(ctx, cwd, argsElement);
+                }
+            }
             return new ToolRunResult(result, Math.Max(0, runSw.ElapsedMilliseconds - nestedApprovalWaitMs), approvalWaitMs);
         }
         catch (Exception ex)
@@ -1029,30 +1112,90 @@ public sealed partial class AgentLoop
         var toSummarize = ctx.Messages.Take(ctx.Messages.Count - keepCount).ToList();
 
         if (toSummarize.Count == 0)
-            yield break;
-
-        var summaryPrompt = BuildSummaryPrompt(toSummarize);
-        var summaryRequest = new ChatRequest(
-            config.Model.ActiveModel.Id,
-            "You are a concise summarizer. Summarize the conversation context below preserving key facts, decisions, and code changes.",
-            [new UserMessage([new TextBlock(summaryPrompt)])],
-            [],
-            config.Compaction.ReserveTokens);
-
-        var summary = new StringBuilder();
-        await foreach (var ev in provider.StreamAsync(summaryRequest, ct))
         {
-            if (ev is TextDelta td) summary.Append(td.Text);
-            if (ev is StreamError) yield break;
+            // Nothing older than the keep window. If the context is genuinely over the hard budget
+            // (recent tail + summary alone exceed it), skipping would dead-end the session, so
+            // escalate: shrink the keep window to just the last message so the rest of the tail can
+            // be summarized; failing that, re-compress an oversized summary.
+            if (ContextOverBudget(ctx) && ctx.Messages.Count > 1)
+            {
+                keepCount = 1;
+                toSummarize = ctx.Messages.Take(ctx.Messages.Count - keepCount).ToList();
+            }
+            else if (ContextOverBudget(ctx) &&
+                     !string.IsNullOrEmpty(ctx.CompactionSummary) &&
+                     ctx.CompactionSummary.Length > MaxSummaryChars(ctx))
+            {
+                var (compressed, error) = await SummarizeAsync(BuildRecompressPrompt(ctx.CompactionSummary), ct);
+                var compressedTrimmed = compressed.Trim();
+                if (error || compressedTrimmed.Length == 0 || compressedTrimmed.Length >= ctx.CompactionSummary.Length)
+                {
+                    yield return new CompactionSkipped(
+                        "The retained recent window already fills the budget and the summary could not be "
+                        + "compressed further. Switch to a model with a larger context window to continue.");
+                    yield break;
+                }
+                ctx.CompactionSummary = compressedTrimmed;
+                ctx.TokenBudget = ctx.TokenBudget.WithUsed(EstimateCompactedTokens(ctx));
+                sessionStore?.Append(new SessionRecord
+                {
+                    Type = SessionRecordType.Summary,
+                    Cwd = cwd,
+                    Message = compressedTrimmed
+                });
+                yield return new CompactionOccurred(tokensBefore, ctx.TokenBudget.UsedTokens, ctx.CompactionSummary);
+                yield break;
+            }
+            else
+            {
+                yield return new CompactionSkipped(
+                    "Nothing older than the retained recent window to summarize — the recent messages plus "
+                    + "the existing summary already fill the budget. Raise the model's context window or lower "
+                    + "compaction.keep_recent_tokens.");
+                yield break;
+            }
         }
 
-        // Incremental summary: merge with existing if present
+        // Summarize in chunks so the summarization request itself never overflows the context window
+        // (a single chunk that big is exactly what fills the window in the first place).
+        var summary = new StringBuilder();
+        foreach (var chunk in ChunkBySize(toSummarize, MaxSummaryInputChars(ctx)))
+        {
+            var (text, error) = await SummarizeAsync(BuildSummaryPrompt(chunk), ct);
+            if (error)
+            {
+                yield return new CompactionSkipped(
+                    "The summarization request failed — the content is likely too large for the model's "
+                    + "context window. Switch to a model with a larger window to recover this session.");
+                yield break;
+            }
+            var trimmed = text.Trim();
+            if (trimmed.Length == 0)
+                continue;
+            if (summary.Length > 0)
+                summary.Append("\n\n");
+            summary.Append(trimmed);
+        }
+
         var newSummary = summary.ToString().Trim();
         if (newSummary.Length == 0)
+        {
+            yield return new CompactionSkipped("The summarizer returned no content; nothing was compacted.");
             yield break;
+        }
 
+        // Incremental summary: merge with existing, then re-compress if the running summary has grown
+        // past its budget so it can't itself balloon the context across many compactions.
         if (!string.IsNullOrEmpty(ctx.CompactionSummary))
             newSummary = ctx.CompactionSummary + "\n\n---\n\n" + newSummary;
+
+        if (newSummary.Length > MaxSummaryChars(ctx))
+        {
+            var (compressed, error) = await SummarizeAsync(BuildRecompressPrompt(newSummary), ct);
+            var compressedTrimmed = compressed.Trim();
+            if (!error && compressedTrimmed.Length > 0)
+                newSummary = compressedTrimmed;
+        }
 
         ctx.CompactionSummary = newSummary;
 
@@ -1068,10 +1211,29 @@ public sealed partial class AgentLoop
         yield return new CompactionOccurred(tokensBefore, ctx.TokenBudget.UsedTokens, ctx.CompactionSummary);
     }
 
+    // Fraction of the usable budget the retained recent window is allowed to occupy, and the fraction
+    // the persisted summary may reach before it is re-compressed. Together they stay well under 1 so
+    // compaction always leaves headroom for the next turn.
+    private const float KeepRecentBudgetFraction = 0.4f;
+    private const float SummaryBudgetFraction = 0.35f;
+
+    // True when tracked usage has reached the usable budget — the hard limit past which a request is
+    // rejected (distinct from the softer proactive-compaction threshold). Only here is aggressive
+    // tail eviction justified.
+    private static bool ContextOverBudget(LoopContext ctx) =>
+        ctx.TokenBudget.Usable > 0 && ctx.TokenBudget.UsedTokens >= ctx.TokenBudget.Usable;
+
     private int EstimateTokensToKeep(LoopContext ctx)
     {
-        // Keep roughly the last KeepRecentTokens worth of messages (rough estimate: 4 chars/token)
-        var keepChars = config.Compaction.KeepRecentTokens * 4;
+        // Keep roughly the last KeepRecentTokens worth of messages (rough estimate: 4 chars/token),
+        // but never more than a fraction of the usable budget. On a small context window a fixed 20k
+        // keep-window can be nearly the whole budget, leaving compaction nothing it is allowed to
+        // summarize — which is how a run gets stuck "full" with compaction unable to help.
+        var keepTokens = config.Compaction.KeepRecentTokens;
+        if (ctx.TokenBudget.Usable > 0)
+            keepTokens = Math.Min(keepTokens, (int)(ctx.TokenBudget.Usable * KeepRecentBudgetFraction));
+        var keepChars = keepTokens * 4;
+
         int chars = 0;
         int keep = 0;
         for (int i = ctx.Messages.Count - 1; i >= 0; i--)
@@ -1084,6 +1246,69 @@ public sealed partial class AgentLoop
         }
         return Math.Max(keep, 2);
     }
+
+    /// <summary>Char budget for a single summarization request's input, derived from the usable window.</summary>
+    private int MaxSummaryInputChars(LoopContext ctx)
+    {
+        var budgetTokens = ctx.TokenBudget.Usable > 0 ? ctx.TokenBudget.Usable : config.Compaction.KeepRecentTokens;
+        // Leave headroom for the summarizer's own system prompt and the prompt wrapper text.
+        budgetTokens = Math.Max(2_000, budgetTokens - 1_000);
+        return budgetTokens * 4;
+    }
+
+    /// <summary>Max size the persisted running summary may reach before it is re-compressed.</summary>
+    private int MaxSummaryChars(LoopContext ctx)
+    {
+        var tokens = ctx.TokenBudget.Usable > 0
+            ? (int)(ctx.TokenBudget.Usable * SummaryBudgetFraction)
+            : config.Compaction.KeepRecentTokens;
+        return Math.Max(2_000, tokens) * 4;
+    }
+
+    /// <summary>Runs a single summarization request, returning the text and whether the stream errored.</summary>
+    private async Task<(string Text, bool Error)> SummarizeAsync(string prompt, CancellationToken ct)
+    {
+        var request = new ChatRequest(
+            config.Model.ActiveModel.Id,
+            "You are a concise summarizer. Summarize the conversation context below preserving key facts, decisions, and code changes.",
+            [new UserMessage([new TextBlock(prompt)])],
+            [],
+            config.Compaction.ReserveTokens);
+
+        var sb = new StringBuilder();
+        await foreach (var ev in provider.StreamAsync(request, ct))
+        {
+            if (ev is TextDelta td) sb.Append(td.Text);
+            if (ev is StreamError) return ("", true);
+        }
+        return (sb.ToString(), false);
+    }
+
+    /// <summary>Splits messages into groups whose estimated size stays under <paramref name="maxChars"/>.</summary>
+    private static IEnumerable<List<Message>> ChunkBySize(List<Message> messages, int maxChars)
+    {
+        var current = new List<Message>();
+        var currentChars = 0;
+        foreach (var msg in messages)
+        {
+            var len = MessageLength(msg);
+            if (current.Count > 0 && currentChars + len > maxChars)
+            {
+                yield return current;
+                current = [];
+                currentChars = 0;
+            }
+            current.Add(msg);
+            currentChars += len;
+        }
+        if (current.Count > 0)
+            yield return current;
+    }
+
+    private static string BuildRecompressPrompt(string summary) =>
+        "The following is a running summary of an earlier conversation that has grown too long. "
+        + "Rewrite it as a single, shorter summary that preserves key facts, decisions, and code "
+        + "changes while removing redundancy:\n\n" + summary;
 
     private static int MessageLength(Message msg)
     {

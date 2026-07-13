@@ -11,7 +11,9 @@ internal static class Themes
     public static readonly Theme Dark = new()
     {
         Name       = "dark",
-        Normal     = A(ColorName16.Gray,         ColorName16.Black),
+        // Body text uses a true-color light gray (#cccccc) rather than the named Gray
+        // (#808080), which reads as muddy dark-gray against the black background.
+        Normal     = new(new Color(204, 204, 204), ColorName16.Black),
         Dim        = A(ColorName16.DarkGray,     ColorName16.Black),
         Bright     = A(ColorName16.White,        ColorName16.Black),
         Cmd        = A(ColorName16.BrightCyan,   ColorName16.Black),
@@ -57,10 +59,11 @@ internal static class Themes
         Cmd        = A(ColorName16.Blue,     ColorName16.White),
         Success    = A(ColorName16.Green,    ColorName16.White),
         Err        = A(ColorName16.Red,      ColorName16.White),
-        Warn       = A(ColorName16.Yellow,   ColorName16.White),
+        // Named Yellow (#ffff00) is nearly invisible on white; use a readable dark amber.
+        Warn       = new(new Color(161, 98, 7), ColorName16.White),
         Bullet     = A(ColorName16.Blue,     ColorName16.White),
         Sub        = A(ColorName16.DarkGray, ColorName16.White),
-        Running    = A(ColorName16.Yellow,   ColorName16.White),
+        Running    = new(new Color(161, 98, 7), ColorName16.White),
         Code       = A(ColorName16.Green,    ColorName16.White),
         ActiveSection = A(ColorName16.Green, ColorName16.White),
         DiffAdd    = A(ColorName16.Black,    ColorName16.BrightGreen),
@@ -91,7 +94,9 @@ internal static class Themes
     public static readonly Theme Borland = new()
     {
         Name       = "borland",
-        Normal     = A(ColorName16.Gray,         ColorName16.Blue),
+        // Body text uses true-color light gray (#cccccc) rather than named Gray (#808080),
+        // which reads as muddy dark-gray against the blue background.
+        Normal     = new(new Color(204, 204, 204), ColorName16.Blue),
         Dim        = A(ColorName16.Cyan,         ColorName16.Blue),
         Bright     = A(ColorName16.White,        ColorName16.Blue),
         Cmd        = A(ColorName16.BrightCyan,   ColorName16.Blue),

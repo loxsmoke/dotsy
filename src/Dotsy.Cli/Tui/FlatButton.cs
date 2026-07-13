@@ -15,12 +15,18 @@ internal sealed class FlatButton : View
 
     public FlatButton(string label)
     {
-        var t = $" {label} ";
-        Text = t;
-        Width = t.Length;
+        SetLabel(label);
         Height = 1;
         CanFocus = true;
         SetScheme(Palette.BtnScheme());
+    }
+
+    // Updates the button text and its width so the containing row re-lays out to fit.
+    public void SetLabel(string label)
+    {
+        var t = $" {label} ";
+        Text = t;
+        Width = t.Length;
     }
 
     protected override bool OnKeyDown(Key key)

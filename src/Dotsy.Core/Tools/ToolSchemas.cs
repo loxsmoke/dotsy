@@ -166,44 +166,40 @@ internal static class ToolSchemas
           "properties": {
             "action": {
               "type": "string",
-              "enum": ["list_sections", "list_tasks", "create_section", "edit_section", "delete_section", "create_item", "edit_item", "delete_item", "set_status"],
-              "description": "list_sections: sections with task counts. list_tasks: tasks filtered by section/status. create_section/edit_section/delete_section: maintain section headings. create_item/edit_item/delete_item: maintain checkbox tasks. set_status: mark a task done or not done."
+              "enum": ["list", "add", "update", "section"],
+              "description": "Defaults to list when omitted. list: show sections and tasks with their indexes. add: add a task. update: rewrite, complete, or delete a task by index. section: create, rename, or delete a section."
+            },
+            "text": {
+              "type": "string",
+              "description": "add/update: the task text, without the checkbox prefix."
+            },
+            "task": {
+              "type": "integer",
+              "description": "update: the task index shown by list."
+            },
+            "done": {
+              "type": "boolean",
+              "description": "add/update: true marks the task [x], false marks it [ ]."
+            },
+            "delete": {
+              "type": "boolean",
+              "description": "update/section: true deletes the task or section."
             },
             "section": {
               "type": "string",
-              "description": "list_tasks/create_item/edit_section/delete_section: section title, leading number, or section index from list_sections."
+              "description": "Section title, leading number, or index. add: target section, created if missing (omit to use the last section). list: filter to one section. section: the existing section to rename or delete."
+            },
+            "title": {
+              "type": "string",
+              "description": "section: the heading text (the new name when renaming), without leading # characters."
             },
             "status": {
               "type": "string",
               "enum": ["todo", "done", "all"],
-              "description": "list_tasks only: filter by completion. Defaults to todo."
-            },
-            "task": {
-              "type": "integer",
-              "description": "set_status/edit_item/delete_item: the 1-based task index returned by list_tasks."
-            },
-            "done": {
-              "type": "boolean",
-              "description": "set_status/create_item: true uses [x], false uses [ ]. set_status defaults to true."
-            },
-            "title": {
-              "type": "string",
-              "description": "create_section/edit_section: section heading text without leading # characters."
-            },
-            "text": {
-              "type": "string",
-              "description": "create_item/edit_item: task text without the checkbox prefix."
-            },
-            "after_section": {
-              "type": "string",
-              "description": "create_section only: optional section title, leading number, or section index to insert after. Omit to append."
-            },
-            "level": {
-              "type": "integer",
-              "description": "create_section only: markdown heading level 1-6. Defaults to 2."
+              "description": "list: filter tasks by completion. Defaults to all."
             }
           },
-          "required": ["action"]
+          "required": []
         }
         """);
 

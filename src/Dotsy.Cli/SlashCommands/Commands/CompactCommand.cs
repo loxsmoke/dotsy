@@ -38,6 +38,7 @@ internal sealed class CompactCommand : ISlashCommand
             try
             {
                 host.StartSpinner("compacting...");
+                string? skipReason = null;
                 await foreach (var ev in loop.CompactAsync(loopCtx, cwd, ct))
                 {
                     if (ev is CompactionOccurred co)
@@ -47,10 +48,16 @@ internal sealed class CompactCommand : ISlashCommand
                             $"\n─── compacted ({co.TokensBefore:N0}→{co.TokensAfter:N0} tokens) ───\n\n",
                             Palette.Dim));
                     }
+                    else if (ev is CompactionSkipped cs)
+                    {
+                        skipReason = cs.Reason;
+                    }
                 }
 
                 if (!compacted)
-                    host.Invoke(() => host.Write("nothing to compact\n\n", Palette.Dim));
+                    host.Invoke(() => host.Write(
+                        skipReason is null ? "nothing to compact\n\n" : $"nothing to compact — {skipReason}\n\n",
+                        Palette.Dim));
                 host.UpdateStatusBarFromCtx();
             }
             catch (OperationCanceledException)

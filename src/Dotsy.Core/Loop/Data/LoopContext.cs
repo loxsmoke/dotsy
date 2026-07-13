@@ -34,9 +34,22 @@ public sealed class LoopContext
     public bool? LastBuildFailed { get; set; }
     // Number of times the completion guard has fired for a failing build, bounding the retries.
     public int BuildGuardTrips { get; set; }
+    // Stale-build-state heuristic (see AgentLoopHeuristics.ObserveBuildOutcome): consecutive
+    // failed build commands, the distinct error signatures seen across them, and whether the
+    // clean-rebuild hint has already been injected for this failure episode. All reset by a
+    // passing build.
+    public int ConsecutiveBuildFailures { get; set; }
+    public List<string> BuildErrorSignatures { get; } = [];
+    public bool StaleBuildHintGiven { get; set; }
     // Per-session cache of files already Read, keyed by resolved absolute path, used to de-dupe
     // repeat reads while their content is still live in context. See AgentConfig.DedupeReads and
     // ReadDedup. Concurrent because read-only tools run in parallel.
     public ConcurrentDictionary<string, ReadCacheEntry> ReadCache { get; } =
+        new(StringComparer.OrdinalIgnoreCase);
+    // Last-known on-disk state (mtime/size) of every file the agent has Read or written this
+    // session, keyed by resolved absolute path. Used by ReadBeforeEdit to reject Edit/MultiEdit
+    // of a file the model never read or whose disk state is stale. Unlike ReadCache this is
+    // always populated, independent of AgentConfig.DedupeReads.
+    public ConcurrentDictionary<string, FileFreshnessEntry> FileFreshness { get; } =
         new(StringComparer.OrdinalIgnoreCase);
 }

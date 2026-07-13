@@ -32,7 +32,8 @@ public static class SessionLoader
             catch { }
         }
 
-        // Find most recent summary; skip messages before it
+        // Find most recent summary; the model context starts after it (everything before is folded
+        // into the summary), but the conversation panel replays the whole transcript.
         string? summaryContent = null;
         int startIdx = 0;
         for (int i = records.Count - 1; i >= 0; i--)
@@ -47,8 +48,27 @@ public static class SessionLoader
 
         string? sessionId = null;
         string? cwd = null;
-        var messages = new List<Message>();
+        var displayMessages = BuildMessages(records, 0, ref sessionId, ref cwd);
+        var contextMessages = BuildMessages(records, startIdx, ref sessionId, ref cwd);
 
+        return new LoadedSession
+        {
+            SessionId = sessionId ?? "",
+            Messages = contextMessages,
+            DisplayMessages = displayMessages,
+            ToolInfo = BuildToolInfo(records),
+            CompactionSummary = summaryContent,
+            Cwd = cwd,
+            UsedTokens = ReadLastUsedTokens(records)
+        };
+    }
+
+    // Reconstructs the message list from records[startIdx..], mirroring how the live loop stores a
+    // turn: user/assistant records become their message, and tool_result records become a UserMessage
+    // (that is the role tool results are sent back under).
+    private static List<Message> BuildMessages(List<JsonElement> records, int startIdx, ref string? sessionId, ref string? cwd)
+    {
+        var messages = new List<Message>();
         for (int i = startIdx; i < records.Count; i++)
         {
             var rec = records[i];
@@ -66,10 +86,7 @@ public static class SessionLoader
                 var blocks = ParseContentBlocks(contentEl);
                 if (blocks.Count == 0) continue;
 
-                if (type == "user")
-                    messages.Add(new UserMessage(blocks));
-                else
-                    messages.Add(new AssistantMessage(blocks));
+                messages.Add(type == "user" ? new UserMessage(blocks) : new AssistantMessage(blocks));
             }
             else if (type == "tool_result" &&
                 rec.TryGetProperty("message", out var toolMsg) &&
@@ -81,15 +98,49 @@ public static class SessionLoader
                     messages.Add(new UserMessage(blocks));
             }
         }
+        return messages;
+    }
 
-        return new LoadedSession
+    // Recovers per-tool timing: a tool_use's start time is its assistant record's timestamp, and its
+    // run duration is the duration_ms on the matching tool_result content block.
+    private static Dictionary<string, RestoredToolInfo> BuildToolInfo(List<JsonElement> records)
+    {
+        var startedAt = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        var durationMs = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        foreach (var rec in records)
         {
-            SessionId = sessionId ?? "",
-            Messages = messages,
-            CompactionSummary = summaryContent,
-            Cwd = cwd,
-            UsedTokens = ReadLastUsedTokens(records)
-        };
+            DateTimeOffset? ts =
+                rec.TryGetProperty("timestamp", out var tsEl) &&
+                tsEl.ValueKind == JsonValueKind.String &&
+                DateTimeOffset.TryParse(tsEl.GetString(), out var parsed)
+                    ? parsed
+                    : null;
+
+            if (!rec.TryGetProperty("message", out var msg) || msg.ValueKind != JsonValueKind.Object ||
+                !msg.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array)
+                continue;
+
+            foreach (var item in content.EnumerateArray())
+            {
+                var itemType = item.TryGetProperty("type", out var it) ? it.GetString() : null;
+                if (itemType == "tool_use" && ts is { } started && item.TryGetProperty("id", out var idEl))
+                    startedAt[idEl.GetString() ?? ""] = started;
+                else if (itemType == "tool_result" && item.TryGetProperty("tool_use_id", out var tuid))
+                {
+                    var id = tuid.GetString() ?? "";
+                    if (item.TryGetProperty("duration_ms", out var dEl) && dEl.TryGetInt32(out var d))
+                        durationMs[id] = d;
+                }
+            }
+        }
+
+        var info = new Dictionary<string, RestoredToolInfo>(StringComparer.Ordinal);
+        foreach (var id in startedAt.Keys.Union(durationMs.Keys))
+            info[id] = new RestoredToolInfo(
+                startedAt.TryGetValue(id, out var s) ? s : null,
+                durationMs.TryGetValue(id, out var dm) ? dm : 0);
+        return info;
     }
 
     // The live token budget tracks input + output of the most recent assistant turn (see AgentLoop's

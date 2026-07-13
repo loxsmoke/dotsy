@@ -114,6 +114,7 @@ public partial class AgentWindow : ISlashCommandHost
         toolCallRows.Clear();
         toolCallCount = 0;
         toolCallGroupSeq = 0;
+        groupConvoLine.Clear();
         fileRows.Clear();
         fileFrame.Visible = false;
         convo.Height = Dim.Fill();

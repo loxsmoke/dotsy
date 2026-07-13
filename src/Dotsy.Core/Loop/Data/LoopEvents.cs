@@ -30,6 +30,13 @@ public record TokenUsageUpdated(
 
 public record CompactionOccurred(int TokensBefore, int TokensAfter, string Summary) : LoopEvent;
 
+/// <summary>
+/// Emitted when compaction ran but freed nothing — e.g. everything left is inside the retained
+/// recent window, or the summarization request itself failed. <paramref name="Reason"/> explains
+/// why so the user isn't left with a bare "nothing to compact" while the context is full.
+/// </summary>
+public record CompactionSkipped(string Reason) : LoopEvent;
+
 public record LoopEnded(EndReason Reason, string? Message = null) : LoopEvent;
 
 public record PermissionRequired(

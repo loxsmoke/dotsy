@@ -147,6 +147,14 @@ public sealed class AgentConfig
     // file is returned again so the model never loses content it needs. Set false to always
     // re-read. See ReadDedup.
     public bool DedupeReads { get; set; } = true;
+    // Read-before-edit guard: reject Edit/MultiEdit of a file the model has not Read this session,
+    // or whose on-disk state changed since the last read. Line-range edits additionally require a
+    // fresh Read after the model's own last edit/write of the file, because line numbers go stale
+    // the moment the file changes — observed dogfooding failure: the model line-edits from stale
+    // numbers and silently corrupts brace structure, spiralling into rebuild/rewrite loops. The
+    // rejection tells the model to Read the file, so it self-corrects in one round trip. See
+    // ReadBeforeEdit. Set false to allow blind edits.
+    public bool RequireReadBeforeEdit { get; set; } = true;
     public int MaxReflections { get; set; } = 3;
     public bool InjectEnvironment { get; set; } = true;
     public bool InjectGitStatus { get; set; } = true;

@@ -21,7 +21,7 @@ public sealed class GeminiProvider : OpenAiProvider
     protected override string ChatEndpoint => "chat/completions";
 
     public GeminiProvider(string apiKey, string? baseUrl = null, HttpClient? http = null)
-        : base(apiKey, string.IsNullOrWhiteSpace(baseUrl) ? DefaultBaseUrl : baseUrl, http) { }
+        : base(apiKey, string.IsNullOrWhiteSpace(baseUrl) ? DefaultBaseUrl : baseUrl, http, normalizeOpenAiBaseUrl: false) { }
 
     // DYNAMIC limits. Unlike the OpenAI-compatible layer, Gemini's *native* models endpoint
     // (GET .../v1beta/models/{id}) reports real inputTokenLimit / outputTokenLimit, so load them

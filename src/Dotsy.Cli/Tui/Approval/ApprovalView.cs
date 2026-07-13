@@ -19,7 +19,9 @@ internal sealed class ApprovalView : FrameView
         Visible = false;
         SetScheme(Palette.FocusedPanelScheme());
 
-        approvalMsg = new Label { X = 2, Y = 0, Width = Dim.Fill(2), Text = "" };
+        // Height is pinned to the two rows above the button row so an over-long message can never
+        // paint over the buttons, whatever a tool's approval formatter returns.
+        approvalMsg = new Label { X = 2, Y = 0, Width = Dim.Fill(2), Height = 2, Text = "" };
         approvalMsg.SetScheme(Palette.Scheme());
         btnOnce = new FlatButton("Allow once") { X = 2, Y = 2 };
         btnAlways = new FlatButton("Always allow") { X = Pos.Right(btnOnce) + 2, Y = 2 };
@@ -35,12 +37,15 @@ internal sealed class ApprovalView : FrameView
         btnProject.Fired += (_, _) => Accept(ApprovalChoice.AllowForProject);
     }
 
-    public Task<ApprovalChoice> ShowAsync(string toolName, string displayArg, bool allowForProject)
+    // projectPath is null for an in-cwd write (button reads "Allow for project") or the cwd-relative
+    // path to another project's root for an out-of-cwd write (e.g. "Allow for ..\some-folder").
+    public Task<ApprovalChoice> ShowAsync(string toolName, string displayArg, bool allowForProject, string? projectPath = null)
     {
         approvalTcs = new TaskCompletionSource<ApprovalChoice>();
         TuiSessionContext.App.Invoke(() =>
         {
-            approvalMsg.Text = $"  {toolName}  {displayArg}";
+            approvalMsg.Text = $"{toolName}  {FitMessage(displayArg, Frame.Width)}";
+            btnProject.SetLabel(projectPath is null ? "Allow for project" : $"Allow for {projectPath}");
             btnProject.Visible = allowForProject;
             PositionButtons();
             Visible = true;
@@ -128,4 +133,18 @@ internal sealed class ApprovalView : FrameView
 
     private static int ButtonWidth(View button) =>
         button.Text?.Length ?? Math.Max(1, button.Frame.Width);
+
+    // Collapses the message to a single line and truncates it to the two rows the label owns.
+    // Tool approval formatters are expected to return one-liners, but any tool relying on the
+    // ITool default gets its raw input JSON here — newlines and all — and an unbounded message
+    // used to wrap across the button row (seen with a Task call carrying a multi-paragraph
+    // prompt). frameWidth may be 0 before the first layout; fall back to a conservative budget.
+    internal static string FitMessage(string text, int frameWidth)
+    {
+        var oneLine = string.Join(' ', text.Split(
+            ['\r', '\n', '\t', ' '], StringSplitOptions.RemoveEmptyEntries));
+        int lineWidth = frameWidth > 8 ? frameWidth - 6 : 120;
+        int budget = lineWidth * 2;
+        return oneLine.Length <= budget ? oneLine : oneLine[..(budget - 1)] + "…";
+    }
 }

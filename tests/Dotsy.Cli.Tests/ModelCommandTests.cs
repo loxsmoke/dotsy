@@ -12,6 +12,47 @@ namespace Dotsy.Cli.Tests;
 public sealed class ModelCommandTests
 {
     [TestMethod]
+    public void Execute_ShowsActiveProviderConfigurableFields()
+    {
+        var previousConfig = TuiSessionContext.Config;
+        var previousModelInfoLookup = TuiSessionContext.ModelInfoLookup;
+
+        try
+        {
+            TuiSessionContext.Config = new DotsyConfig
+            {
+                Model = new ModelConfig
+                {
+                    Provider = ProviderConfig.Compatible,
+                    Compatible = new CompatibleConfig
+                    {
+                        Id = "qwen/qwen3.6-35b-a3b",
+                        BaseUrl = "https://openrouter.ai/api/v1"
+                    }
+                }
+            };
+            TuiSessionContext.ModelInfoLookup = null;
+
+            var host = new CapturingHost();
+            var command = new ModelCommand();
+
+            command.Execute(host, "");
+
+            StringAssert.Contains(host.Output, "model.provider");
+            StringAssert.Contains(host.Output, "model.max_output_tokens_per_request");
+            StringAssert.Contains(host.Output, "model.compatible.id");
+            StringAssert.Contains(host.Output, "model.compatible.api_key");
+            StringAssert.Contains(host.Output, "model.compatible.base_url");
+            StringAssert.Contains(host.Output, "https://openrouter.ai/api/v1");
+        }
+        finally
+        {
+            TuiSessionContext.Config = previousConfig;
+            TuiSessionContext.ModelInfoLookup = previousModelInfoLookup;
+        }
+    }
+
+    [TestMethod]
     public void Complete_LoadsModelsFromCurrentProviderAndCachesForSession()
     {
         var provider = ProviderConfig.Ollama;
@@ -100,6 +141,7 @@ public sealed class ModelCommandTests
     private sealed class CapturingHost : ISlashCommandHost
     {
         private readonly StringBuilder output = new();
+        public string Output => output.ToString();
         public TaskCompletionSource Refreshed { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 

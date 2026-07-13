@@ -160,11 +160,10 @@ public static class SystemPromptBuilder
         sb.AppendLine(
             $"This repository has a {Tools.TodoTool.FileName} task list. Use the {Tools.TodoTool.ToolName} tool to "
             + "work with it instead of reading or editing the file directly:");
-        sb.AppendLine("- Call list_tasks (status=todo) to find outstanding work before starting a task.");
-        sb.AppendLine("- Call list_sections to see how tasks are grouped.");
-        sb.AppendLine("- Use create_section/edit_section/delete_section and create_item/edit_item/delete_item for todo.md maintenance.");
+        sb.AppendLine("- Call {\"action\":\"list\"} to see all sections and tasks with their indexes before starting work.");
+        sb.AppendLine("- Use {\"action\":\"add\",\"text\":\"...\"} to record a new task and {\"action\":\"section\",\"title\":\"...\"} to organize tasks into sections.");
         sb.AppendLine(
-            "- After you finish AND verify a task, call set_status with its index to mark it done. "
+            "- After you finish AND verify a task, mark it done with {\"action\":\"update\",\"task\":<index>,\"done\":true}. "
             + "Do not mark a task done until the work is complete.");
         sb.AppendLine($"Do not Read or Edit {Tools.TodoTool.FileName} directly for these operations.");
         sb.AppendLine("</task_file>");

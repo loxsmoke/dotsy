@@ -41,6 +41,7 @@ internal sealed class ModelCommand : ISlashCommand
         var activeId = cfg.Model.ActiveModel.Id;
         host.Write("  Provider:  ", Palette.Dim); host.Write($"{provider}\n", Palette.Normal);
         host.Write("  Model:     ", Palette.Dim); host.Write($"{activeId}\n", Palette.Bright);
+        WriteModelConfig(host, cfg);
 
         // Fetch context-window info OFF the UI thread. The lookup awaits an HTTP call whose
         // continuation is posted back to the Terminal.Gui main loop, so blocking on .Result here
@@ -146,5 +147,30 @@ internal sealed class ModelCommand : ISlashCommand
         return task.Status == TaskStatus.RanToCompletion
             ? task.Result
             : [];
+    }
+
+    private static void WriteModelConfig(ISlashCommandHost host, DotsyConfig cfg)
+    {
+        var activeProvider = cfg.Model.Provider.ToLowerInvariant() switch
+        {
+            ProviderConfig.AzureOpenAi => ProviderConfig.Azure,
+            var provider => provider,
+        };
+
+        var activeProviderSection = "model." + activeProvider;
+        var sections = ConfigEditor.GetSections(cfg)
+            .Where(section => section.Header.EqualsNoCase("model")
+                || section.Header.EqualsNoCase(activeProviderSection));
+
+        host.Write("  Config:\n", Palette.Dim);
+        foreach (var section in sections)
+        {
+            foreach (var kv in section.Kvs)
+            {
+                var key = $"{section.Header}.{kv.Key}";
+                host.Write($"    {key,-43}", Palette.Dim);
+                host.Write($"= {kv.Value}\n", kv.Empty ? Palette.Warn : Palette.Normal);
+            }
+        }
     }
 }

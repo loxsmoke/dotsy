@@ -1,3 +1,4 @@
+using System.Drawing;
 using Dotsy.Cli.Tui.Colors;
 
 namespace Dotsy.Cli.Tui;
@@ -5,6 +6,47 @@ namespace Dotsy.Cli.Tui;
 public partial class AgentWindow
 {
     // -- Private helpers -------------------------------------------------------------
+
+    // F2 in the tool panel: jump the conversation to the user prompt that started the selected
+    // tool call's group, and move focus there.
+    private void JumpToSelectedToolGroupOrigin()
+    {
+        if (toolCallList.SelectedItem is not { } idx || idx < 0 || idx >= toolCallRows.Count)
+            return;
+
+        var group = toolCallRows[idx].Group;
+        if (group == 0 || !groupConvoLine.TryGetValue(group, out var logicalLine))
+            return;
+
+        FocusConvoAtLogicalLine(logicalLine);
+    }
+
+    // Scrolls the conversation panel so the given logical line sits at the top of the viewport (or
+    // as close as the end of the buffer allows) and moves focus to it.
+    private void FocusConvoAtLogicalLine(int logicalLine)
+    {
+        if (logicalLine < 0 || logicalLine >= conversationLines.Count)
+            return;
+
+        int width = convo.Frame.Width > 0 ? convo.Frame.Width : TuiSessionContext.App.Driver?.Cols ?? 80;
+        if (convo.CanScrollVertical())
+            width = Math.Max(1, width - 1);
+
+        // Logical lines wrap into a variable number of display rows, so walk the buffer to convert
+        // the target logical line into a display-row offset (and total rows, to clamp the scroll).
+        int targetRow = 0;
+        int totalRows = 0;
+        for (int i = 0; i < conversationLines.Count; i++)
+        {
+            if (i == logicalLine)
+                targetRow = totalRows;
+            totalRows += noWrapLineIndices.Contains(i) ? 1 : WrapCellLine(conversationLines[i], width).Count;
+        }
+
+        int maxTop = Math.Max(0, totalRows - convo.Viewport.Height);
+        convo.ScrollTo(new Point(0, Math.Min(targetRow, maxTop)));
+        convo.SetFocus();
+    }
 
     private void AppendConvoError(string message)
     {

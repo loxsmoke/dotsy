@@ -13,15 +13,20 @@ public partial class AgentWindow
     {
         ResetConversationView();
 
+        // Replay the full saved transcript (not just the post-compaction tail) so a resumed panel
+        // shows the same conversation the live run did \u2014 every user prompt and every tool call.
+        var messages = loaded.DisplayMessages;
+        var toolInfo = loaded.ToolInfo;
+
         AppendConvo($"Resumed session: {loaded.SessionId}\n", Palette.Success);
-        AppendConvo($"Messages loaded: {loaded.Messages.Count}\n\n", Palette.Dim);
+        AppendConvo($"Messages loaded: {messages.Count}\n\n", Palette.Dim);
 
         var cwd = loaded.Cwd ?? TuiSessionContext.Cwd;
         var pendingTools = new Dictionary<string, RestoredTool>(StringComparer.Ordinal);
         var currentTurn = 0;
         var currentGroup = 0;
 
-        foreach (var message in loaded.Messages)
+        foreach (var message in messages)
         {
             switch (message)
             {
@@ -30,11 +35,16 @@ public partial class AgentWindow
                     // group, matching the live path where all of a prompt's calls share one group id
                     // so the panel draws grouping brackets around them.
                     if (user.Content.OfType<TextBlock>().Any(b => !string.IsNullOrWhiteSpace(b.Text)))
+                    {
                         currentGroup = ++toolCallGroupSeq;
-                    RenderRestoredUser(user, pendingTools);
+                        // The next AppendConvo writes the "User ›" line into the current tail line;
+                        // anchor the group there so F2 can jump back to it.
+                        groupConvoLine[currentGroup] = conversationLines.Count - 1;
+                    }
+                    RenderRestoredUser(user, pendingTools, toolInfo);
                     break;
                 case AssistantMessage assistant:
-                    RenderRestoredAssistant(assistant, cwd, pendingTools, currentTurn, currentGroup);
+                    RenderRestoredAssistant(assistant, cwd, pendingTools, currentTurn, currentGroup, toolInfo);
                     currentTurn++;
                     break;
             }
@@ -45,7 +55,10 @@ public partial class AgentWindow
         ScrollToolListToEnd();
     }
 
-    private void RenderRestoredUser(UserMessage user, Dictionary<string, RestoredTool> pendingTools)
+    private void RenderRestoredUser(
+        UserMessage user,
+        Dictionary<string, RestoredTool> pendingTools,
+        IReadOnlyDictionary<string, RestoredToolInfo> toolInfo)
     {
         var text = string.Join("\n", user.Content.OfType<TextBlock>().Select(b => b.Text))
             .TrimEnd();
@@ -53,7 +66,7 @@ public partial class AgentWindow
             AppendConvo($"User \u203a {text}\n\n", Palette.Cmd);
 
         foreach (var result in user.Content.OfType<ToolResultBlock>())
-            ApplyRestoredToolResult(result, pendingTools);
+            ApplyRestoredToolResult(result, pendingTools, toolInfo);
     }
 
     private void RenderRestoredAssistant(
@@ -61,7 +74,8 @@ public partial class AgentWindow
         string cwd,
         Dictionary<string, RestoredTool> pendingTools,
         int turnNumber,
-        int group)
+        int group,
+        IReadOnlyDictionary<string, RestoredToolInfo> toolInfo)
     {
         var wroteAgentHeader = false;
         foreach (var block in assistant.Content)
@@ -79,12 +93,12 @@ public partial class AgentWindow
                     break;
 
                 case ThinkingBlock thinking when !string.IsNullOrWhiteSpace(thinking.Thinking):
-                    AppendConvo("Think \u203a ", Palette.Dim);
+                    AppendConvo("Think \u203a ", Palette.Bullet);
                     AppendConvo(thinking.Thinking.TrimEnd() + "\n", Palette.Dim);
                     break;
 
                 case ToolUseBlock toolUse:
-                    AddRestoredToolUse(toolUse, cwd, pendingTools, turnNumber, group);
+                    AddRestoredToolUse(toolUse, cwd, pendingTools, turnNumber, group, toolInfo);
                     break;
             }
         }
@@ -108,18 +122,22 @@ public partial class AgentWindow
         string cwd,
         Dictionary<string, RestoredTool> pendingTools,
         int turnNumber,
-        int group)
+        int group,
+        IReadOnlyDictionary<string, RestoredToolInfo> toolInfo)
     {
         var rawArgs = toolUse.Input.GetRawText();
         var displayArg = FormatPanelArgument(toolUse.Name, rawArgs, cwd);
         var parameters = ExtractToolParameters(rawArgs);
+        var startedAt = toolInfo.TryGetValue(toolUse.Id, out var meta) && meta.StartedAt is { } s
+            ? s
+            : DateTimeOffset.Now;
 
         var row = new ToolRow(
             toolUse.Name,
             displayArg,
             "PENDING",
             0,
-            DateTimeOffset.Now,
+            startedAt,
             cwd,
             Group: group,
             Parameters: parameters,
@@ -137,15 +155,21 @@ public partial class AgentWindow
 
     private void ApplyRestoredToolResult(
         ToolResultBlock result,
-        Dictionary<string, RestoredTool> pendingTools)
+        Dictionary<string, RestoredTool> pendingTools,
+        IReadOnlyDictionary<string, RestoredToolInfo> toolInfo)
     {
         if (!pendingTools.TryGetValue(result.ToolUseId, out var tool) ||
             tool.RowIndex < 0 ||
             tool.RowIndex >= toolCallRows.Count)
             return;
 
-        var status = result.IsError ? "ERR" : "OK";
-        var row = toolCallRows[tool.RowIndex] with { Status = status };
+        // Mirror the live status/timing: OK/ERR/SKIP, and the recorded run duration (ms → whole
+        // seconds, matching how the live path derives Elapsed).
+        var status = result.IsError ? "ERR"
+            : result.Content == "[skipped: duplicate]" ? "SKIP"
+            : "OK";
+        var elapsed = toolInfo.TryGetValue(result.ToolUseId, out var meta) ? meta.DurationMs / 1000 : 0;
+        var row = toolCallRows[tool.RowIndex] with { Status = status, Elapsed = elapsed };
         var output = BuildRestoredToolOutput(tool, result);
         if (output is { Count: > 0 })
             row = row with { Output = output };

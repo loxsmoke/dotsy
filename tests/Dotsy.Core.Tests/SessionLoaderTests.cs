@@ -83,6 +83,49 @@ public sealed class SessionLoaderTests
         var toolResults = (UserMessage)loaded.Messages[1];
         Assert.IsInstanceOfType<ToolResultBlock>(toolResults.Content[0]);
         Assert.AreEqual("file contents", ((ToolResultBlock)toolResults.Content[0]).Content);
+
+        // DisplayMessages replays the WHOLE transcript, including the user prompt from before the
+        // summary that Messages (the compacted model context) drops.
+        Assert.AreEqual(3, loaded.DisplayMessages.Count);
+        var firstUser = (UserMessage)loaded.DisplayMessages[0];
+        Assert.AreEqual("before summary", ((TextBlock)firstUser.Content[0]).Text);
+    }
+
+    [TestMethod]
+    public void Load_RecoversToolTimingForRestoredRows()
+    {
+        var loaded = LoadRecords(
+            new
+            {
+                sessionId = "s3",
+                type = "assistant",
+                timestamp = "2026-07-08T10:00:00.0000000+00:00",
+                message = new
+                {
+                    content = new object[]
+                    {
+                        new { type = "tool_use", id = "call-9", name = "Read", input = "{\"path\":\"a.txt\"}" }
+                    }
+                }
+            },
+            new
+            {
+                sessionId = "s3",
+                type = "tool_result",
+                timestamp = "2026-07-08T10:00:03.0000000+00:00",
+                message = new
+                {
+                    content = new object[]
+                    {
+                        new { type = "tool_result", tool_use_id = "call-9", name = "Read", content = "ok", is_error = false, duration_ms = 3200 }
+                    }
+                }
+            });
+
+        Assert.IsTrue(loaded.ToolInfo.TryGetValue("call-9", out var info));
+        Assert.AreEqual(3200, info!.DurationMs);
+        Assert.IsNotNull(info.StartedAt);
+        Assert.AreEqual(new DateTimeOffset(2026, 7, 8, 10, 0, 0, TimeSpan.Zero), info.StartedAt!.Value);
     }
 
     // Forward compatibility: a newer writer adds extra record/block fields and emits record and

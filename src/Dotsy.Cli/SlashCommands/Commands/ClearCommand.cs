@@ -30,6 +30,14 @@ internal sealed class ClearCommand : ISlashCommand
         TuiSessionContext.Session = new SessionStore(newSessionId, sessionDir);
         TuiSessionContext.LoopCtx = new LoopContext(newSessionId);
 
+        // Rebuild the loop so it logs to the fresh session store. AgentLoop captures its
+        // SessionStore at construction, so without this the assistant/tool records of the new
+        // session keep landing in the previous session's file, while prompts (logged through
+        // TuiSessionContext.Session at append time) go to the new one — a split session log.
+        // /resume does the same; /model rebuilds via this factory as well.
+        if (TuiSessionContext.LoopFactory is { } factory)
+            TuiSessionContext.Loop = factory();
+
         host.ResetConversationView();
         host.Write("Started a fresh session\n\n", Palette.Success);
         host.UpdateStatusBarFromCtx();

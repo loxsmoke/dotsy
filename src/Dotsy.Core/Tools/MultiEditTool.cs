@@ -9,7 +9,7 @@ public sealed class MultiEditTool : ITool
 {
     public const string ToolName = "MultiEdit";
     public string Name => ToolName;
-    public string Description => "Apply multiple non-overlapping edits to a file in one call. Each edit replaces an exact 1-based inclusive start_line/end_line range.";
+    public string Description => "Apply multiple non-overlapping edits to a file in one call. Read the file first. Each edit replaces an exact 1-based inclusive start_line/end_line range.";
     public JsonElement InputSchema => ToolSchemas.MultiEditSchema;
     public ToolSafety Safety => ToolSafety.Sequential;
     public bool IsCompletionSignal => false;

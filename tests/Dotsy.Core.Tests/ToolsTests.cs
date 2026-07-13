@@ -630,8 +630,8 @@ public sealed class ToolsTests
     [TestMethod]
     public async Task TodoTool_MissingFile_ReturnsError()
     {
-        // With no todo.md, a mutation that needs existing content still errors — and now points at
-        // create_section (reads and create_section themselves no longer error; see other tests).
+        // With no todo.md, a mutation that needs existing content still errors — and points at
+        // add as the way to bootstrap a list (list/add/section themselves no longer error).
         var result = await new TodoTool().ExecuteAsync(
             Args("""{"action":"edit_section","section":"1","title":"x"}"""),
             Ctx(),
@@ -639,7 +639,7 @@ public sealed class ToolsTests
 
         Assert.IsTrue(result.IsError);
         StringAssert.Contains(result.Content, "not found");
-        StringAssert.Contains(result.Content, "create_section");
+        StringAssert.Contains(result.Content, "add");
     }
 
     [TestMethod]
@@ -973,6 +973,41 @@ public sealed class ToolsTests
         Assert.AreEqual("Set task 2 done", setStatus);
         Assert.AreEqual("Create item in 1", createItem);
         Assert.AreEqual("Edit task 2", editItem);
+    }
+
+    [TestMethod]
+    public void TaskTool_ApprovalShowsDescription_NotRawJson()
+    {
+        // The approval dialog used to receive the whole serialized input (multi-paragraph prompt
+        // included) because TaskTool had no FormatRunApproval override.
+        var formatted = new TaskTool().FormatRunApproval(
+            Args("""{"description":"Clean up stray files","prompt":"In the working directory...\nline two\nline three"}"""),
+            _tmpDir);
+
+        Assert.AreEqual("\"Clean up stray files\"", formatted);
+    }
+
+    [TestMethod]
+    public void TaskTool_ApprovalFallsBackToPromptFirstLine_Truncated()
+    {
+        var longFirstLine = new string('a', 120);
+        var formatted = new TaskTool().FormatRunApproval(
+            Args($$"""{"prompt":"{{longFirstLine}}\nsecond line"}"""),
+            _tmpDir);
+
+        StringAssert.StartsWith(formatted, "\"" + new string('a', 80));
+        StringAssert.Contains(formatted, "...");
+        Assert.IsFalse(formatted.Contains("second line"));
+    }
+
+    [TestMethod]
+    public void TaskTool_ApprovalShowsTaskIdCheck()
+    {
+        var formatted = new TaskTool().FormatRunApproval(
+            Args("""{"task_id":"t42"}"""),
+            _tmpDir);
+
+        Assert.AreEqual("check sub-task t42", formatted);
     }
 
     [TestMethod]

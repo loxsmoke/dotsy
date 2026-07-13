@@ -25,7 +25,7 @@ public sealed class AzureOpenAiProvider : OpenAiProvider
         string deployment,
         string apiVersion = "2025-01-01",
         HttpClient? http = null)
-        : base(apiKey, endpoint, http)
+        : base(apiKey, endpoint, http, normalizeOpenAiBaseUrl: false)
     {
         _endpoint = endpoint;
         _deployment = deployment;

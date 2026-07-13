@@ -18,6 +18,32 @@ public sealed class TaskTool : ITool
     public Func<string, string, CancellationToken, Task<string>>? LaunchSubTask { get; set; }
     public Func<string, CancellationToken, Task<string>>? GetSubTaskStatus { get; set; }
 
+    // Without these overrides the ITool default dumps the raw input JSON — for Task that is the
+    // entire multi-paragraph sub-task prompt, which overwhelmed the approval dialog. Show the
+    // short description (that's what the field is for), falling back to the prompt's first line.
+    public string FormatRunApproval(JsonElement input, string cwd) => Summarize(input);
+
+    public string FormatPanelArgument(JsonElement input, string cwd) => Summarize(input);
+
+    private static string Summarize(JsonElement input)
+    {
+        if (input.TryGetProperty("task_id", out var taskId)
+            && taskId.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(taskId.GetString()))
+            return $"check sub-task {taskId.GetString()}";
+
+        var summary = input.GetStringPropertyOrEmpty("description").Trim();
+        if (string.IsNullOrWhiteSpace(summary))
+            summary = input.GetStringPropertyOrEmpty("prompt");
+        return $"\"{Snippet(summary, 80)}\"";
+    }
+
+    private static string Snippet(string text, int maxLen)
+    {
+        var first = text.Split('\n')[0].Trim();
+        return first.Length <= maxLen ? first : first[..maxLen] + "...";
+    }
+
     public async Task<ToolResult> ExecuteAsync(JsonElement input, ToolContext ctx, CancellationToken ct)
     {
         if (input.TryGetProperty("task_id", out var taskIdEl)

@@ -23,6 +23,45 @@ public sealed class OpenAiProviderTests
     private static ChatRequest MinimalRequest() =>
         new("gpt-4o", "sys", [new UserMessage([new TextBlock("hi")])], [], 1024);
 
+    [TestMethod]
+    public async Task StreamAsync_OpenRouterBaseUrl_PreservesApiV1Path()
+    {
+        var handler = new FakeSseHandler("data: [DONE]\n\n");
+        var provider = new OpenAiProvider("test-key", "https://openrouter.ai/api/v1", new HttpClient(handler));
+
+        await Collect(provider.StreamAsync(MinimalRequest(), CancellationToken.None));
+
+        Assert.AreEqual("https://openrouter.ai/api/v1/chat/completions", handler.LastRequestUri!.ToString());
+    }
+
+    [TestMethod]
+    public async Task StreamAsync_OpenAiRootBaseUrl_AppendsV1Path()
+    {
+        var handler = new FakeSseHandler("data: [DONE]\n\n");
+        var provider = new OpenAiProvider("test-key", "https://api.openai.com", new HttpClient(handler));
+
+        await Collect(provider.StreamAsync(MinimalRequest(), CancellationToken.None));
+
+        Assert.AreEqual("https://api.openai.com/v1/chat/completions", handler.LastRequestUri!.ToString());
+    }
+
+    [TestMethod]
+    public async Task Stream_HttpError_ContextLengthPreservesProviderDetail()
+    {
+        const string errBody = """
+            {"error":{"message":"This endpoint supports a maximum context length of 16384 tokens.","type":"invalid_request_error"}}
+            """;
+
+        var events = await Collect(
+            Provider(errBody, HttpStatusCode.BadRequest).StreamAsync(MinimalRequest(), CancellationToken.None));
+
+        var err = events.OfType<StreamError>().Single();
+        var pex = (ProviderException)err.Ex;
+        var ctx = (ContextLengthError)pex.Error;
+        StringAssert.Contains(ctx.Detail, "16384");
+        StringAssert.Contains(pex.Message, "16384");
+    }
+
     private static async Task<List<ProviderEvent>> Collect(IAsyncEnumerable<ProviderEvent> src)
     {
         var list = new List<ProviderEvent>();

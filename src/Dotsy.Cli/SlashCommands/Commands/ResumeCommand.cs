@@ -64,8 +64,9 @@ internal sealed class ResumeCommand : ISlashCommand
             loaded.UsedTokens,
             config.Compaction.ThresholdPct);
 
-        // Seed prompt history with the user messages from the loaded session.
-        foreach (var message in loaded.Messages)
+        // Seed prompt history with every user message from the full transcript (not just the
+        // post-compaction tail) so up-arrow recalls all of them, matching what the panel now shows.
+        foreach (var message in loaded.DisplayMessages)
         {
             if (message is UserMessage userMessage)
             {

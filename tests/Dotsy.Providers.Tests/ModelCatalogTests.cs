@@ -25,6 +25,14 @@ public sealed class ModelCatalogTests
     }
 
     [TestMethod]
+    public void TryLookup_KnownQwenCompatibleModel_ReturnsAccurateLimits()
+    {
+        Assert.IsTrue(ModelCatalog.TryLookup("qwen/qwen3.6-35b-a3b", out var info));
+        Assert.AreEqual(262_144, info.ContextWindow);
+        Assert.AreEqual(32_768, info.MaxOutputTokens);
+    }
+
+    [TestMethod]
     public void TryLookup_MostSpecificPrefixWins()
     {
         // "gpt-4o" must not be shadowed by the generic "gpt-4" entry.

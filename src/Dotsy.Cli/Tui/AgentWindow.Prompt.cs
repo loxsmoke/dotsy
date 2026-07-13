@@ -29,11 +29,15 @@ public partial class AgentWindow
             return;
         }
 
+        // The user prompt lands in the current (empty) tail logical line; remember it so F2 in the
+        // tool panel can jump back to the prompt that started this group's calls.
+        var userConvoLine = conversationLines.Count - 1;
         AppendConvo($"User › {displayText}\n\n", Palette.Cmd);
 
         // Tool calls persist across prompts; tag this prompt's calls with a fresh group id so the
         // panel can bracket them together. The changed-files panel still resets each prompt.
         var toolGroup = ++toolCallGroupSeq;
+        groupConvoLine[toolGroup] = userConvoLine;
         fileRows.Clear();
         fileFrame.Visible = false;
         convo.Height = Dim.Fill();
@@ -50,7 +54,7 @@ public partial class AgentWindow
         loop.PermissionPrompter = async (tool, rawArgs, token) =>
         {
             var displayArg = FormatRunApproval(tool, rawArgs, cwd);
-            var choice = await ShowApproval(tool, displayArg);
+            var choice = await ShowApproval(tool, displayArg, rawArgs);
             switch (choice)
             {
                 case ApprovalChoice.AlwaysAllow:
@@ -118,7 +122,7 @@ public partial class AgentWindow
                             if (!thinkingWritten)
                             {
                                 thinkingWritten = true;
-                                TuiSessionContext.App.Invoke(() => AppendConvo("\nThink› ", Palette.Dim));
+                                TuiSessionContext.App.Invoke(() => AppendConvo("\nThink› ", Palette.Bullet));
                             }
                             TuiSessionContext.App.Invoke(() => AppendConvo(thk.Text, Palette.Dim));
                             break;
@@ -271,6 +275,13 @@ public partial class AgentWindow
                                 Palette.Dim));
                             break;
 
+                        case CompactionSkipped cs:
+                            StopStreamCursor();
+                            TuiSessionContext.App.Invoke(() => AppendConvo(
+                                $"\n─── compaction skipped — {cs.Reason} ───\n\n",
+                                Palette.Warn));
+                            break;
+
                         case TurnComplete tc2:
                             StopStreamCursor();
                             VerboseOutput(tc2);
@@ -355,7 +366,9 @@ public partial class AgentWindow
                                     EndReason.Repetition => "stuck repeating the same tool calls",
                                     EndReason.ToolErrorStreak => "too many consecutive tool errors",
                                     EndReason.TurnLimitReached => $"turn limit reached {TuiSessionContext.Config.Agent.MaxTurns}",
-                                    EndReason.ContextTooSmall => "context window full",
+                                    EndReason.ContextTooSmall => string.IsNullOrWhiteSpace(le.Message)
+                                        ? "context window full"
+                                        : $"context window full - {le.Message}",
                                     EndReason.Cancelled => "cancelled",
                                     EndReason.Error => $"error {le.Message ?? ""}",
                                     _ => null

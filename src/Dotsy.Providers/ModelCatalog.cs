@@ -32,6 +32,9 @@ public static class ModelCatalog
         ("gemini-2.0",     1_048_576,  8_192),  // 2.0 flash / flash-lite
         ("gemini-1.5-pro", 2_097_152,  8_192),
         ("gemini-1.5",     1_048_576,  8_192),
+
+        // ── Qwen via OpenAI-compatible routers ─────────────────────────────────────────────
+        ("qwen/qwen3.6-35b-a3b", 262_144, 32_768),
     ];
 
     /// <summary>Returns accurate <see cref="ModelInfo"/> for a known model id, or false if unknown.</summary>

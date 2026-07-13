@@ -167,6 +167,23 @@ public sealed class PermissionStore
         return dir;
     }
 
+    // Label for the "allow for project" approval button. Returns null when the write targets the
+    // current project (cwd) — the caller shows a plain "Allow for project" — otherwise the
+    // cwd-relative path to the write target's project root (git repo root, or its own folder),
+    // e.g. "..\some-folder", so the user sees which other project they are granting.
+    public string? ApprovalProjectPath(string toolName, string argument)
+    {
+        try
+        {
+            if (!IsWriteOutsideCwd(toolName, argument))
+                return null;
+            return ResolveWriteRoot(argument) is { } root
+                ? Path.GetRelativePath(cwd, root)
+                : null;
+        }
+        catch { return null; }
+    }
+
     public void DenyForSession(string toolName, string argument)
     {
         var key = FormatKey(toolName, argument);

@@ -13,9 +13,14 @@ public partial class AgentWindow
         new([WriteTool.ToolName, EditTool.ToolName, MultiEditTool.ToolName], StringComparer.OrdinalIgnoreCase);
 
     #region Approval overlay
-    public Task<ApprovalChoice> ShowApproval(ITool tool, string displayArg)
+    public Task<ApprovalChoice> ShowApproval(ITool tool, string displayArg, string? rawArgs = null)
     {
-        return approvalView.ShowAsync(tool.Name, displayArg, tool.IsWriteTool);
+        // For an out-of-cwd write, label the project button with the cwd-relative path to the
+        // target's project root; in-cwd writes (and tools without raw args) show "Allow for project".
+        var projectPath = rawArgs is not null
+            ? TuiSessionContext.Permissions?.ApprovalProjectPath(tool.Name, rawArgs)
+            : null;
+        return approvalView.ShowAsync(tool.Name, displayArg, tool.IsWriteTool, projectPath);
     }
     private static string FormatRunApproval(ITool tool, string rawArgs, string cwd)
     {

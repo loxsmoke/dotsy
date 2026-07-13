@@ -53,6 +53,9 @@ public partial class AgentWindow : Window, IDisposable
     private readonly ObservableCollection<ToolRow> toolCallRows = [];
     private volatile int toolCallCount;
     private int toolCallGroupSeq;
+    // Logical conversation-line index of the user prompt that started each tool-call group, so F2 in
+    // the tool panel can jump the conversation back to it. Keyed by ToolRow.Group.
+    private readonly Dictionary<int, int> groupConvoLine = [];
     #endregion
     #endregion
 
@@ -207,7 +210,7 @@ public partial class AgentWindow : Window, IDisposable
         rightFrame = new FrameView
         {
             X = Pos.Right(divider), Y = 1, Width = Dim.Fill(), Height = Dim.Fill(1),
-            Title = " Tools "
+            Title = " Tools  [F2 → prompt] "
         };
         rightFrame.SetScheme(Palette.Scheme());
         rightFrame.Border!.Thickness = new Thickness(0, 1, 0, 1); // no left or right bar
@@ -227,6 +230,11 @@ public partial class AgentWindow : Window, IDisposable
                 var idx = toolCallList.SelectedItem;
                 if (idx is >= 0 && idx < toolCallRows.Count)
                     OnToolSelected(toolCallList, new ListViewItemEventArgs(idx, toolCallRows[idx.Value]));
+                key.Handled = true;
+            }
+            else if (key.KeyCode == KeyCode.F2)
+            {
+                JumpToSelectedToolGroupOrigin();
                 key.Handled = true;
             }
         };

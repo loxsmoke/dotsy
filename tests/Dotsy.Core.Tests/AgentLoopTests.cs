@@ -1181,6 +1181,174 @@ public sealed class AgentLoopTests
     }
 
     [TestMethod]
+    public async Task ContextLengthError_DoesNotShowCompactionSkippedForFreshSession()
+    {
+        var config = MakeCompactionConfig();
+        var provider = new FakeProvider(
+            [new StreamError(new ProviderException(new ContextLengthError()))]);
+        var loop = new AgentLoop(provider, new ToolRegistry(), YoloStore(), config);
+        var ctx = new LoopContext
+        {
+            TokenBudget = new TokenBudget(262_144, 16_384, 20_000, 0, 0.8f)
+        };
+        ctx.Messages.Add(new UserMessage([new TextBlock("hello")]));
+
+        var events = await Collect(loop.RunAsync(ctx, Path.GetTempPath(), CancellationToken.None));
+
+        Assert.AreEqual(0, events.OfType<CompactionSkipped>().Count(),
+            "Fresh-session provider context errors should not claim retained history blocked compaction.");
+        var ended = events.OfType<LoopEnded>().SingleOrDefault();
+        Assert.IsNotNull(ended);
+        Assert.AreEqual(EndReason.ContextTooSmall, ended.Reason);
+        StringAssert.Contains(ended.Message, "context window exceeded");
+        Assert.AreEqual(1, provider.CallCount);
+    }
+
+    // ── Compaction no-op & robustness (small-window fixes) ────────────────────
+
+    [TestMethod]
+    public async Task ManualCompact_Skips_WithReason_WhenNothingOlderThanKeepWindow()
+    {
+        // Only the retained tail exists (min-keep is 2, and there are exactly 2 messages) → there is
+        // nothing older to summarize. When NOT over the hard budget, compaction reports *why* instead
+        // of silently doing nothing (UsedTokens 100 « Usable 900, so no aggressive eviction).
+        var config = MakeCompactionConfig();
+        var provider = new FakeProvider(
+            [new TextDelta("unused"), new StreamEnd(StopReason.EndTurn)]);
+        var loop = new AgentLoop(provider, new ToolRegistry(), YoloStore(), config);
+        var ctx = new LoopContext { TokenBudget = new TokenBudget(1_000, 100, 1, 100, 0.9f) };
+        ctx.Messages.Add(new AssistantMessage([new TextBlock("recent assistant")]));
+        ctx.Messages.Add(new UserMessage([new TextBlock("latest user")]));
+
+        var events = await Collect(loop.CompactAsync(ctx, Path.GetTempPath(), CancellationToken.None));
+
+        Assert.AreEqual(0, events.OfType<CompactionOccurred>().Count());
+        var skipped = events.OfType<CompactionSkipped>().SingleOrDefault();
+        Assert.IsNotNull(skipped);
+        StringAssert.Contains(skipped.Reason, "keep_recent_tokens");
+        Assert.AreEqual(0, provider.CallCount, "No summarization request when there's nothing to summarize");
+    }
+
+    [TestMethod]
+    public async Task BuildRequestContextTooSmall_DoesNotShowCompactionSkippedForFreshSession()
+    {
+        // A fresh session can still be too small for the non-message request pieces
+        // (system prompt + tool schemas). Compaction cannot fix that when there is no older
+        // transcript, so the loop should report the real context error directly.
+        var config = MakeCompactionConfig();
+        var provider = new FakeProvider(TextTurn("unused"));
+        var loop = new AgentLoop(provider, new ToolRegistry(), YoloStore(), config);
+        var ctx = new LoopContext { TokenBudget = new TokenBudget(10, 5, 1, 0, 0.8f) };
+        ctx.Messages.Add(new UserMessage([new TextBlock("hello")]));
+
+        var events = await Collect(loop.RunAsync(ctx, Path.GetTempPath(), CancellationToken.None));
+
+        Assert.AreEqual(0, events.OfType<CompactionSkipped>().Count(),
+            "Fresh-session request-build failures should not claim there was retained history to compact.");
+        var ended = events.OfType<LoopEnded>().SingleOrDefault();
+        Assert.IsNotNull(ended);
+        Assert.AreEqual(EndReason.ContextTooSmall, ended.Reason);
+        StringAssert.Contains(ended.Message, "System prompt + tools");
+        Assert.AreEqual(0, provider.CallCount);
+    }
+
+    [TestMethod]
+    public async Task ManualCompact_EvictsTail_WhenOverBudgetAndNothingOlder()
+    {
+        // Over the hard budget (UsedTokens 950 > Usable 900) with every message inside the keep
+        // window. Rather than dead-ending, compaction shrinks the keep window to the last message so
+        // the rest of the tail is summarized and the session can continue.
+        var config = MakeCompactionConfig();
+        config.Compaction.KeepRecentTokens = 20_000; // large keep window → nothing older by default
+        var provider = new FakeProvider(
+            [new TextDelta("emergency summary"), new StreamEnd(StopReason.EndTurn)]);
+        var loop = new AgentLoop(provider, new ToolRegistry(), YoloStore(), config);
+        var ctx = new LoopContext { TokenBudget = new TokenBudget(1_000, 100, 20_000, 950, 0.9f) };
+        ctx.Messages.Add(new UserMessage([new TextBlock("m1")]));
+        ctx.Messages.Add(new AssistantMessage([new TextBlock("m2")]));
+        ctx.Messages.Add(new UserMessage([new TextBlock("m3 (latest)")]));
+
+        var events = await Collect(loop.CompactAsync(ctx, Path.GetTempPath(), CancellationToken.None));
+
+        Assert.IsNotNull(events.OfType<CompactionOccurred>().SingleOrDefault(),
+            "Over-budget compaction should evict the tail instead of skipping");
+        Assert.AreEqual(0, events.OfType<CompactionSkipped>().Count());
+        Assert.AreEqual(1, ctx.Messages.Count, "Only the last message is kept verbatim");
+        Assert.AreEqual("emergency summary", ctx.CompactionSummary);
+    }
+
+    [TestMethod]
+    public async Task ManualCompact_Skips_WithReason_WhenSummarizerRequestFails()
+    {
+        // The summarization request itself overflows / errors — compaction can't recover, and must
+        // say so rather than reporting a bare "nothing to compact".
+        var config = MakeCompactionConfig();
+        var provider = new FakeProvider(
+            [new StreamError(new ProviderException(new ContextLengthError()))]);
+        var loop = new AgentLoop(provider, new ToolRegistry(), YoloStore(), config);
+        var ctx = new LoopContext { TokenBudget = new TokenBudget(1_000, 100, 1, 950, 0.9f) };
+        ctx.Messages.Add(new UserMessage([new TextBlock("old user")]));
+        ctx.Messages.Add(new AssistantMessage([new TextBlock("old assistant")]));
+        ctx.Messages.Add(new UserMessage([new TextBlock("recent assistant")]));
+        ctx.Messages.Add(new UserMessage([new TextBlock("latest user")]));
+
+        var events = await Collect(loop.CompactAsync(ctx, Path.GetTempPath(), CancellationToken.None));
+
+        Assert.AreEqual(0, events.OfType<CompactionOccurred>().Count());
+        var skipped = events.OfType<CompactionSkipped>().SingleOrDefault();
+        Assert.IsNotNull(skipped);
+        StringAssert.Contains(skipped.Reason, "summarization request failed");
+    }
+
+    [TestMethod]
+    public async Task ManualCompact_ClampsKeepWindowToBudget_SoSmallWindowsStillCompact()
+    {
+        // A large keep_recent_tokens on a small usable budget must NOT retain everything: the keep
+        // window is clamped to a fraction of the budget so there's still something to summarize.
+        var config = MakeCompactionConfig();
+        config.Compaction.KeepRecentTokens = 20_000;   // far larger than the usable budget below
+        var provider = new FakeProvider(
+            [new TextDelta("compacted summary"), new StreamEnd(StopReason.EndTurn)]);
+        var loop = new AgentLoop(provider, new ToolRegistry(), YoloStore(), config);
+        // Usable = 1000 - 100 = 900 tokens; 40% clamp ≈ 360 tokens ≈ 1440 chars of retained tail.
+        var ctx = new LoopContext { TokenBudget = new TokenBudget(1_000, 100, 20_000, 950, 0.9f) };
+        for (var i = 0; i < 10; i++)
+            ctx.Messages.Add(new UserMessage([new TextBlock(new string('x', 300) + $" msg{i}")]));
+
+        var events = await Collect(loop.CompactAsync(ctx, Path.GetTempPath(), CancellationToken.None));
+
+        Assert.IsNotNull(events.OfType<CompactionOccurred>().SingleOrDefault(),
+            "Clamped keep-window should leave older messages to summarize");
+        Assert.AreEqual("compacted summary", ctx.CompactionSummary);
+        Assert.IsTrue(ctx.Messages.Count < 10, "Some messages should have been summarized away");
+    }
+
+    [TestMethod]
+    public async Task ManualCompact_RecompressesSummary_WhenItGrowsPastBudget()
+    {
+        // An already-large running summary must be re-compressed rather than endlessly concatenated,
+        // so it can't itself balloon the context across many compactions.
+        var config = MakeCompactionConfig();
+        var provider = new FakeProvider(
+            [new TextDelta("compressed"), new StreamEnd(StopReason.EndTurn)]);
+        var loop = new AgentLoop(provider, new ToolRegistry(), YoloStore(), config);
+        var ctx = new LoopContext { TokenBudget = new TokenBudget(1_000, 100, 1, 950, 0.9f) };
+        // MaxSummaryChars = max(2000, Usable*0.35)*4 = 8000; make the existing summary exceed it.
+        ctx.CompactionSummary = new string('y', 9_000);
+        ctx.Messages.Add(new UserMessage([new TextBlock("old user")]));
+        ctx.Messages.Add(new AssistantMessage([new TextBlock("old assistant")]));
+        ctx.Messages.Add(new UserMessage([new TextBlock("recent assistant")]));
+        ctx.Messages.Add(new UserMessage([new TextBlock("latest user")]));
+
+        var events = await Collect(loop.CompactAsync(ctx, Path.GetTempPath(), CancellationToken.None));
+
+        Assert.IsNotNull(events.OfType<CompactionOccurred>().SingleOrDefault());
+        // Re-compression replaced the 9k-char concatenation with the short summarizer output.
+        Assert.AreEqual("compressed", ctx.CompactionSummary,
+            "Oversized running summary should be re-compressed, not concatenated");
+    }
+
+    [TestMethod]
     public async Task WriteTurn_CreatesCheckpointThatUndoCanRestore()
     {
         var tmp = Path.Combine(Path.GetTempPath(), $"dotsy_loop_git_{Guid.NewGuid():N}");
