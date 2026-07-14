@@ -616,6 +616,7 @@ public sealed partial class AgentLoop
         TurnResponse response,
         [EnumeratorCancellation] CancellationToken ct)
     {
+        var streamSw = Stopwatch.StartNew();
         await foreach (var providerEvent in provider.StreamAsync(request, ct))
         {
             switch (providerEvent)
@@ -640,14 +641,17 @@ public sealed partial class AgentLoop
                     break;
 
                 case UsageUpdate usage:
+                    // Usage arrives once, at the tail of the stream, so the stopwatch reading here
+                    // approximates the full request duration.
+                    var streamMs = streamSw.ElapsedMilliseconds;
                     response.Budget = response.Budget.WithUsed(usage.InputTokens + usage.OutputTokens);
                     ctx.TokenBudget = response.Budget;
-                    trajectoryRecorder?.RecordUsage(usage);
+                    trajectoryRecorder?.RecordUsage(usage, streamMs);
                     response.InputTokens = usage.InputTokens;
                     response.OutputTokens = usage.OutputTokens;
                     response.CacheReadTokens = usage.CacheReadTokens;
                     response.CacheWriteTokens = usage.CacheWriteTokens;
-                    yield return new TokenUsageUpdated(usage);
+                    yield return new TokenUsageUpdated(usage, streamMs);
                     break;
 
                 case StreamEnd streamEnd:

@@ -282,6 +282,12 @@ public partial class AgentWindow
                                 Palette.Warn));
                             break;
 
+                        case TokenUsageUpdated tu:
+                            VerboseOutput(tu);
+                            if (tu.TokensPerSecond is { } tps)
+                                TuiSessionContext.App.Invoke(() => statusBar.SetTokRate(tps));
+                            break;
+
                         case TurnComplete tc2:
                             StopStreamCursor();
                             VerboseOutput(tc2);
@@ -451,6 +457,12 @@ public partial class AgentWindow
         if (!TuiSessionContext.Config.Tui.Verbose) return;
         VerboseOutput($"Verbose {nameof(CompactionOccurred)}: ", $"{tc.ToString()}");
     }
+    private void VerboseOutput(TokenUsageUpdated tc)
+    {
+        if (!TuiSessionContext.Config.Tui.Verbose) return;
+        VerboseOutput($"Verbose {nameof(TokenUsageUpdated)}: ", $"{tc.ToString()}");
+    }
+
     private void VerboseOutput(TurnComplete tc)
     {
         if (!TuiSessionContext.Config.Tui.Verbose) return;

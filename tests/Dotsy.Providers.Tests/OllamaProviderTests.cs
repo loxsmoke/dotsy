@@ -141,6 +141,38 @@ public sealed class OllamaProviderTests
     }
 
     [TestMethod]
+    public async Task ParseNdjson_EvalDuration_MapsToServerDurationMs()
+    {
+        // eval_duration is nanoseconds: 2s of generation for 40 tokens = 20 tok/s.
+        const string body = """
+            {"message":{"content":"hi"},"done":false}
+            {"done":true,"prompt_eval_count":10,"eval_count":40,"eval_duration":2000000000}
+
+            """;
+
+        var events = await Collect(Provider(body).StreamAsync(MinimalRequest(), CancellationToken.None));
+
+        var usage = events.OfType<UsageUpdate>().Single();
+        Assert.AreEqual(40, usage.OutputTokens);
+        Assert.AreEqual(2000L, usage.ServerDurationMs);
+    }
+
+    [TestMethod]
+    public async Task ParseNdjson_MissingEvalDuration_LeavesServerDurationNull()
+    {
+        const string body = """
+            {"message":{"content":"hi"},"done":false}
+            {"done":true,"prompt_eval_count":10,"eval_count":4}
+
+            """;
+
+        var events = await Collect(Provider(body).StreamAsync(MinimalRequest(), CancellationToken.None));
+
+        var usage = events.OfType<UsageUpdate>().Single();
+        Assert.IsNull(usage.ServerDurationMs);
+    }
+
+    [TestMethod]
     public async Task ParseNdjson_RawToolCallInContent_EmitsToolCallAndSuppressesMarkupText()
     {
         const string body = """

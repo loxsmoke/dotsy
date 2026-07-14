@@ -23,7 +23,9 @@ public class OpenAiProvider : IProvider
         bool normalizeOpenAiBaseUrl = true)
     {
         ApiKey = apiKey;
-        Http = http ?? new HttpClient();
+        // Infinite timeout: local/slow servers (koboldcpp, llama.cpp) can take minutes per turn;
+        // the default 100s aborts mid-generation. Cancellation is handled via the request token.
+        Http = http ?? new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
         Http.BaseAddress = NormalizeBaseAddress(baseUrl, normalizeOpenAiBaseUrl);
         Http.DefaultRequestHeaders.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", ApiKey);
@@ -267,9 +269,26 @@ public class OpenAiProvider : IProvider
         var tcNames = new Dictionary<int, string>();
         var tcArgs = new Dictionary<int, StringBuilder>();
 
+        // Some models inline reasoning as <think>…</think> in content instead of a
+        // dedicated delta field; split it out so it renders as thinking.
+        var thinkParser = new ThinkTagParser();
+
+        // Usage placement varies by server: a dedicated final chunk without "choices", the
+        // OpenAI-spec include_usage chunk with an empty choices array, or riding on the last
+        // content chunk. Some servers also send cumulative usage on every chunk. So capture the
+        // last value seen anywhere and emit a single UsageUpdate when the stream ends.
+        int usageInput = 0, usageOutput = 0;
+        bool sawUsage = false;
+        long? serverDurationMs = null;
+
         while (!ct.IsCancellationRequested)
         {
-            var line = await reader.ReadLineAsync(ct);
+            var (line, readError) = await ProviderHttp.ReadSseLineAsync(reader, ct);
+            if (readError is not null)
+            {
+                yield return readError;
+                yield break;
+            }
             if (line is null)
                 break;
             if (!line.StartsWith("data: "))
@@ -283,17 +302,26 @@ public class OpenAiProvider : IProvider
             try { chunk = JsonDocument.Parse(data).RootElement; }
             catch { continue; }
 
-            if (!chunk.TryGetProperty("choices", out var choices))
+            if (chunk.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
             {
-                // Final chunk with usage
-                if (chunk.TryGetProperty("usage", out var usage))
-                {
-                    int input = usage.TryGetProperty("prompt_tokens", out var pt) ? pt.GetInt32() : 0;
-                    int output = usage.TryGetProperty("completion_tokens", out var ct2) ? ct2.GetInt32() : 0;
-                    yield return new UsageUpdate(input, output, 0, 0);
-                }
-                continue;
+                if (usage.TryGetProperty("prompt_tokens", out var pt) && pt.TryGetInt32(out var ptv))
+                { usageInput = ptv; sawUsage = true; }
+                if (usage.TryGetProperty("completion_tokens", out var ct2) && ct2.TryGetInt32(out var ctv))
+                { usageOutput = ctv; sawUsage = true; }
             }
+
+            // Non-standard llama.cpp-family extension: "timings.predicted_ms" is generation time
+            // measured by the server itself — the same signal as Ollama's eval_duration.
+            if (chunk.TryGetProperty("timings", out var timings)
+                && timings.ValueKind == JsonValueKind.Object
+                && timings.TryGetProperty("predicted_ms", out var pms)
+                && pms.TryGetDouble(out var predictedMs) && predictedMs > 0)
+            {
+                serverDurationMs = (long)predictedMs;
+            }
+
+            if (!chunk.TryGetProperty("choices", out var choices))
+                continue;
 
             if (choices.GetArrayLength() == 0)
                 continue;
@@ -305,12 +333,33 @@ public class OpenAiProvider : IProvider
             if (!choice.TryGetProperty("delta", out var delta))
                 continue;
 
+            // Reasoning delta fields: "reasoning" (OpenRouter) / "reasoning_content"
+            // (DeepSeek, vLLM, LM Studio, and other compatible servers).
+            foreach (var reasoningField in (string[])["reasoning", "reasoning_content"])
+            {
+                if (delta.TryGetProperty(reasoningField, out var reasoningProp)
+                    && reasoningProp.ValueKind == JsonValueKind.String)
+                {
+                    var reasoning = reasoningProp.GetString() ?? "";
+                    if (reasoning.Length > 0)
+                        yield return new ThinkingDelta(reasoning);
+                }
+            }
+
             // Text content
             if (delta.TryGetProperty("content", out var contentProp) && contentProp.ValueKind == JsonValueKind.String)
             {
                 var text = contentProp.GetString() ?? "";
                 if (text.Length > 0)
-                    yield return new TextDelta(text);
+                {
+                    foreach (var seg in thinkParser.Process(text))
+                    {
+                        if (seg.IsThinking)
+                            yield return new ThinkingDelta(seg.Text);
+                        else
+                            yield return new TextDelta(seg.Text);
+                    }
+                }
             }
 
             // Tool calls deltas
@@ -341,6 +390,14 @@ public class OpenAiProvider : IProvider
             // On finish, emit accumulated tool calls
             if (finishReason is not null)
             {
+                foreach (var seg in thinkParser.Complete())
+                {
+                    if (seg.IsThinking)
+                        yield return new ThinkingDelta(seg.Text);
+                    else
+                        yield return new TextDelta(seg.Text);
+                }
+
                 foreach (var kv in tcArgs)
                 {
                     var id = tcIds.GetValueOrDefault(kv.Key, "");
@@ -349,6 +406,9 @@ public class OpenAiProvider : IProvider
                 }
                 tcIds.Clear(); tcNames.Clear(); tcArgs.Clear();
 
+                // "length" means the max_tokens output cap was reached, NOT a context overflow —
+                // a genuine overflow arrives as an HTTP 400 handled in HandleErrorResponse. Map it
+                // to StopReason.MaxTokens so the loop's truncated-output handling deals with it.
                 var reason = finishReason switch
                 {
                     "stop" => StopReason.EndTurn,
@@ -357,12 +417,12 @@ public class OpenAiProvider : IProvider
                     _ => StopReason.EndTurn
                 };
 
-                if (finishReason == "length")
-                    yield return new StreamError(new ProviderException(new ContextLengthError()));
-
                 yield return new StreamEnd(reason);
             }
         }
+
+        if (sawUsage)
+            yield return new UsageUpdate(usageInput, usageOutput, 0, 0, serverDurationMs);
     }
 
     private static (string Type, string Message, string RequestId) ParseErrorBody(

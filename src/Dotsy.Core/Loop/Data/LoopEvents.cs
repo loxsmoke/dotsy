@@ -17,15 +17,33 @@ public record ToolFinished(int Index, string Name, ToolResult Result) : LoopEven
 
 public record TurnComplete(int TotalTokens, bool AnyWriteTools = false) : LoopEvent;
 
+/// <param name="DurationMs">Client-observed duration of the whole LLM stream (network and
+/// time-to-first-token included), measured by the agent loop.</param>
+/// <param name="ServerDurationMs">Server-measured generation time when the provider reports
+/// one (Ollama's eval_duration); null otherwise.</param>
 public record TokenUsageUpdated(
     int InputTokens,
     int OutputTokens,
     int CacheReadTokens,
-    int CacheWriteTokens) : LoopEvent
+    int CacheWriteTokens,
+    long DurationMs = 0,
+    long? ServerDurationMs = null) : LoopEvent
 {
-    public TokenUsageUpdated(UsageUpdate usage)
-        : this(usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens)
+    public TokenUsageUpdated(UsageUpdate usage, long durationMs = 0)
+        : this(usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens,
+               durationMs, usage.ServerDurationMs)
     {}
+
+    /// <summary>Observed throughput over the whole stream; understates pure generation speed.</summary>
+    public double? ObservedTokensPerSecond =>
+        DurationMs > 0 ? OutputTokens * 1000.0 / DurationMs : null;
+
+    /// <summary>Pure generation speed as measured by the inference server; null when unreported.</summary>
+    public double? ServerTokensPerSecond =>
+        ServerDurationMs > 0 ? OutputTokens * 1000.0 / ServerDurationMs : null;
+
+    /// <summary>Best available speed figure: server-measured when present, else client-observed.</summary>
+    public double? TokensPerSecond => ServerTokensPerSecond ?? ObservedTokensPerSecond;
 }
 
 public record CompactionOccurred(int TokensBefore, int TokensAfter, string Summary) : LoopEvent;

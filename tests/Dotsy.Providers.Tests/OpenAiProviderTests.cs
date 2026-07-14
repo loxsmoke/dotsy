@@ -156,6 +156,138 @@ public sealed class OpenAiProviderTests
         Assert.AreEqual(8,  usage.OutputTokens);
     }
 
+    [TestMethod]
+    public async Task ParseSse_UsageChunkWithEmptyChoicesArray_EmitsUsageUpdate()
+    {
+        // OpenAI's stream_options.include_usage shape: the usage chunk carries "choices":[].
+        const string sse = """
+            data: {"choices":[{"delta":{"content":"hi"},"index":0}]}
+
+            data: {"choices":[{"delta":{},"index":0,"finish_reason":"stop"}]}
+
+            data: {"choices":[],"usage":{"prompt_tokens":20,"completion_tokens":8}}
+
+            data: [DONE]
+
+            """;
+
+        var events = await Collect(Provider(sse).StreamAsync(MinimalRequest(), CancellationToken.None));
+
+        var usage = events.OfType<UsageUpdate>().Single();
+        Assert.AreEqual(20, usage.InputTokens);
+        Assert.AreEqual(8,  usage.OutputTokens);
+        Assert.IsNull(usage.ServerDurationMs);
+    }
+
+    [TestMethod]
+    public async Task ParseSse_CumulativeUsageOnContentChunks_EmitsSingleUpdateWithLastValue()
+    {
+        // Some compatible servers attach cumulative usage to every chunk; only one
+        // UsageUpdate (the final figure) must be emitted or downstream totals double-count.
+        const string sse = """
+            data: {"choices":[{"delta":{"content":"a"},"index":0}],"usage":{"prompt_tokens":20,"completion_tokens":1}}
+
+            data: {"choices":[{"delta":{"content":"b"},"index":0}],"usage":{"prompt_tokens":20,"completion_tokens":2}}
+
+            data: {"choices":[{"delta":{},"index":0,"finish_reason":"stop"}],"usage":{"prompt_tokens":20,"completion_tokens":3}}
+
+            data: [DONE]
+
+            """;
+
+        var events = await Collect(Provider(sse).StreamAsync(MinimalRequest(), CancellationToken.None));
+
+        var usage = events.OfType<UsageUpdate>().Single();
+        Assert.AreEqual(20, usage.InputTokens);
+        Assert.AreEqual(3,  usage.OutputTokens);
+    }
+
+    [TestMethod]
+    public async Task ParseSse_LlamaCppTimings_MapsPredictedMsToServerDuration()
+    {
+        // llama.cpp-family servers attach a non-standard "timings" object; predicted_ms is
+        // server-measured generation time (2.5s for 8 tokens here).
+        const string sse = """
+            data: {"choices":[{"delta":{},"index":0,"finish_reason":"stop"}]}
+
+            data: {"choices":[],"usage":{"prompt_tokens":20,"completion_tokens":8},"timings":{"prompt_ms":120.5,"predicted_ms":2500.7}}
+
+            data: [DONE]
+
+            """;
+
+        var events = await Collect(Provider(sse).StreamAsync(MinimalRequest(), CancellationToken.None));
+
+        var usage = events.OfType<UsageUpdate>().Single();
+        Assert.AreEqual(2500L, usage.ServerDurationMs);
+    }
+
+    // ── Reasoning / thinking ──────────────────────────────────────────────────
+
+    [TestMethod]
+    public async Task ParseSse_ReasoningDelta_EmitsThinkingDelta()
+    {
+        // OpenRouter puts reasoning in delta.reasoning.
+        const string sse = """
+            data: {"choices":[{"delta":{"reasoning":"Let me think."},"index":0}]}
+
+            data: {"choices":[{"delta":{"content":"hello"},"index":0}]}
+
+            data: {"choices":[{"delta":{},"index":0,"finish_reason":"stop"}]}
+
+            data: [DONE]
+
+            """;
+
+        var events = await Collect(Provider(sse).StreamAsync(MinimalRequest(), CancellationToken.None));
+
+        Assert.AreEqual("Let me think.", events.OfType<ThinkingDelta>().Single().Text);
+        Assert.AreEqual("hello", string.Concat(events.OfType<TextDelta>().Select(t => t.Text)));
+    }
+
+    [TestMethod]
+    public async Task ParseSse_ReasoningContentDelta_EmitsThinkingDelta()
+    {
+        // DeepSeek / vLLM / LM Studio use delta.reasoning_content.
+        const string sse = """
+            data: {"choices":[{"delta":{"reasoning_content":"Step 1."},"index":0}]}
+
+            data: {"choices":[{"delta":{"content":"done"},"index":0}]}
+
+            data: {"choices":[{"delta":{},"index":0,"finish_reason":"stop"}]}
+
+            data: [DONE]
+
+            """;
+
+        var events = await Collect(Provider(sse).StreamAsync(MinimalRequest(), CancellationToken.None));
+
+        Assert.AreEqual("Step 1.", events.OfType<ThinkingDelta>().Single().Text);
+        Assert.AreEqual("done", string.Concat(events.OfType<TextDelta>().Select(t => t.Text)));
+    }
+
+    [TestMethod]
+    public async Task ParseSse_InlineThinkTagsSplitAcrossChunks_SeparatedFromText()
+    {
+        // Models served raw inline reasoning as <think>…</think> in content; the tag here
+        // straddles a chunk boundary.
+        const string sse = """
+            data: {"choices":[{"delta":{"content":"<thi"},"index":0}]}
+
+            data: {"choices":[{"delta":{"content":"nk>hidden</think>visible"},"index":0}]}
+
+            data: {"choices":[{"delta":{},"index":0,"finish_reason":"stop"}]}
+
+            data: [DONE]
+
+            """;
+
+        var events = await Collect(Provider(sse).StreamAsync(MinimalRequest(), CancellationToken.None));
+
+        Assert.AreEqual("hidden", string.Concat(events.OfType<ThinkingDelta>().Select(t => t.Text)));
+        Assert.AreEqual("visible", string.Concat(events.OfType<TextDelta>().Select(t => t.Text)));
+    }
+
     // ── Error reporting ───────────────────────────────────────────────────────
 
     [TestMethod]

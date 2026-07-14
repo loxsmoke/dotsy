@@ -29,7 +29,9 @@ public sealed class AnthropicProvider : IProvider
     public AnthropicProvider(string apiKey, HttpClient? http = null)
     {
         _apiKey = apiKey;
-        _http = http ?? new HttpClient();
+        // Infinite timeout: long generations exceed the 100s HttpClient default; cancellation
+        // is handled via the request token.
+        _http = http ?? new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
         _http.BaseAddress = new Uri(BaseUrl);
         _http.DefaultRequestHeaders.Add("x-api-key", _apiKey);
         _http.DefaultRequestHeaders.Add("anthropic-version", ApiVersion);
@@ -188,7 +190,12 @@ public sealed class AnthropicProvider : IProvider
 
         while (!ct.IsCancellationRequested)
         {
-            var line = await reader.ReadLineAsync(ct);
+            var (line, readError) = await ProviderHttp.ReadSseLineAsync(reader, ct);
+            if (readError is not null)
+            {
+                yield return readError;
+                yield break;
+            }
             if (line is null)
                 break;
             if (!line.StartsWith("data: "))

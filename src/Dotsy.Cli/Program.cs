@@ -516,7 +516,8 @@ static async Task<int> RunHeadless(
                         tu.InputTokens,
                         tu.OutputTokens,
                         tu.CacheReadTokens,
-                        tu.CacheWriteTokens));
+                        tu.CacheWriteTokens,
+                        tu.ServerDurationMs), tu.DurationMs);
                     break;
                 case LoopEnded le:
                     finalEnd = le;
@@ -540,7 +541,10 @@ static async Task<int> RunHeadless(
                 sessionId = loopCtx.SessionId,
                 inputTokens = tokenUsageTracker.TotalInputTokens,
                 outputTokens = tokenUsageTracker.TotalOutputTokens,
-                durationMs = sw.ElapsedMilliseconds
+                durationMs = sw.ElapsedMilliseconds,
+                tokensPerSecond = tokenUsageTracker.OutputTokensPerSecond is { } tps
+                    ? Math.Round(tps, 1)
+                    : (double?)null
             };
             Console.WriteLine(JsonSerializer.Serialize(output, new JsonSerializerOptions { WriteIndented = true }));
         }

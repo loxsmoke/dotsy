@@ -10,6 +10,7 @@ internal sealed class StatusBar : Label
     private string sessionId    = "";
     private string modelId      = "dotsy";
     private float  ctxPct       = 0f;
+    private double tokRate      = 0;
     private int    runningPhase;
 
     public StatusBar()
@@ -25,13 +26,15 @@ internal sealed class StatusBar : Label
     public void SetSession(string sid)    { sessionId    = sid; UpdateText(); }
     public void SetModel(string mid)      { modelId      = mid ?? "dotsy"; UpdateText(); }
     public void SetCtxPct(float pct)      { ctxPct       = pct; UpdateText(); }
+    public void SetTokRate(double rate)   { tokRate      = rate; UpdateText(); }
     public void ApplyTheme()              { UpdateText(); } // re-read Palette schemes after a live re-theme
     public string State => currentState;
 
     private void UpdateText()
     {
         var sid = sessionId.Length > 0 ? $"{sessionId}  -  " : "";
-        Text        = $"  dotsy  -  {sid}{modelId}  -  [{ctxPct:P0} ctx] {spinnerFrame} {currentState}";
+        var rate = tokRate > 0 ? $" [{tokRate:0.#} tok/s]" : "";
+        Text        = $"  dotsy  -  {sid}{modelId}  -  [{ctxPct:P0} ctx]{rate} {spinnerFrame} {currentState}";
         Text = Text.ToString()?.Replace(currentState, FormatState()) ?? "";
         SetScheme(ctxPct > 0.80f ? Palette.ErrStatusScheme()
                     : ctxPct > 0.50f ? Palette.WarnStatusScheme()

@@ -1087,6 +1087,203 @@ public sealed class ToolsTests
     }
 
     [TestMethod]
+    public async Task MultiEditTool_LineRangesUseOriginalFileCoordinates()
+    {
+        // Both ranges are in the coordinates of the file as read. Applying top-down would let
+        // the first edit (-2 lines) shift the second onto the wrong lines silently.
+        var path = Path.Combine(_tmpDir, "f.txt");
+        await File.WriteAllTextAsync(path, string.Join('\n', Enumerable.Range(1, 10).Select(i => $"l{i}")));
+
+        var inputJson = JsonSerializer.Serialize(new
+        {
+            path = "f.txt",
+            edits = new object[]
+            {
+                new { start_line = 2, end_line = 4, new_string = "X" },
+                new { start_line = 8, end_line = 10, new_string = "Y" }
+            }
+        });
+
+        var result = await new MultiEditTool().ExecuteAsync(Args(inputJson), Ctx(), CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        Assert.AreEqual("l1\nX\nl5\nl6\nl7\nY", await File.ReadAllTextAsync(path));
+    }
+
+    [TestMethod]
+    public async Task MultiEditTool_LaterRangeBeyondShrunkenBuffer_StillApplies()
+    {
+        // Regression: a large earlier deletion shrank the working buffer below a later edit's
+        // start_line, producing "out of bounds (file has N lines)" while the file on disk still
+        // had those lines — an error the model cannot reconcile with a re-read (tool-call loop).
+        var path = Path.Combine(_tmpDir, "f.txt");
+        await File.WriteAllTextAsync(path, string.Join('\n', Enumerable.Range(1, 12).Select(i => $"l{i}")));
+
+        var inputJson = JsonSerializer.Serialize(new
+        {
+            path = "f.txt",
+            edits = new object[]
+            {
+                new { start_line = 1, end_line = 6, new_string = "A" },
+                new { start_line = 9, end_line = 9, new_string = "B" }
+            }
+        });
+
+        var result = await new MultiEditTool().ExecuteAsync(Args(inputJson), Ctx(), CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        Assert.AreEqual("A\nl7\nl8\nB\nl10\nl11\nl12", await File.ReadAllTextAsync(path));
+    }
+
+    [TestMethod]
+    public async Task MultiEditTool_OverlappingLineRanges_ErrorAndFileUntouched()
+    {
+        var path = Path.Combine(_tmpDir, "f.txt");
+        var original = string.Join('\n', Enumerable.Range(1, 8).Select(i => $"l{i}"));
+        await File.WriteAllTextAsync(path, original);
+
+        var inputJson = JsonSerializer.Serialize(new
+        {
+            path = "f.txt",
+            edits = new object[]
+            {
+                new { start_line = 3, end_line = 5, new_string = "X" },
+                new { start_line = 4, end_line = 6, new_string = "Y" }
+            }
+        });
+
+        var result = await new MultiEditTool().ExecuteAsync(Args(inputJson), Ctx(), CancellationToken.None);
+
+        Assert.IsTrue(result.IsError);
+        StringAssert.Contains(result.Content, "overlaps");
+        Assert.AreEqual(original, await File.ReadAllTextAsync(path), "file untouched on error");
+    }
+
+    [TestMethod]
+    public async Task MultiEditTool_MixedLineRangeAndOldStringEdits_BothApply()
+    {
+        // Line-range edits apply bottom-up first; old_string edits then run against the result.
+        var path = Path.Combine(_tmpDir, "f.txt");
+        await File.WriteAllTextAsync(path, string.Join('\n', new[] { "alpha", "beta", "gamma", "delta", "epsilon", "zeta" }));
+
+        var inputJson = JsonSerializer.Serialize(new
+        {
+            path = "f.txt",
+            edits = new object[]
+            {
+                new { start_line = 2, end_line = 3, new_string = "BG" },
+                new { old_string = "zeta", new_string = "ZETA" }
+            }
+        });
+
+        var result = await new MultiEditTool().ExecuteAsync(Args(inputJson), Ctx(), CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        Assert.AreEqual("alpha\nBG\ndelta\nepsilon\nZETA", await File.ReadAllTextAsync(path));
+    }
+
+    [TestMethod]
+    public async Task MultiEditTool_OutOfOrderLineRanges_ApplyToOriginalCoordinates()
+    {
+        // Edits are supplied later-range-first; result must match original-file coordinates
+        // regardless of the order the model listed them in.
+        var path = Path.Combine(_tmpDir, "f.txt");
+        await File.WriteAllTextAsync(path, string.Join('\n', Enumerable.Range(1, 10).Select(i => $"l{i}")));
+
+        var inputJson = JsonSerializer.Serialize(new
+        {
+            path = "f.txt",
+            edits = new object[]
+            {
+                new { start_line = 8, end_line = 10, new_string = "Y" },
+                new { start_line = 2, end_line = 4,  new_string = "X" }
+            }
+        });
+
+        var result = await new MultiEditTool().ExecuteAsync(Args(inputJson), Ctx(), CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        Assert.AreEqual("l1\nX\nl5\nl6\nl7\nY", await File.ReadAllTextAsync(path));
+    }
+
+    [TestMethod]
+    public async Task MultiEditTool_AdjacentLineRanges_Allowed()
+    {
+        // Touching-but-not-overlapping ranges (prev ends at 3, next starts at 4) must be accepted;
+        // guards against an off-by-one in the overlap check.
+        var path = Path.Combine(_tmpDir, "f.txt");
+        await File.WriteAllTextAsync(path, string.Join('\n', Enumerable.Range(1, 6).Select(i => $"l{i}")));
+
+        var inputJson = JsonSerializer.Serialize(new
+        {
+            path = "f.txt",
+            edits = new object[]
+            {
+                new { start_line = 2, end_line = 3, new_string = "A" },
+                new { start_line = 4, end_line = 5, new_string = "B" }
+            }
+        });
+
+        var result = await new MultiEditTool().ExecuteAsync(Args(inputJson), Ctx(), CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        Assert.AreEqual("l1\nA\nB\nl6", await File.ReadAllTextAsync(path));
+    }
+
+    [TestMethod]
+    public async Task MultiEditTool_OldStringNotFound_ErrorAndFileUntouched()
+    {
+        var path = Path.Combine(_tmpDir, "f.txt");
+        await File.WriteAllTextAsync(path, "hello world");
+
+        var inputJson = JsonSerializer.Serialize(new
+        {
+            path = "f.txt",
+            edits = new object[] { new { old_string = "absent", new_string = "x" } }
+        });
+
+        var result = await new MultiEditTool().ExecuteAsync(Args(inputJson), Ctx(), CancellationToken.None);
+
+        Assert.IsTrue(result.IsError);
+        StringAssert.Contains(result.Content, "Edit 1");
+        Assert.AreEqual("hello world", await File.ReadAllTextAsync(path), "file untouched on error");
+    }
+
+    [TestMethod]
+    public async Task MultiEditTool_LineRangeMissingEndLine_ErrorAndFileUntouched()
+    {
+        var path = Path.Combine(_tmpDir, "f.txt");
+        await File.WriteAllTextAsync(path, "a\nb\nc");
+
+        var inputJson = JsonSerializer.Serialize(new
+        {
+            path = "f.txt",
+            edits = new object[] { new { start_line = 2, new_string = "X" } }
+        });
+
+        var result = await new MultiEditTool().ExecuteAsync(Args(inputJson), Ctx(), CancellationToken.None);
+
+        Assert.IsTrue(result.IsError);
+        StringAssert.Contains(result.Content, "start_line and end_line must both be provided");
+        Assert.AreEqual("a\nb\nc", await File.ReadAllTextAsync(path), "file untouched on error");
+    }
+
+    [TestMethod]
+    public async Task MultiEditTool_FileNotFound_Error()
+    {
+        var inputJson = JsonSerializer.Serialize(new
+        {
+            path = "does-not-exist.txt",
+            edits = new object[] { new { start_line = 1, end_line = 1, new_string = "X" } }
+        });
+
+        var result = await new MultiEditTool().ExecuteAsync(Args(inputJson), Ctx(), CancellationToken.None);
+
+        Assert.IsTrue(result.IsError);
+        StringAssert.Contains(result.Content, "File not found");
+    }
+
+    [TestMethod]
     public void ToolFormatRunApproval_FormatsWriteAndDefaultsToRawJson()
     {
         var path = Path.Combine(_tmpDir, "existing.txt");
