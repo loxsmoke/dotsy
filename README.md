@@ -1,7 +1,7 @@
 # Dotsy
 
 [![CI](https://github.com/loxsmoke/dotsy/actions/workflows/ci.yml/badge.svg)](https://github.com/loxsmoke/dotsy/actions/workflows/ci.yml)
-[![Coverage](https://img.shields.io/badge/coverage-62.63%25-yellowgreen)](https://github.com/loxsmoke/dotsy/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/badge/coverage-62.22%25-yellowgreen)](https://github.com/loxsmoke/dotsy/actions/workflows/ci.yml)
 
 ```text
          _       _
@@ -16,9 +16,10 @@ Dotsy is an AI coding assistant written in C# and .NET. It provides a terminal-f
 
 [![Dotsy terminal UI](docs/screenshot.png)](docs/screenshot.png)
 
-## Specification
+## Documentation
 
 - [Agent specification](docs/00-spec-main.md)
+- [TUI theme and colour reference](themes/README.md) — generated `themes.html` documents every colour the TUI paints, per theme
 
 ## Build
 

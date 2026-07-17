@@ -331,7 +331,7 @@ public sealed partial class AgentLoop
                 GitCheckpoint(cwd, ctx, textBuilder, turn, execResult?.AffectedPaths);
             }
 
-            yield return new TurnComplete(budget.UsedTokens, anyWriteTools);
+            yield return new TurnComplete(budget.UsedTokens, anyWriteTools, execResult?.AffectedPaths);
             turn++;
             ctx.TurnCount = turn;
 
@@ -484,7 +484,7 @@ public sealed partial class AgentLoop
             var (id, name, _) = response.ToolCalls[i];
             var toolResult = result.Results[i].Result;
             var index = response.PendingToolIndex.TryGetValue(id, out var toolIndex) ? toolIndex : i;
-            events.Add(new ToolFinished(index, name, toolResult));
+            events.Add(new ToolFinished(index, name, toolResult, result.Results[i].DurationMs));
             resultBlocks.Add(new ToolResultBlock(id, toolResult.Content, toolResult.IsError));
         }
         ctx.Messages.Add(new UserMessage(resultBlocks));

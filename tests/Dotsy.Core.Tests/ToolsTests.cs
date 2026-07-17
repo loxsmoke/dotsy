@@ -151,6 +151,28 @@ public sealed class ToolsTests
     }
 
     [TestMethod]
+    public async Task ReadTool_RangeErrorSpeaksCallersDialect()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_tmpDir, "notes.txt"), "one\ntwo\nthree");
+
+        // 1-based start_line past EOF must be reported as start_line, not as a 0-based offset
+        // (the off-by-one invites a wrong "correction" from the model).
+        var byStartLine = await new ReadTool().ExecuteAsync(
+            Args("""{"path":"notes.txt","start_line":10,"end_line":20}"""),
+            Ctx(),
+            CancellationToken.None);
+        Assert.IsTrue(byStartLine.IsError);
+        StringAssert.Contains(byStartLine.Content, "start_line 10 exceeds file length");
+
+        var byOffset = await new ReadTool().ExecuteAsync(
+            Args("""{"path":"notes.txt","offset":9,"limit":10}"""),
+            Ctx(),
+            CancellationToken.None);
+        Assert.IsTrue(byOffset.IsError);
+        StringAssert.Contains(byOffset.Content, "Offset 9 exceeds file length");
+    }
+
+    [TestMethod]
     public async Task ReadTool_OffsetLimitTakePrecedenceOverStartEndLine()
     {
         await File.WriteAllTextAsync(Path.Combine(_tmpDir, "notes.txt"), "one\ntwo\nthree\nfour\nfive");
@@ -1108,6 +1130,32 @@ public sealed class ToolsTests
 
         Assert.IsFalse(result.IsError, result.Content);
         Assert.AreEqual("l1\nX\nl5\nl6\nl7\nY", await File.ReadAllTextAsync(path));
+    }
+
+    [TestMethod]
+    public async Task MultiEditTool_EchoesRegionsInFinalCoordinates()
+    {
+        var path = Path.Combine(_tmpDir, "f.txt");
+        await File.WriteAllTextAsync(path, string.Join('\n', Enumerable.Range(1, 10).Select(i => $"l{i}")));
+
+        // Edit 1 shrinks the file by one line, so edit 2's echo must show its region shifted up.
+        var inputJson = JsonSerializer.Serialize(new
+        {
+            path = "f.txt",
+            edits = new object[]
+            {
+                new { start_line = 2, end_line = 3, new_string = "X" },
+                new { start_line = 8, end_line = 8, new_string = "Y1\nY2" }
+            }
+        });
+
+        var result = await new MultiEditTool().ExecuteAsync(Args(inputJson), Ctx(), CancellationToken.None);
+
+        Assert.IsFalse(result.IsError, result.Content);
+        StringAssert.Contains(result.Content, "Applied 2 edit(s)");
+        StringAssert.Contains(result.Content, " 2 X");
+        StringAssert.Contains(result.Content, " 7 Y1");
+        StringAssert.Contains(result.Content, " 8 Y2");
     }
 
     [TestMethod]

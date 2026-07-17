@@ -9,7 +9,7 @@ public sealed class MultiEditTool : ITool
 {
     public const string ToolName = "MultiEdit";
     public string Name => ToolName;
-    public string Description => "Apply multiple non-overlapping edits to a file in one call. Read the file first. Each edit replaces an exact 1-based inclusive start_line/end_line range. All line numbers refer to the file as you read it — edits never shift each other's ranges.";
+    public string Description => "Apply multiple non-overlapping edits to a file in one call. Read the file first. Each edit replaces an exact 1-based inclusive start_line/end_line range. All line numbers refer to the file as you read it — edits never shift each other's ranges. The result echoes the edited regions with current line numbers; check it before editing further.";
     public JsonElement InputSchema => ToolSchemas.MultiEditSchema;
     public ToolSafety Safety => ToolSafety.Sequential;
     public bool IsCompletionSignal => false;
@@ -85,6 +85,8 @@ public sealed class MultiEditTool : ITool
 
     public Task<ToolResult> ExecuteAsync(JsonElement input, ToolContext ctx, CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(input.GetStringPropertyOrEmpty("path")))
+            return Task.FromResult(ToolResult.Err("MultiEdit requires a 'path' argument"));
         var path = ReadTool.ResolvePath(input, ctx.Cwd);
 
         if (!File.Exists(path))
@@ -117,8 +119,14 @@ public sealed class MultiEditTool : ITool
             {
                 if (!hasStartLine || !hasEndLine)
                     return Task.FromResult(ToolResult.Err($"Edit {ordinal}: start_line and end_line must both be provided"));
-                lineEdits.Add((ordinal, startEl.GetInt32(), endEl.GetInt32(),
-                    edit.GetProperty("new_string").GetString() ?? ""));
+                // GetFlexInt tolerates numbers sent as strings, the same leniency Read has.
+                var start = ReadTool.GetFlexInt(edit, "start_line");
+                var end   = ReadTool.GetFlexInt(edit, "end_line");
+                if (start is null || end is null)
+                    return Task.FromResult(ToolResult.Err($"Edit {ordinal}: start_line and end_line must be numbers"));
+                if (!edit.TryGetProperty("new_string", out var newEl) || newEl.ValueKind != JsonValueKind.String)
+                    return Task.FromResult(ToolResult.Err($"Edit {ordinal}: missing 'new_string' (use an empty string to clear the range)"));
+                lineEdits.Add((ordinal, start.Value, end.Value, newEl.GetString() ?? ""));
             }
             else
             {
@@ -137,35 +145,55 @@ public sealed class MultiEditTool : ITool
                     $"({prev.Start}-{prev.End}); line ranges refer to the original file and must not overlap"));
         }
 
+        int originalLogical = EditTool.LogicalLineCount(text);
+
         int applied = 0;
         for (int i = byStart.Count - 1; i >= 0; i--)
         {
             var e = byStart[i];
-            var result = EditTool.ApplyLineRange(text, e.Start, e.End, e.NewString);
+            var result = EditTool.ApplyLineRange(text, e.Start, e.End, e.NewString, out _);
             if (result.IsError)
                 return Task.FromResult(ToolResult.Err($"Edit {e.Ordinal}: {result.Content}"));
             text = result.Content;
             applied++;
         }
 
+        // Each line edit's final position: its original start shifted by the net line delta of
+        // every edit above it (edits below never move it — application is bottom-up).
+        var regions = new List<(int Start, int End)>();
+        int shift = 0;
+        foreach (var e in byStart)
+        {
+            int replCount = e.NewString.TrimEnd('\n').Split('\n').Length;
+            int start = e.Start + shift;
+            regions.Add((start, start + replCount - 1));
+            shift += replCount - (Math.Min(e.End, originalLogical) - e.Start + 1);
+        }
+
         // old_string edits locate their target by content, not position — apply in given order.
         foreach (var (ord, edit) in textEdits)
         {
-            var newString = edit.GetProperty("new_string").GetString() ?? "";
+            if (!edit.TryGetProperty("new_string", out var newEl) || newEl.ValueKind != JsonValueKind.String)
+                return Task.FromResult(ToolResult.Err($"Edit {ord}: missing 'new_string'"));
+            var newString = newEl.GetString() ?? "";
             var oldString = edit.GetStringPropertyOrEmpty("old_string");
-            bool replaceAll = edit.TryGetProperty("replace_all", out var ra) && ra.GetBoolean();
+            bool replaceAll = edit.TryGetProperty("replace_all", out var ra) &&
+                (ra.ValueKind == JsonValueKind.True ||
+                 (ra.ValueKind == JsonValueKind.String && bool.TryParse(ra.GetString(), out var b) && b));
 
-            var result = EditTool.ApplyTextReplace(text, oldString, newString, replaceAll);
+            var result = EditTool.ApplyTextReplace(text, oldString, newString, replaceAll, out var region, out _);
             if (result.IsError)
                 return Task.FromResult(ToolResult.Err($"Edit {ord}: {result.Content}"));
             text = result.Content;
+            if (region is { } r) regions.Add(r);
             applied++;
         }
 
         try
         {
             File.WriteAllText(path, text);
-            return Task.FromResult(ToolResult.Ok($"Applied {applied} edit(s) to: {path}"));
+            return Task.FromResult(ToolResult.Ok(
+                EditTool.BuildEditResult($"Applied {applied} edit(s) to: {path}", text, regions)));
         }
         catch (Exception ex)
         {

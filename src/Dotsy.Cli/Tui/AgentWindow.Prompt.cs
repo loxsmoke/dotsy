@@ -35,13 +35,10 @@ public partial class AgentWindow
         AppendConvo($"User › {displayText}\n\n", Palette.Cmd);
 
         // Tool calls persist across prompts; tag this prompt's calls with a fresh group id so the
-        // panel can bracket them together. The changed-files panel still resets each prompt.
+        // panel can bracket them together. The changed-files panel also persists: it mirrors the
+        // working tree and agent-touched paths, which a new prompt doesn't reset.
         var toolGroup = ++toolCallGroupSeq;
         groupConvoLine[toolGroup] = userConvoLine;
-        fileRows.Clear();
-        fileFrame.Visible = false;
-        convo.Height = Dim.Fill();
-        leftFrame.SetNeedsDraw();
 
         loopCtx.Messages.Add(new UserMessage([new TextBlock(promptText)]));
         TuiSessionContext.Session?.Append(new SessionRecord
@@ -78,7 +75,6 @@ public partial class AgentWindow
 
         scenarioCts = new CancellationTokenSource();
         var ct = scenarioCts.Token;
-        var toolTimers = new Dictionary<int, long>();
         var toolArgs = new Dictionary<int, (string Name, string ArgsJson)>();
         var toolRowIndex = new Dictionary<int, int>(); // per-turn loop index -> absolute row index
         var currentTurn = loopCtx.TurnCount;
@@ -133,7 +129,6 @@ public partial class AgentWindow
                                 VerboseOutput(ts);
                                 if (assistantWritten)
                                     mdRenderer?.Flush();
-                                toolTimers[ts.Index] = Environment.TickCount64;
                                 toolArgs[ts.Index] = (ts.Name, ts.Arg);
                                 var displayArg = FormatPanelArgument(ts.Name, ts.Arg, cwd);
 
@@ -191,9 +186,9 @@ public partial class AgentWindow
                         case ToolFinished tf:
                             {
                                 VerboseOutput(tf);
-                                var elapsed = toolTimers.TryGetValue(tf.Index, out var start)
-                                    ? (int)((Environment.TickCount64 - start) / 1000)
-                                    : 0;
+                                // Use the loop-measured run time: wall clock from ToolStarted would
+                                // also count the approval-prompt wait and batch queueing.
+                                var elapsed = (int)(tf.DurationMs / 1000);
                                 var status = tf.Result.IsError ? "ERR"
                                     : tf.Result.Content == "[skipped: duplicate]" ? "SKIP"
                                     : "OK";
@@ -304,7 +299,12 @@ public partial class AgentWindow
                                 thinkingWritten = false;
                             }
                             UpdateStatusBarFromCtx();
-                            if (tc2.AnyWriteTools) RefreshChangedFiles();
+                            if (tc2.AnyWriteTools)
+                            {
+                                foreach (var p in tc2.AffectedPaths ?? [])
+                                    RecordAgentModifiedPath(p, cwd);
+                                RefreshChangedFiles();
+                            }
                             currentTurn++;
                             {
                                 var firstUserText = loopCtx.Messages

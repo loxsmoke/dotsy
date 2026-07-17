@@ -149,8 +149,10 @@ public abstract record LoopEvent;
 public record TextChunk(string Text)                         : LoopEvent;
 public record ThinkingChunk(string Text)                     : LoopEvent;
 public record ToolStarted(int Index, string Name, string Arg)          : LoopEvent;
-public record ToolFinished(int Index, string Name, ToolResult Result)  : LoopEvent;
-public record TurnComplete(int TotalTokens, bool AnyWriteTools = false) : LoopEvent;
+public record ToolFinished(int Index, string Name, ToolResult Result,
+    long DurationMs = 0)                                     : LoopEvent; // run time, excluding approval wait and batch queueing
+public record TurnComplete(int TotalTokens, bool AnyWriteTools = false,
+    IReadOnlyList<string>? AffectedPaths = null)             : LoopEvent; // paths touched by this turn's successful write tools
 public record TokenUsageUpdated(int InputTokens, int OutputTokens,
     int CacheReadTokens, int CacheWriteTokens)               : LoopEvent;
 public record CompactionOccurred(int TokensBefore, int TokensAfter, string Summary) : LoopEvent;

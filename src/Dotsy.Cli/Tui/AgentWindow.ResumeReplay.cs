@@ -178,7 +178,24 @@ public partial class AgentWindow
             FormatPanelResult(tool.Name, tool.ArgsJson, result.Content, tool.Cwd) is { } enriched)
             row = row with { Arg = enriched };
 
+        // Rebuild the agent-modified set from the transcript so the changed-files panel of a
+        // resumed session still lists files git can't see. RenderLoadedSession refreshes after.
+        if (!result.IsError && TryGetRestoredWritePath(tool) is { } writePath)
+            RecordAgentModifiedPath(writePath, tool.Cwd);
+
         toolCallRows[tool.RowIndex] = row;
+    }
+
+    private static string? TryGetRestoredWritePath(RestoredTool tool)
+    {
+        if (tool.Name is not (WriteTool.ToolName or EditTool.ToolName or MultiEditTool.ToolName))
+            return null;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(tool.ArgsJson);
+            return doc.RootElement.TryGetProperty("path", out var p) ? p.GetString() : null;
+        }
+        catch { return null; }
     }
 
     private static List<List<Cell>> BuildRestoredToolOutput(RestoredTool tool, ToolResultBlock result)

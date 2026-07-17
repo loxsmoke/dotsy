@@ -6,6 +6,7 @@ using Dotsy.Cli.Tui.Renderers;
 using Dotsy.Cli.Tui.ToolList;
 using Dotsy.Core.Config;
 using Dotsy.Core.Git;
+using Dotsy.Core.Git.Data;
 using Dotsy.Core.Loop.Data;
 using Dotsy.Core.Utils;
 using LibGit2Sharp;
@@ -75,6 +76,12 @@ public partial class AgentWindow : Window, IDisposable
 
     // ── File change rows ────────────────────────────────────────────────────────────────
     private readonly ObservableCollection<FileRow> fileRows = [];
+
+    // Full paths of files the agent's write tools touched this session (rebuilt from the
+    // transcript on resume). The changed-files panel unions these with git status so agent
+    // edits still show when git can't see them (no repo, ignored, outside the work tree).
+    // Written on the loop-consumer thread, snapshotted on refresh — guard with its own lock.
+    private readonly HashSet<string> agentModifiedPaths = new(StringComparer.OrdinalIgnoreCase);
 
     // ── Conversation (Cell-based for per-segment colour) ────────────────────────────────
     private readonly List<List<Cell>> conversationLines = [[]];
@@ -696,13 +703,25 @@ public partial class AgentWindow : Window, IDisposable
         rightFrame.SetNeedsDraw();
     }
 
+    private void RecordAgentModifiedPath(string path, string cwd)
+    {
+        try
+        {
+            var full = Path.GetFullPath(path, cwd);
+            lock (agentModifiedPaths) agentModifiedPaths.Add(full);
+        }
+        catch { }
+    }
+
     private void RefreshChangedFiles()
     {
         var cwd = TuiSessionContext.Cwd;
+        string[] agentPaths;
+        lock (agentModifiedPaths) agentPaths = [.. agentModifiedPaths];
         Task.Run(() =>
         {
             // Build the rows (git diff + cell rendering) off the UI thread; only the swap is marshalled.
-            var rows = BuildFileRows(cwd);
+            var rows = BuildFileRows(cwd, agentPaths);
             TuiSessionContext.App.Invoke(() =>
             {
                 fileRows.Clear();
@@ -715,23 +734,44 @@ public partial class AgentWindow : Window, IDisposable
     // Resolves each changed file's line counts and a colorized unified diff (for the inspect view).
     // The HEAD→working-tree patch is computed once; untracked files (absent from that patch) are
     // rendered from their on-disk content as all-additions.
-    private static List<FileRow> BuildFileRows(string cwd)
+    //
+    // agentPaths (full paths the agent's write tools touched) are unioned in: paths git status
+    // already reports keep their git-derived rows; paths git cannot see (no repo, ignored, or
+    // outside the work tree) get a row rendered from disk content. Paths git can see but reports
+    // clean (reverted or committed since the edit) are dropped.
+    private static List<FileRow> BuildFileRows(string cwd, IReadOnlyList<string> agentPaths)
     {
         var files = GitContext.GetChangedFiles(cwd);
         var rows = new List<FileRow>(files.Count);
 
         LibGit2Sharp.Patch? patch = null;
+        string? workDir = null;
+        var extraPaths = new List<string>();
         try
         {
             var repoPath = LibGit2Sharp.Repository.Discover(cwd);
             if (repoPath != null)
             {
                 using var repo = new LibGit2Sharp.Repository(repoPath);
+                workDir = repo.Info.WorkingDirectory;
                 if (repo.Head.Tip is { } tip)
                     patch = repo.Diff.Compare<LibGit2Sharp.Patch>(tip.Tree, LibGit2Sharp.DiffTargets.WorkingDirectory);
+
+                foreach (var full in agentPaths)
+                    if (!IsGitVisible(repo, workDir, full))
+                        extraPaths.Add(full);
+            }
+            else
+            {
+                extraPaths.AddRange(agentPaths);
             }
         }
-        catch { }
+        catch
+        {
+            // Repo unreadable — same as no repo: every agent-touched path is shown from disk.
+            extraPaths.Clear();
+            extraPaths.AddRange(agentPaths);
+        }
 
         foreach (var f in files)
         {
@@ -757,7 +797,51 @@ public partial class AgentWindow : Window, IDisposable
             rows.Add(new FileRow(f.Path, added, deleted, ct, diff));
         }
 
+        AppendAgentOnlyRows(rows, files, extraPaths, cwd, workDir);
         return rows;
+    }
+
+    // True when git status can report this path: inside the work tree and not ignored.
+    // For such paths an absence from status means "unchanged", so the panel drops them.
+    private static bool IsGitVisible(LibGit2Sharp.Repository repo, string workDir, string fullPath)
+    {
+        var rel = Path.GetRelativePath(workDir, fullPath);
+        if (rel.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(rel))
+            return false;
+        return !repo.Ignore.IsPathIgnored(rel.Replace('\\', '/'));
+    }
+
+    // Rows for agent-touched files git status cannot report. No git baseline exists for these,
+    // so an existing file is previewed as its full on-disk content (all-additions).
+    private static void AppendAgentOnlyRows(
+        List<FileRow> rows,
+        IReadOnlyList<GitChangedFile> files,
+        List<string> extraPaths,
+        string cwd,
+        string? workDir)
+    {
+        var covered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var f in files)
+            covered.Add(Path.GetFullPath(f.Path, workDir ?? cwd));
+
+        foreach (var full in extraPaths)
+        {
+            if (!covered.Add(full)) continue;
+
+            var display = Path.GetRelativePath(cwd, full);
+            if (display.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(display))
+                display = full;
+
+            if (File.Exists(full))
+            {
+                var diff = RenderNewFileAsAdditions(cwd, full, out var added);
+                rows.Add(new FileRow(display, added, 0, FileChangeType.Modified, diff));
+            }
+            else
+            {
+                rows.Add(new FileRow(display, 0, 0, FileChangeType.Deleted, []));
+            }
+        }
     }
 
     // Colorizes a unified-diff patch into renderable cell rows: +/- lines in success/error colors,

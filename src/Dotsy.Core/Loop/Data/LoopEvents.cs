@@ -13,9 +13,17 @@ public record ThinkingChunk(string Text) : LoopEvent;
 
 public record ToolStarted(int Index, string Name, string Arg) : LoopEvent;
 
-public record ToolFinished(int Index, string Name, ToolResult Result) : LoopEvent;
+/// <param name="DurationMs">The tool's actual run time, excluding any approval-prompt wait and
+/// any time spent queued behind other tools in the same batch.</param>
+public record ToolFinished(int Index, string Name, ToolResult Result, long DurationMs = 0) : LoopEvent;
 
-public record TurnComplete(int TotalTokens, bool AnyWriteTools = false) : LoopEvent;
+/// <param name="AffectedPaths">Path arguments of this turn's successful write-tool calls
+/// (write/edit/multi-edit), as given by the model — relative to the loop cwd or absolute.
+/// Lets consumers track agent-modified files even when git can't see them.</param>
+public record TurnComplete(
+    int TotalTokens,
+    bool AnyWriteTools = false,
+    IReadOnlyList<string>? AffectedPaths = null) : LoopEvent;
 
 /// <param name="DurationMs">Client-observed duration of the whole LLM stream (network and
 /// time-to-first-token included), measured by the agent loop.</param>

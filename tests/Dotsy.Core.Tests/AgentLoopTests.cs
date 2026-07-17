@@ -948,6 +948,36 @@ public sealed class AgentLoopTests
     }
 
     [TestMethod]
+    public async Task TurnComplete_CarriesWriteToolAffectedPaths()
+    {
+        // No git repo on purpose: the paths must come from the tool calls themselves so the
+        // changed-files panel can list agent edits even where git status is unavailable.
+        var tmp = Path.Combine(Path.GetTempPath(), $"dotsy_affected_paths_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            var config = MakeConfig(maxTurns: 2, nudgeLimit: 10);
+            var provider = new FakeProvider(
+                [new ToolCallDelta("write-1", "Write", """{"path":"agent.txt","content":"new\n"}"""), new StreamEnd(StopReason.ToolUse)],
+                [new ToolCallDelta("done-1", "Done", """{"summary":"done"}"""), new StreamEnd(StopReason.ToolUse)]);
+            var registry = new ToolRegistry();
+            registry.Register(new WriteTool());
+            registry.Register(new DoneTool());
+            var loop = new AgentLoop(provider, registry, YoloStore(), config);
+
+            var events = await Collect(loop.RunAsync(EmptyCtx(), tmp, CancellationToken.None));
+
+            var writeTurn = events.OfType<TurnComplete>().First(t => t.AnyWriteTools);
+            Assert.IsNotNull(writeTurn.AffectedPaths);
+            CollectionAssert.Contains(writeTurn.AffectedPaths.ToList(), "agent.txt");
+        }
+        finally
+        {
+            DeleteDirectory(tmp);
+        }
+    }
+
+    [TestMethod]
     public async Task AutoCommit_UsesConfiguredGitIdentity()
     {
         var tmp = Path.Combine(Path.GetTempPath(), $"dotsy_auto_commit_{Guid.NewGuid():N}");

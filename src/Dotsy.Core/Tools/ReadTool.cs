@@ -36,6 +36,8 @@ public sealed class ReadTool : ITool
 
     public async Task<ToolResult> ExecuteAsync(JsonElement input, ToolContext ctx, CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(input.GetStringPropertyOrEmpty("path")))
+            return ToolResult.Err("Read requires a 'path' argument");
         var path = ResolvePath(input, ctx.Cwd);
 
         // Accept either offset/limit (0-based offset + count) or start_line/end_line (1-based,
@@ -44,8 +46,12 @@ public sealed class ReadTool : ITool
         int? startLine = GetFlexInt(input, "start_line");
         int? endLine   = GetFlexInt(input, "end_line");
 
-        int offset = GetFlexInt(input, "offset")
+        int? rawOffset = GetFlexInt(input, "offset");
+        int offset = rawOffset
             ?? (startLine.HasValue ? Math.Max(0, startLine.Value - 1) : 0);
+        // Remember which dialect the caller used so range errors speak its coordinates
+        // (a 1-based start_line reported back as a 0-based offset reads as off-by-one).
+        bool offsetFromStartLine = rawOffset is null && startLine.HasValue;
 
         int limit = GetFlexInt(input, "limit")
             ?? (startLine.HasValue && endLine.HasValue
@@ -86,7 +92,9 @@ public sealed class ReadTool : ITool
         int totalLines = lines.Length;
 
         if (offset >= totalLines)
-            return ToolResult.Err($"Offset {offset} exceeds file length ({totalLines} lines)");
+            return ToolResult.Err(offsetFromStartLine
+                ? $"start_line {offset + 1} exceeds file length ({totalLines} lines)"
+                : $"Offset {offset} exceeds file length ({totalLines} lines)");
 
         var slice = lines.Skip(offset).Take(limit).ToArray();
         bool truncated = offset + slice.Length < totalLines;
@@ -132,7 +140,7 @@ public sealed class ReadTool : ITool
     }
 
     // Reads an integer property that may be a JSON number or a numeric string; null if absent/invalid.
-    private static int? GetFlexInt(JsonElement input, string name)
+    internal static int? GetFlexInt(JsonElement input, string name)
     {
         if (!input.TryGetProperty(name, out var el)) return null;
         if (el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out var n)) return n;
@@ -140,9 +148,12 @@ public sealed class ReadTool : ITool
         return null;
     }
 
+    // Non-throwing: a missing "path" resolves to cwd. Tools that require a path must validate
+    // presence themselves so the model gets "X requires a 'path' argument" instead of a raw
+    // KeyNotFoundException surfaced as "X threw: The given key was not present in the dictionary."
     internal static string ResolvePath(JsonElement input, string cwd)
     {
-        var path = input.GetProperty("path").GetString() ?? "";
+        var path = input.GetStringPropertyOrEmpty("path");
         return Path.IsPathRooted(path) ? path : Path.GetFullPath(Path.Combine(cwd, path));
     }
 
