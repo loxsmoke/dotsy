@@ -64,6 +64,7 @@ auto_test            = false           # run dotnet test after writes and reflec
 max_reflections      = 3               # max lint/test reflection cycles per turn
 verify_build_before_complete = true    # refuse a Done signal while the last build/test exited non-zero
 dedupe_reads         = true            # skip re-reading a file whose content is still live in context
+require_read_before_edit = true        # reject edits of files not Read this session (or stale since last read)
 inject_environment   = true            # include <env> block in requests
 inject_git_status    = true            # include git branch/status in the env block
 

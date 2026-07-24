@@ -31,11 +31,26 @@ identifiers the model emits in tool calls and the registry dispatches on.
 
 | Tool | Description | Key params |
 |------|-------------|-----------|
-| `Read` | Read a file; paginates via offset/limit; handles text, images | `path`, `offset?`, `limit?` |
+| `Read` | Read a text file as numbered lines; paginates; binary files (null-byte scan) are rejected | `path`, (`offset?`+`limit?` \| `start_line?`+`end_line?`), `include_diff?` |
 | `Write` | Write or overwrite a file; creates parent dirs | `path`, `content` |
 | `Edit` | Replace either an exact 1-based inclusive line range **or** a unique `old_string` | `path`, (`start_line`+`end_line` \| `old_string`), `new_string`, `replace_all?` |
-| `MultiEdit` | Multiple sequential edits to one file in a single call | `path`, `edits[]` |
+| `MultiEdit` | Multiple non-overlapping edits to one file in a single call; all line ranges refer to the file as read (applied bottom-up, so edits never shift each other) | `path`, `edits[]` |
 | `List` | List directory contents; marks dirs with `/` | `path`, `recursive?` |
+
+The edit tools are deliberately forgiving toward weaker models:
+
+- **Result echo** — a successful `Edit`/`MultiEdit` returns the edited region(s) of the *resulting*
+  file as numbered lines (the same format `Read` produces, with a few context lines, in final
+  coordinates), so the model can verify the outcome and reuse the line numbers without re-reading.
+- **Replace semantics** — `start_line..end_line` is removed and `new_string` takes its place; the
+  tool description tells the model to include the range's original line(s) when it means to insert.
+- **Line endings** — replacement lines are normalized to the file's dominant EOL style, and
+  `old_string` matching falls back across LF/CRLF conventions when the literal match fails.
+- **Lenient arguments, specific errors** — numeric parameters sent as strings (`"start_line":"12"`)
+  and `"replace_all":"true"` are accepted (`Read` has the same leniency); missing required
+  arguments (`path`, `new_string`) return clear errors instead of raw exceptions; range failures
+  are reported distinctly (inverted range vs. past-end-of-file) and in the caller's own coordinate
+  dialect (`start_line` vs. 0-based `offset`).
 
 #### Search
 
@@ -102,19 +117,19 @@ This follows the **pi**/**OpenHands** pattern. The beginning usually contains th
 
 The `Read` tool enforces:
 
-| Parameter | Default | Notes |
-|-----------|---------|-------|
-| `limit` | 2 000 lines | Per read call |
-| `max_bytes` | 50 000 bytes | Hard cap regardless of line count |
-| `offset` | 0 | Enables pagination |
+| Limit | Value | Notes |
+|-------|-------|-------|
+| `limit` | 2 000 lines | Per read call (default and maximum) |
+| output bytes | 51 200 (50 KB) | Hard cap on the returned text regardless of line count |
+| `offset` | 0 | Enables pagination; `start_line`/`end_line` are the 1-based equivalent |
 
-When a file exceeds the limit, the tool returns as many lines as fit and appends:
+When a file has more lines than the window, the tool returns as many lines as fit and appends:
 
 ```text
-<truncated: showing lines 1-2000 of 5847; use offset=2000 to continue>
+<truncated: 3847 more lines; use offset=2000 to continue>
 ```
 
-The agent can paginate with subsequent `Read` calls using the `offset` parameter. Binary files detected by null-byte scan of the first 512 bytes return an error rather than garbled output.
+When the byte cap cuts the output instead, the marker is `<truncated: file has N lines; use offset/limit to read more>`. The agent can paginate with subsequent `Read` calls. Binary files detected by null-byte scan of the first 8 192 bytes return an error rather than garbled output. `Grep` output is capped the same way (50 KB / 2 000 match lines, marker `<truncated: output exceeded limits>`).
 
 #### Truncation Signal
 
@@ -127,10 +142,10 @@ Every truncating tool uses this standard marker:
 Examples:
 
 - `<… N characters elided …>` (shell middle-elision)
-- `<truncated: showing lines 1-2000 of 5847; use offset=2000 to continue>`
-- `<truncated: web fetch 1.2 MB exceeded limit; first 100 KB shown>`
+- `<truncated: 3847 more lines; use offset=2000 to continue>` (file read)
+- `<truncated: response exceeded 100KB>` (web fetch)
 
-Web fetch is capped at **100 KB** of response body. Responses larger than 5 MB return an error rather than a truncated body, with a suggestion to use `curl --output` to save the file locally.
+Web fetch is capped at **100 KB** of response body. Responses larger than 5 MB return an error rather than a truncated body, suggesting `curl -s <url> | head -c 102400` to fetch a bounded slice instead.
 
 ---
 

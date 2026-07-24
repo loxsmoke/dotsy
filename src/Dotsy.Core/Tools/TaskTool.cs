@@ -9,7 +9,7 @@ public sealed class TaskTool : ITool
 {
     public const string ToolName = "Task";
     public string Name => ToolName;
-    public string Description => "Launch a background sub-task agent, or check a launched sub-task by task_id.";
+    public string Description => "Delegate a self-contained piece of CODING WORK to a separate background AI sub-agent that works on it autonomously (e.g. 'create project X', 'refactor module Y'). NOT related to OS tasks or processes — to kill, list, or inspect a running process use the Shell tool directly (taskkill, tasklist). Launch: pass prompt (and a short description); the returned task_id is assigned by the tool. Check a launched sub-agent later: pass that task_id alone.";
     public JsonElement InputSchema => ToolSchemas.TaskSchema;
     public ToolSafety Safety => ToolSafety.Sequential;
     public bool IsCompletionSignal => false;

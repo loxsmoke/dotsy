@@ -227,9 +227,9 @@ internal static class ToolSchemas
         {
           "type": "object",
           "properties": {
-            "description": { "type": "string" },
-            "prompt":      { "type": "string" },
-            "task_id":     { "type": "string", "description": "Existing task id to check status/result." }
+            "description": { "type": "string", "description": "Short human-readable summary of the sub-agent's assignment (a few words)." },
+            "prompt":      { "type": "string", "description": "Full instructions for the sub-agent: the coding work to do, relevant paths, and what to report back." },
+            "task_id":     { "type": "string", "description": "Only for checking a previously launched sub-agent: the id returned by that launch. Never invent one; omit when launching new work." }
           }
         }
         """);
